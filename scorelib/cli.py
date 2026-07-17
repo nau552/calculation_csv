@@ -17,11 +17,13 @@ import sys
 from pathlib import Path
 from typing import Dict, Optional, Set
 
+import polars as pl
+
 from . import axis_resolve, io_jsonc
 from .aggregate import GroupDefs, apply_aggregations, apply_transform, collapse_to_scalar
 from .dvtbudget import apply_dvtbudget, load_board_temperatures
 from .expression import evaluate_expression
-from .models import DvtBudgetCoefFile, RunConfig, ScorePart
+from .models import COMBINED_SEP, DvtBudgetCoefFile, RunConfig, ScorePart
 from .relative import apply_relative
 
 # Virtual entries usable in `order` alongside axis names (score_gui_design.md
@@ -35,13 +37,27 @@ from .relative import apply_relative
 RELATIVE_STEP = "__relative__"
 DVTBUDGET_STEP = "__dvtbudget__"
 
+# An order entry may bundle several axes into one combined axis, e.g.
+# "State&Read_Label". Its aggregation spec then takes dict selections:
+#   {"op": "sum", "value": [{"State": "R2A", "Read_Label": "read_level_upper1"},
+#                           {"State": "A2R", "Read_Label": "read_level_lower1"}]}
+# The bundled axes collapse together as one axis, so filter/sum/diff/expr all
+# work on (State, Read_Label) pairs. Axis values must not contain "&".
+
 
 def _is_virtual(step: str) -> bool:
     return step.startswith("__")
 
 
+def _step_axes(step: str) -> list[str]:
+    return step.split(COMBINED_SEP)
+
+
 def _required_axes(score_part: ScorePart) -> Set[str]:
-    axes = {a for a in score_part.order if not _is_virtual(a)}
+    axes: Set[str] = set()
+    for entry in score_part.order:
+        if not _is_virtual(entry):
+            axes.update(_step_axes(entry))
     if score_part.relative:
         axes.add(score_part.relative.split_axis)
         for step in score_part.relative.denominator_pre_aggregation:
@@ -51,14 +67,26 @@ def _required_axes(score_part: ScorePart) -> Set[str]:
     return axes
 
 
+def _combined_key(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    return str(v)
+
+
+def _combine_selection(sel: dict, axes: list[str]) -> str:
+    """Turn one dict selection (validated by ScorePart) into the internal
+    joined key matching the fused column."""
+    return COMBINED_SEP.join(_combined_key(sel[a]) for a in axes)
+
+
 def _effective_order(score_part: ScorePart) -> list[str]:
     """Insert the implicit pipeline steps where the user did not place them
     explicitly: relative first, dVtBudget conversion right after relative."""
     order = list(score_part.order)
-    relative_enabled = score_part.relative is not None and score_part.relative.enabled
+    relative_enabled = score_part.relative is not None
 
     if RELATIVE_STEP in order and not relative_enabled:
-        raise ValueError(f"'{RELATIVE_STEP}' in order but relative is not enabled for '{score_part.name}'")
+        raise ValueError(f"'{RELATIVE_STEP}' in order but '{score_part.name}' has no relative config")
     if relative_enabled and RELATIVE_STEP not in order:
         order.insert(0, RELATIVE_STEP)
 
@@ -70,6 +98,78 @@ def _effective_order(score_part: ScorePart) -> list[str]:
     return order
 
 
+def _source_type(score_part: ScorePart) -> str:
+    return "FBC" if score_part.type == "dVtBudget" else score_part.type
+
+
+class SharedComputeContext:
+    """Per-invocation caches shared across score parts. Purely an internal
+    optimization: results are identical with or without it.
+
+    - resolved(): each source type's csv is scanned/joined once with the
+      union of all parts' axes; parts then project down to exactly the
+      columns they would have gotten from a standalone resolve, so pairing
+      and grouping semantics are untouched.
+    - prefix_cache: intermediates collected right after a __relative__ or
+      __dvtbudget__ step, keyed by (source type, required axes, and the full
+      signature of every step applied so far). Only parts whose settings
+      match byte-for-byte up to that point share an entry.
+
+    Lifetime is one compute_score_file() call; nothing persists across
+    epochs, so there is no staleness to manage.
+    """
+
+    def __init__(self, data_dir: str | Path, score_parts: list[ScorePart]):
+        self.data_dir = data_dir
+        self._union_axes: Dict[str, Set[str]] = {}
+        for part in score_parts:
+            st = _source_type(part)
+            self._union_axes.setdefault(st, set()).update(_required_axes(part))
+        self._resolved: Dict[str, "object"] = {}
+        self.prefix_cache: Dict[tuple, "object"] = {}
+
+    def resolved(self, source_type: str):
+        if source_type not in self._resolved:
+            self._resolved[source_type] = axis_resolve.resolve_axes(
+                self.data_dir, source_type, self._union_axes[source_type]
+            ).collect()
+        return self._resolved[source_type]
+
+
+def _apply_axis_step(lf, value_col: str, step: str, score_part: ScorePart, group_defs) :
+    """Apply one non-virtual order entry: a plain axis, or a combined axis
+    ("A&B") whose component columns are fused into one temporary key column
+    so the existing per-axis ops work on value tuples."""
+    axes = _step_axes(step)
+    if len(axes) == 1:
+        return apply_aggregations(lf, value_col, [step], score_part.aggregations, group_defs)
+
+    spec = score_part.aggregations.get(step)
+    if spec is None:
+        raise ValueError(f"axis '{step}' listed in order but has no aggregation instruction")
+    lf = lf.with_columns(
+        pl.concat_str([pl.col(a).cast(pl.Utf8) for a in axes], separator=COMBINED_SEP).alias(step)
+    ).drop(axes)
+    if isinstance(spec.value, list):
+        combined = [_combine_selection(v, axes) for v in spec.value]
+    elif spec.value is not None:
+        combined = _combine_selection(spec.value, axes)
+    else:
+        combined = None
+    spec = spec.model_copy(update={"value": combined})
+    return apply_aggregations(lf, value_col, [step], {step: spec}, group_defs)
+
+
+def _step_signature(score_part: ScorePart, step: str) -> tuple:
+    if step == RELATIVE_STEP:
+        return ("relative", score_part.relative.model_dump_json())
+    if step == DVTBUDGET_STEP:
+        return ("dvtbudget",)
+    spec = score_part.aggregations.get(step)
+    kind = "transform" if _is_virtual(step) else "axis"
+    return (kind, step, spec.model_dump_json() if spec else "")
+
+
 def compute_score_part(
     data_dir: str | Path,
     score_part: ScorePart,
@@ -77,11 +177,45 @@ def compute_score_part(
     generation: Optional[str] = None,
     dvtbudget_coef: Optional[DvtBudgetCoefFile] = None,
     board_temperatures: Optional[Dict[int, float]] = None,
+    shared_ctx: Optional[SharedComputeContext] = None,
 ) -> float:
-    source_type = "FBC" if score_part.type == "dVtBudget" else score_part.type
-    lf = axis_resolve.resolve_axes(data_dir, source_type, _required_axes(score_part))
+    source_type = _source_type(score_part)
+    required_axes = _required_axes(score_part)
 
-    for step in _effective_order(score_part):
+    if shared_ctx is not None:
+        base = shared_ctx.resolved(source_type)
+        # Project down to exactly what a standalone resolve would return:
+        # extra union columns would change relative pairing keys and
+        # aggregation group keys, so this projection is load-bearing.
+        cols = [source_type] + sorted(required_axes)
+        lf = base.lazy().select(cols)
+    else:
+        lf = axis_resolve.resolve_axes(data_dir, source_type, required_axes)
+
+    steps = _effective_order(score_part)
+    sigs = [_step_signature(score_part, s) for s in steps]
+
+    # Cache points sit right after each __relative__/__dvtbudget__ step; the
+    # key covers everything that influenced the frame up to that point.
+    cache_keys: Dict[int, tuple] = {}
+    if shared_ctx is not None:
+        base_sig = (source_type, tuple(sorted(required_axes)))
+        cache_keys = {
+            i: (base_sig, tuple(sigs[: i + 1]))
+            for i, s in enumerate(steps)
+            if s in (RELATIVE_STEP, DVTBUDGET_STEP)
+        }
+
+    start = 0
+    for i in sorted(cache_keys, reverse=True):
+        cached = shared_ctx.prefix_cache.get(cache_keys[i])
+        if cached is not None:
+            lf = cached.lazy()
+            start = i + 1
+            break
+
+    for j in range(start, len(steps)):
+        step = steps[j]
         if step == RELATIVE_STEP:
             lf = apply_relative(lf, source_type, score_part.relative, group_defs)
         elif step == DVTBUDGET_STEP:
@@ -96,7 +230,12 @@ def compute_score_part(
                 raise ValueError(f"virtual step '{step}' has no entry in aggregations for '{score_part.name}'")
             lf = apply_transform(lf, source_type, spec)
         else:
-            lf = apply_aggregations(lf, source_type, [step], score_part.aggregations, group_defs)
+            lf = _apply_axis_step(lf, source_type, step, score_part, group_defs)
+
+        if j in cache_keys:
+            df = lf.collect()
+            shared_ctx.prefix_cache[cache_keys[j]] = df
+            lf = df.lazy()
 
     return collapse_to_scalar(lf, source_type)
 
@@ -119,6 +258,7 @@ def compute_score_file(
                 file=sys.stderr,
             )
 
+    shared_ctx = SharedComputeContext(data_dir, score_file.score_parts)
     values: Dict[str, float] = {}
     for score_part in score_file.score_parts:
         values[score_part.name] = compute_score_part(
@@ -128,6 +268,7 @@ def compute_score_file(
             generation=run_config.Generation,
             dvtbudget_coef=dvtbudget_coef,
             board_temperatures=board_temperatures,
+            shared_ctx=shared_ctx,
         )
 
     score = evaluate_expression(score_file.expression, values) if score_file.expression else None

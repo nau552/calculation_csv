@@ -45,8 +45,12 @@ def apply_relative(
     else:
         # Denominator fully collapsed to a single scalar: broadcast it.
         out = numerator.join(denominator, how="cross")
-    offset = relative.denominator_offset
-    out = out.with_columns(
-        ((pl.col(value_col) + offset) / (pl.col("__denom__") + offset)).alias(value_col)
-    ).drop("__denom__")
+    if relative.mode == "diff":
+        # delta value: numerator - denominator. Offset would cancel out
+        # ((num+o)-(den+o) == num-den), so it is simply not applied.
+        combined = pl.col(value_col) - pl.col("__denom__")
+    else:
+        offset = relative.denominator_offset
+        combined = (pl.col(value_col) + offset) / (pl.col("__denom__") + offset)
+    out = out.with_columns(combined.alias(value_col)).drop("__denom__")
     return out

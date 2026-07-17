@@ -20,13 +20,13 @@ REQUIRED_AXES = {
 }
 
 
-def test_resolved_axes_match_known_expansion(data_dir):
-    """Cross-check against gomi/FBC_expanded.csv, which was produced by the
-    original (non-generalized) expansion script and is treated as ground
-    truth for the join/mapping logic.
+def test_resolved_axes_match_known_expansion(expanded_mini_dir):
+    """Cross-check against FBC_expanded.csv produced by the original
+    (non-generalized) expansion script, run on a self-contained copy of
+    result_tmp_mini -- ground truth for the join/mapping logic.
     """
-    expected_path = data_dir.parent / "gomi" / "FBC_expanded.csv"
-    expected = pl.read_csv(expected_path)
+    data_dir = expanded_mini_dir
+    expected = pl.read_csv(data_dir / "FBC_expanded.csv")
     expected = expected.with_columns(
         [pl.col(c).cast(pl.Boolean) for c in ("Erase_Override", "Program_Override", "Read_Override")]
     )

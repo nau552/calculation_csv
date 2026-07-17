@@ -23,7 +23,6 @@
                 "name": "FBC_A2B_upper1_rel",
                 "type": "FBC",
                 "relative": {
-                    "enabled": true,
                     "split_axis": "Read_Override",
                     "numerator_when": true,
                     "denominator_when": false,
@@ -38,7 +37,7 @@
                     "Read_Label": {"op": "filter", "value": "read_level_upper1"},
                     "State": {"op": "filter", "value": "A2B"},
                     "WL": {"op": "group_reduce", "group_def": "WLgroup", "inner_op": "mean", "outer_op": "max"},
-                    "STR": {"op": "mean_subset", "values": [0, 1]},
+                    "STR": {"op": "mean", "value": [0, 1]},
                     "Board": {"op": "mean"},
                     "Chip": {"op": "mean"},
                     "Block": {"op": "max"}
@@ -48,7 +47,6 @@
                 "name": "dVtBudget_R2A",
                 "type": "dVtBudget",
                 "relative": {
-                    "enabled": true,
                     "split_axis": "Read_Override",
                     "numerator_when": true,
                     "denominator_when": false,

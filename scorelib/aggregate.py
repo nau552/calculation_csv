@@ -16,7 +16,6 @@ from .expression import evaluate_expression
 from .models import AggregationSpec
 
 _SIMPLE_OPS = {"mean", "sum", "min", "max"}
-_SUBSET_OPS = {"mean_subset", "sum_subset", "min_subset", "max_subset"}
 TRANSFORM_OPS = {"add"}
 
 GroupDefs = Mapping[str, Mapping[str, Tuple[int, int]]]
@@ -64,12 +63,17 @@ def apply_axis_op(
         return lf.filter(pl.col(axis) == spec.value).drop(axis)
 
     if spec.op in _SIMPLE_OPS:
-        return _reduce(lf, value_col, group_keys, spec.op)
+        # optional `value` list restricts the reduction to those selections
+        target = lf.filter(pl.col(axis).is_in(spec.value)) if spec.value is not None else lf
+        return _reduce(target, value_col, group_keys, spec.op)
 
-    if spec.op in _SUBSET_OPS:
-        base_op = spec.op.split("_")[0]
-        filtered = lf.filter(pl.col(axis).is_in(spec.values or []))
-        return _reduce(filtered, value_col, group_keys, base_op)
+    if spec.op == "diff":
+        a_val, b_val = spec.value
+        a = lf.filter(pl.col(axis) == a_val).drop(axis)
+        b = lf.filter(pl.col(axis) == b_val).drop(axis).rename({value_col: "__b__"})
+        keys = list(group_keys)
+        joined = a.join(b, on=keys, how="left") if keys else a.join(b, how="cross")
+        return joined.with_columns((pl.col(value_col) - pl.col("__b__")).alias(value_col)).drop("__b__")
 
     if spec.op == "group_reduce":
         if not group_defs or spec.group_def not in group_defs:
@@ -84,14 +88,27 @@ def apply_axis_op(
     if spec.op == "expr":
         if not spec.expr:
             raise ValueError(f"expr op for axis '{axis}' requires 'expr'")
+
+        def _eval(vals: list, axis_vals: list) -> float:
+            by: dict = {}
+            for k, v in zip(axis_vals, vals):
+                if k in by:
+                    raise ValueError(
+                        f"axis value '{k}' appears more than once within a group for axis "
+                        f"'{axis}'; 'by' lookups require unique axis values"
+                    )
+                by[k] = v
+            return evaluate_expression(spec.expr, {"values": vals, "by": by})
+
         if group_keys:
-            df = lf.group_by(list(group_keys)).agg(pl.col(value_col)).collect()
+            df = lf.group_by(list(group_keys)).agg([pl.col(value_col), pl.col(axis)]).collect()
             result = [
-                evaluate_expression(spec.expr, {"values": vals}) for vals in df[value_col].to_list()
+                _eval(vals, axis_vals)
+                for vals, axis_vals in zip(df[value_col].to_list(), df[axis].to_list())
             ]
-            return df.drop(value_col).with_columns(pl.Series(value_col, result)).lazy()
-        all_values = lf.select(pl.col(value_col)).collect()[value_col].to_list()
-        result_value = evaluate_expression(spec.expr, {"values": all_values})
+            return df.drop(value_col, axis).with_columns(pl.Series(value_col, result)).lazy()
+        df = lf.select([pl.col(value_col), pl.col(axis)]).collect()
+        result_value = _eval(df[value_col].to_list(), df[axis].to_list())
         return pl.LazyFrame({value_col: [float(result_value)]})
 
     raise ValueError(f"unknown aggregation op '{spec.op}'")
@@ -121,14 +138,37 @@ def apply_aggregations(
     return lf
 
 
-def collapse_to_scalar(lf: pl.LazyFrame, value_col: str) -> float:
+def collapse(
+    lf: pl.LazyFrame, value_col: str, identity_axes: Sequence[str] = ()
+) -> pl.DataFrame:
+    """Verify the pipeline collapsed everything except `identity_axes` and
+    return the result as a DataFrame (one row per identity-axis combination).
+
+    identity_axes is empty today (single-epoch operation -> one scalar); it
+    exists so batch processing over historical epochs can later keep an Epoch
+    column through the whole pipeline and get one row per epoch.
+    """
     df = lf.collect()
-    if df.height != 1 or df.columns != [value_col]:
+    expected = set(identity_axes) | {value_col}
+    if set(df.columns) != expected:
         raise ValueError(
-            f"expected aggregation to collapse to a single value, got {df.height} rows "
-            f"with columns {df.columns} (order did not cover all axes?)"
+            f"expected aggregation to collapse to columns {sorted(expected)}, got {df.columns} "
+            "(order did not cover all axes?)"
         )
-    return float(df[value_col][0])
+    if not identity_axes and df.height != 1:
+        raise ValueError(
+            f"expected aggregation to collapse to a single value, got {df.height} rows"
+        )
+    if df[value_col].null_count() > 0:
+        raise ValueError(
+            f"aggregation produced null for '{value_col}' — a filter value probably "
+            "matched no rows (check filter values against the data)"
+        )
+    return df
+
+
+def collapse_to_scalar(lf: pl.LazyFrame, value_col: str) -> float:
+    return float(collapse(lf, value_col)[value_col][0])
 
 
 def aggregate_score_part(

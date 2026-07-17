@@ -6,34 +6,123 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, Field, RootModel, model_validator
+
+# Separator for combined axes in `order` entries (e.g. "State&Read_Label").
+COMBINED_SEP = "&"
 
 AggOp = Literal[
     "filter",
+    # mean/sum/min/max reduce the axis; an optional `value` list restricts
+    # the reduction to those selections first (e.g. {"op": "sum",
+    # "value": [0, 1]} sums only rows where the axis is 0 or 1)
     "mean",
     "sum",
     "min",
     "max",
-    "mean_subset",
-    "sum_subset",
-    "min_subset",
-    "max_subset",
     "group_reduce",
     "expr",
+    # collapse the axis by combining exactly two selections (ordered):
+    # {"op": "diff", "value": [a, b]} -> value(a) - value(b)
+    "diff",
     # transform ops: applied to the value column row-wise without collapsing
     # an axis; used by virtual "__xxx__" steps in `order` (e.g. __offset__)
     "add",
 ]
 
+# Legacy spellings from before `value` became a modifier on the plain ops.
+_SUBSET_ALIASES = {
+    "mean_subset": "mean",
+    "sum_subset": "sum",
+    "min_subset": "min",
+    "max_subset": "max",
+}
+
+_MULTI_OPS = ("mean", "sum", "min", "max")
+
 
 class AggregationSpec(BaseModel):
+    """One axis's (or virtual step's) instruction.
+
+    Selections always go in `value` regardless of op:
+    - a scalar selects one axis value ({"op": "filter", "value": "A2B"})
+    - a dict selects one combination on a combined axis
+      ({"op": "filter", "value": {"State": "A2B", "Read_Label": "..."}})
+    - a list is always a sequence of selections
+      ({"op": "diff", "value": ["R2A", "B2A"]})
+    What varies per op is only how many selections it needs (filter: 1,
+    diff: 2, mean/sum/min/max: any number or none). `values` is accepted as
+    a compatibility alias for `value`.
+    """
+
     op: AggOp
     value: Optional[Any] = None
-    values: Optional[List[Any]] = None
     group_def: Optional[str] = None
     inner_op: Optional[Literal["mean", "sum", "min", "max"]] = None
     outer_op: Optional[Literal["mean", "sum", "min", "max"]] = None
     expr: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_spellings(cls, data):
+        if isinstance(data, dict):
+            if data.get("op") in _SUBSET_ALIASES:
+                data = {**data, "op": _SUBSET_ALIASES[data["op"]]}
+            if data.get("values") is not None:
+                if data.get("value") is not None:
+                    raise ValueError("give selections in 'value' ('values' is an alias) — not both")
+                values = data["values"]
+                data = {k: v for k, v in data.items() if k != "values"}
+                data["value"] = values
+        return data
+
+    @model_validator(mode="after")
+    def _check_value_shape(self):
+        op, v = self.op, self.value
+        if op == "filter":
+            if isinstance(v, list):
+                if len(v) == 1 and not isinstance(v[0], list):
+                    self.value = v[0]
+                else:
+                    raise ValueError(
+                        "op 'filter' selects exactly one value (a scalar, or a dict for "
+                        "combined axes); to reduce over several values use mean/sum/min/max"
+                    )
+            elif v is None:
+                raise ValueError("op 'filter' requires 'value'")
+        elif op == "add":
+            if not isinstance(v, (int, float)) or isinstance(v, bool):
+                raise ValueError("op 'add' requires a numeric 'value'")
+        elif op == "diff":
+            if not isinstance(v, list) or len(v) != 2:
+                raise ValueError(
+                    "op 'diff' requires 'value': [a, b] — exactly two selections (result = a - b)"
+                )
+            if any(isinstance(x, list) for x in v):
+                raise ValueError(
+                    "op 'diff': each selection must be a scalar or, for combined axes, a "
+                    "dict like {\"State\": ..., \"Read_Label\": ...} — not a nested list"
+                )
+        elif op in _MULTI_OPS:
+            if v is not None:
+                if not isinstance(v, list):
+                    self.value = v = [v]
+                if any(isinstance(x, list) for x in v):
+                    raise ValueError(
+                        f"op '{op}': each selection must be a scalar or, for combined axes, "
+                        "a dict {axis: value} — not a nested list"
+                    )
+        elif op == "expr":
+            if not self.expr:
+                raise ValueError("op 'expr' requires 'expr'")
+            if v is not None:
+                raise ValueError("op 'expr' takes no 'value'; select inside the expression via by[...]")
+        elif op == "group_reduce":
+            if not self.group_def:
+                raise ValueError("op 'group_reduce' requires 'group_def'")
+            if v is not None:
+                raise ValueError("op 'group_reduce' takes no 'value'")
+        return self
 
 
 class AxisAggregation(AggregationSpec):
@@ -48,12 +137,33 @@ class AxisAggregation(AggregationSpec):
 
 
 class RelativeConfig(BaseModel):
-    enabled: bool = True
+    """Presence of a `relative` block on a ScorePart means relative-ization
+    happens; to compute absolute values, omit (or comment out) the block.
+    There is no `enabled` flag."""
+
     split_axis: str
     numerator_when: Any
     denominator_when: Any
+    # "ratio": (num + offset) / (den + offset)   (default)
+    # "diff":  num - den                          (offset is irrelevant and ignored)
+    mode: Literal["ratio", "diff"] = "ratio"
     denominator_offset: float = 0.0
     denominator_pre_aggregation: List[AxisAggregation] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_removed_enabled(cls, data):
+        if isinstance(data, dict) and "enabled" in data:
+            data = dict(data)
+            enabled = data.pop("enabled")
+            # A leftover `enabled: true` is harmless -- drop it silently.
+            # `enabled: false` must NOT silently become enabled: fail loudly.
+            if not enabled or str(enabled).strip().lower() == "false":
+                raise ValueError(
+                    "relative.enabled has been removed; to compute without "
+                    "relative-ization, delete (or comment out) the whole relative block"
+                )
+        return data
 
 
 class ScorePart(BaseModel):
@@ -62,6 +172,39 @@ class ScorePart(BaseModel):
     relative: Optional[RelativeConfig] = None
     order: List[str] = Field(default_factory=list)
     aggregations: Dict[str, AggregationSpec] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _check_combined_axis_selections(self):
+        """Dict selections must name exactly the axes of their combined-axis
+        entry; combined axes must use dict selections (never positional
+        lists, which would be ambiguous); plain axes must not use dicts."""
+        for entry in self.order:
+            if entry.startswith("__"):
+                continue
+            axes = entry.split(COMBINED_SEP)
+            spec = self.aggregations.get(entry)
+            if spec is None or spec.value is None:
+                continue
+            selections = spec.value if isinstance(spec.value, list) else [spec.value]
+            for sel in selections:
+                if isinstance(sel, dict):
+                    if len(axes) == 1:
+                        raise ValueError(
+                            f"axis '{entry}' in '{self.name}': dict selections are only valid "
+                            f"on combined axes (e.g. 'State{COMBINED_SEP}Read_Label')"
+                        )
+                    if set(sel) != set(axes):
+                        raise ValueError(
+                            f"combined axis '{entry}' in '{self.name}' expects keys {axes}, "
+                            f"got {sorted(sel)}"
+                        )
+                elif len(axes) > 1:
+                    raise ValueError(
+                        f"combined axis '{entry}' in '{self.name}': each selection must be a "
+                        f"dict naming its axes, e.g. {{{', '.join(repr(a) + ': ...' for a in axes)}}}; "
+                        f"got {sel!r}"
+                    )
+        return self
 
 
 class ConstraintThresholdEntry(BaseModel):

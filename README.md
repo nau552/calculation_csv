@@ -123,7 +123,6 @@ python scripts/convert_dvtbudget_coef.py sample.py dvtbudget_coef.jsonc
     "name": "FBC_A2B_upper1_rel",   // パーツ名。expressionやconstraintThresholdから参照
     "type": "FBC",                  // 読むcsv。"dVtBudget"のときはFBC.csvを読み自動で変換
     "relative": {                   // 相対値化。しない場合は省略
-        "enabled": true,
         "split_axis": "Read_Override",   // この軸の値で分子/分母を分ける
         "numerator_when": true,          // Override=True の行が分子（提案パラ）
         "denominator_when": false,       // Override=False の行が分母（基準パラ）
@@ -139,7 +138,7 @@ python scripts/convert_dvtbudget_coef.py sample.py dvtbudget_coef.jsonc
         "State":      {"op": "filter", "value": "A2B"},
         "WL":         {"op": "group_reduce", "group_def": "WLgroup",
                        "inner_op": "mean", "outer_op": "max"},
-        "STR":        {"op": "mean_subset", "values": [0, 1]},
+        "STR":        {"op": "mean", "value": [0, 1]},
         "Board":      {"op": "mean"},
         "Chip":       {"op": "mean"},
         "Block":      {"op": "max"}
@@ -155,14 +154,21 @@ python scripts/convert_dvtbudget_coef.py sample.py dvtbudget_coef.jsonc
 
 毎epochの測定には基準パラの測定と提案パラの測定が混在しており、それを見分けて比を取る。
 
+`relative` ブロックが**書いてあれば相対化する**。絶対値のまま使いたい場合は
+ブロックごと省略（またはコメントアウト）する。`enabled` フラグは無い
+（旧ファイルの `enabled: true` は無視され、`enabled: false` は明確なエラーになる）。
+
 | フィールド | 意味 |
 |---|---|
-| `enabled` | 相対化するか。falseまたはrelative自体を省略で絶対値のまま |
 | `split_axis` | 分子/分母を見分ける軸（読み込み系: `Read_Override`、書き込み系: `Program_Override` 想定） |
 | `numerator_when` | split_axisがこの値の行が分子（提案パラ）。例: `true` |
 | `denominator_when` | split_axisがこの値の行が分母（基準パラ）。例: `false` |
-| `denominator_offset` | 比を取る直前に**分子分母両方**に加算 `(分子+o)/(分母+o)`。ゼロ割・log発散防止 |
-| `denominator_pre_aggregation` | 比を取る前に**分母だけ**先に集計する指示のリスト（例: WL,STRを平均した値を分母にする） |
+| `mode` | `"ratio"`（デフォルト）: 比 `(分子+o)/(分母+o)` / `"diff"`: **delta値** `分子 - 分母` |
+| `denominator_offset` | ratio時に**分子分母両方**に加算。ゼロ割・log発散防止。diff時は差で相殺されるため無視される |
+| `denominator_pre_aggregation` | 比/差を取る前に**分母だけ**先に集計する指示のリスト（例: WL,STRを平均した値を分母にする） |
+
+OverrideのTrueからFalseを引いたdelta値を取りたい場合は `"mode": "diff"` を指定する
+（ペア照合の仕組みはratioと同一で、演算だけが引き算になる）。
 
 分子行と分母行は、その時点で残っている全軸の値が一致するもの同士でペアになる。
 `denominator_pre_aggregation` で分母側の軸を潰した場合は、残った軸で照合され
@@ -188,7 +194,6 @@ python scripts/convert_dvtbudget_coef.py sample.py dvtbudget_coef.jsonc
     "name": "dVtBudget_custom_flow",
     "type": "dVtBudget",
     "relative": {
-        "enabled": true,
         "split_axis": "Read_Override",
         "numerator_when": true,
         "denominator_when": false,
@@ -227,13 +232,73 @@ python scripts/convert_dvtbudget_coef.py sample.py dvtbudget_coef.jsonc
 
 ### 集計op一覧
 
-| op | 意味 | 追加パラメータ |
+**選ぶものはopに関わらず常に `value` に書く**。スカラーなら選択1個、リストなら選択の並び、
+複合軸では軸名つき辞書が選択1個。opごとに違うのは「選択が何個必要か」だけで、
+個数・形が合わない場合は読み込み時に正しい書き方を提示するエラーで止まる
+（例: sumに `value` 単数のスカラーを書いた場合は1個のリストとして解釈、
+diffに1個しか書かなければ「2個必要」とエラー）。
+旧表記の `values` はエイリアスとして読み込み時に `value` へ自動変換される。
+
+| op | 意味 | valueに書くもの |
 |---|---|---|
-| `filter` | 指定値の行だけ残す | `value` |
-| `mean` / `sum` / `min` / `max` | 単純集計 | — |
-| `mean_subset` / `sum_subset` / `min_subset` / `max_subset` | 値集合で絞ってから集計 | `values` |
-| `group_reduce` | グループ定義で分割→グループ内集計→グループ間集計 | `group_def`, `inner_op`, `outer_op` |
-| `expr` | 自由記述式。その軸の全値が `values` として渡る | `expr`（例: `"mean(values) + 1"`） |
+| `filter` | 指定値の行だけ残す | 選択1個 |
+| `mean` / `sum` / `min` / `max` | 集計。`value` を付けると対象をその選択集合に限定 | なし or 選択のリスト |
+| `diff` | 2つの選択の差で潰す: a − b | 選択ちょうど2個のリスト |
+| `group_reduce` | グループ定義で分割→グループ内集計→グループ間集計 | なし（`group_def`, `inner_op`, `outer_op`） |
+| `expr` | 自由記述式。全値のリスト `values` と、軸の値ごとの辞書 `by` が使える | なし（`expr`） |
+
+軸の値同士を組み合わせる例（Stateの集計指示として）:
+
+```jsonc
+"State": {"op": "filter", "value": "R2A"}                        // 通常: 1つのStateを選ぶ
+"State": {"op": "diff", "value": ["R2A", "B2A"]}                 // R2A - B2A の差
+"State": {"op": "sum", "value": ["R2A", "B2A"]}                  // R2A + B2A の和
+"State": {"op": "expr", "expr": "0.5*by['R2A'] + 0.5*by['A2B']"} // 任意の重み付き合成
+```
+
+dVtBudgetパーツでは変換がState集計より前に走るため、この書き方で
+「あるStateのdVtBudgetと別のStateのdVtBudgetの和・差」をそのまま表現できる。
+
+#### 複合軸（State と Read_Label の組で選ぶ）
+
+「上方向のState（R2A, A2B）は read_level_upper1、下方向のState（A2R, B2A）は
+read_level_lower1 で見て、それらを合成したい」のように、**複数の軸の組**に対して
+選択・集計したい場合は、orderのエントリを `&` で束ねた**複合軸**にする。
+束ねた軸は1つの軸として振る舞い、選択は**軸名つき辞書**で指定する
+（位置指定のリスト `["R2A", "upper1"]` は「1つの組か複数の選択か」が
+曖昧になるため使えない。書いた場合は辞書形式を促すエラーになる）:
+
+```jsonc
+{
+    "name": "dVtBudget_updown_sum",
+    "type": "dVtBudget",
+    "relative": { ... },
+    "order": ["State&Read_Label", "WL", "STR", "Board", "Chip", "Block"],
+    "aggregations": {
+        "State&Read_Label": {
+            "op": "sum",
+            "value": [
+                {"State": "R2A", "Read_Label": "read_level_upper1"},   // 上方向はupper1で
+                {"State": "A2B", "Read_Label": "read_level_upper1"},
+                {"State": "A2R", "Read_Label": "read_level_lower1"},   // 下方向はlower1で
+                {"State": "B2A", "Read_Label": "read_level_lower1"}
+            ]
+        },
+        "WL": {"op": "mean"}, "STR": {"op": "mean"},
+        "Board": {"op": "mean"}, "Chip": {"op": "mean"}, "Block": {"op": "mean"}
+    }
+}
+```
+
+- `filter`（辞書1個）、`diff`（辞書2個の差。異なるRead_Label同士でも可）、
+  `sum`/`mean`/`min`/`max`（辞書のリスト）がそのまま使える。
+- 辞書のキー名は複合軸名の構成軸と一致している必要があり、違うと読み込み時エラーになる。
+- 複合軸に含めた軸（上の例ではStateとRead_Label）は、orderに単独で
+  重ねて書かない（複合軸で一緒に潰れるため）。
+- 制約条件（constraintThreshold）はスコアパーツ名を参照するため、
+  このように1パーツで書けることで上下方向合成値をそのまま制約に使える。
+- 注意: 軸の値に `&` を含む文字列がある場合はこの記法は使えない（現状の
+  State/Read_Label等の値には含まれないため実用上問題ない）。
 
 ### expression（スコア合成式）
 
@@ -290,6 +355,28 @@ Board/Stateを相対化より後に集計すること。
 - 分子（提案パラ）のFBCが0のとき相対値が0となりdVtBudgetのlog10が-infに発散
   → offsetを分子・分母両方に加算する形に修正（**その後、この形で正しいと確認済み**）。
 - map_Override.csvのTRUE/FALSE列がpolarsのCSV読み込みで自動的にBoolean型になるケースの対応。
+
+## 計算エンジンの内部最適化（configの書き方は不変）
+
+`compute_score_file`（CLI経由の計算）は以下の共有キャッシュを自動で使う。
+**設定ファイルの書き方・計算結果は一切変わらない**（等価性はテストで検証済み。
+129万行×15パーツの実測で 3.0s → 0.20s、約15倍）。
+
+- **type単位の共有読み込み**: 同じ `{type}.csv` を使う全パーツの必要軸の和集合で
+  1回だけ読み込み・join し、各パーツには自分の必要列だけを射影して渡す
+  （射影により相対化のペア照合・集計のgroup keyは個別読み込み時と完全に同一になる）。
+- **前段キャッシュ**: `__relative__` / `__dvtbudget__` 直後の中間結果を
+  「type・必要軸集合・そこまでの全ステップ内容」をキーにキャッシュ。
+  Stateフィルタだけが違うdVtBudgetパーツ群などは前段を1回だけ計算し、
+  後段のフィルタ+集計（数ms）だけが各パーツで走る。設定が1つでも違う
+  パーツ同士は共有されない（速度が落ちるだけで結果は常に正しい）。
+
+キャッシュの寿命は1回の計算実行内のみで、epoch間で持ち越さない。
+`compute_score_part` を単体で呼んだ場合（shared_ctx未指定）は従来通り毎回読み込む。
+
+将来の過去データ活用（複数epochバッチ計算）に備え、集計の最終収束は
+「識別軸（例: Epoch）を残して潰す」形に一般化済み（`aggregate.collapse`）。
+現在は識別軸なし＝1スカラーで従来と同じ動作。
 
 ## 現行スクリプトとの数値比較手順（result_tmp_mini）
 

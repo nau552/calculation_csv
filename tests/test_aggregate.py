@@ -32,11 +32,33 @@ def test_two_axis_mean_collapses_fully():
     assert aggregate_score_part(lf, "value", order, aggregations) == pytest.approx(22.5)
 
 
-def test_subset_op():
+def test_simple_op_with_value_list_restricts_before_reducing():
     lf = pl.LazyFrame({"STR": [0, 1, 2, 3, 4], "value": [10, 20, 30, 40, 50]})
     order = ["STR"]
-    aggregations = {"STR": AggregationSpec(op="mean_subset", values=[0, 1, 2])}
+    aggregations = {"STR": AggregationSpec(op="mean", value=[0, 1, 2])}
     assert aggregate_score_part(lf, "value", order, aggregations) == pytest.approx(20.0)
+
+
+def test_legacy_spellings_normalized():
+    # values is accepted as an alias for value; *_subset ops map to plain ops
+    spec = AggregationSpec.model_validate({"op": "mean_subset", "values": [0, 1]})
+    assert spec.op == "mean"
+    assert spec.value == [0, 1]
+
+
+def test_both_value_and_values_rejected():
+    with pytest.raises(Exception, match="not both"):
+        AggregationSpec.model_validate({"op": "mean", "value": [0], "values": [1]})
+
+
+def test_filter_rejects_multiple_selections():
+    with pytest.raises(Exception, match="exactly one"):
+        AggregationSpec(op="filter", value=[0, 1])
+
+
+def test_filter_accepts_single_element_list():
+    spec = AggregationSpec(op="filter", value=["A2B"])
+    assert spec.value == "A2B"
 
 
 def test_group_reduce():
@@ -55,6 +77,50 @@ def test_expr_op():
     order = ["WL"]
     aggregations = {"WL": AggregationSpec(op="expr", expr="mean(values) + 1")}
     assert aggregate_score_part(lf, "value", order, aggregations) == pytest.approx(21.0)
+
+
+def test_diff_op():
+    lf = pl.LazyFrame(
+        {
+            "Board": [0, 0, 1, 1],
+            "State": ["R2A", "B2A", "R2A", "B2A"],
+            "value": [10.0, 3.0, 20.0, 5.0],
+        }
+    )
+    order = ["State", "Board"]
+    aggregations = {
+        "State": AggregationSpec(op="diff", value=["R2A", "B2A"]),
+        "Board": AggregationSpec(op="mean"),
+    }
+    # Board0: 10-3=7, Board1: 20-5=15, mean -> 11
+    assert aggregate_score_part(lf, "value", order, aggregations) == pytest.approx(11.0)
+
+
+def test_diff_op_requires_two_selections():
+    with pytest.raises(Exception, match="exactly two"):
+        AggregationSpec(op="diff", value=["R2A"])
+
+
+def test_sum_with_scalar_value_wrapped_to_list():
+    spec = AggregationSpec(op="sum", value="R2A")
+    assert spec.value == ["R2A"]
+
+
+def test_expr_op_by_lookup():
+    lf = pl.LazyFrame(
+        {
+            "Board": [0, 0, 0, 1, 1, 1],
+            "State": ["R2A", "A2B", "B2A", "R2A", "A2B", "B2A"],
+            "value": [10.0, 4.0, 2.0, 20.0, 6.0, 4.0],
+        }
+    )
+    order = ["State", "Board"]
+    aggregations = {
+        "State": AggregationSpec(op="expr", expr="0.5 * by['R2A'] + by['A2B'] - by['B2A']"),
+        "Board": AggregationSpec(op="mean"),
+    }
+    # Board0: 5+4-2=7, Board1: 10+6-4=12, mean -> 9.5
+    assert aggregate_score_part(lf, "value", order, aggregations) == pytest.approx(9.5)
 
 
 def test_incomplete_order_raises():

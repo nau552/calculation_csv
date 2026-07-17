@@ -116,7 +116,6 @@ v1では `DataName` の文字列prefix(`reference_`/`evaluation_`)で判定す�
 
 ```jsonc
 "relative": {
-  "enabled": true,
   "split_axis": "Read_Override",       // 確定待ち: Program_Override等になる場合もある
   "denominator_when": false,           // Override=False → 分母(reference)
   "numerator_when": true,              // Override=True  → 分子(evaluation)
@@ -229,7 +228,6 @@ v1のサンプルで type="FBC" なのに `dvtbudget` フィールドが存在�
   "name": "FBC_A2B_upper1_rel",
   "type": "FBC",
   "relative": {
-    "enabled": true,
     "split_axis": "Read_Override",
     "denominator_when": false,
     "numerator_when": true,
@@ -244,7 +242,7 @@ v1のサンプルで type="FBC" なのに `dvtbudget` フィールドが存在�
     "Read_Label": {"op": "filter", "value": "read_level_upper1"},
     "State":      {"op": "filter", "value": "A2B"},
     "WL":         {"op": "mean"},
-    "STR":        {"op": "mean_subset", "values": [0, 1, 2]},
+    "STR":        {"op": "mean", "value": [0, 1, 2]},
     "Board":      {"op": "mean"},
     "Chip":       {"op": "mean"},
     "Block":      {"op": "mean"}
@@ -264,7 +262,7 @@ v1のサンプルで type="FBC" なのに `dvtbudget` フィールドが存在�
 |---|---|
 | `filter` | 指定した値のみ残す |
 | `mean` / `sum` / `min` / `max` | 単純集計 |
-| `mean_subset` / `sum_subset` / `min_subset` / `max_subset` | 値集合を指定してから集計 |
+| `mean` / `sum` / `min` / `max` + `values` | `values` 指定で値集合に限定してから集計（旧 `*_subset` は読み込み時に自動変換） |
 | `group_reduce` | グループ定義(WLgroup等)でグルーピングし、`inner_op`でグループ内集計→`outer_op`でグループ間集計 |
 | `expr` | 自由記述式 |
 

@@ -49,3 +49,37 @@ def test_relative_without_pre_aggregation():
     out = apply_relative(lf, "value", relative).collect()
     assert out.height == 1
     assert out["value"][0] == pytest.approx(5.0)
+
+
+def test_enabled_true_is_silently_dropped():
+    cfg = RelativeConfig.model_validate(
+        {"enabled": True, "split_axis": "x", "numerator_when": True, "denominator_when": False}
+    )
+    assert cfg.split_axis == "x"
+    assert "enabled" not in cfg.model_dump()
+
+
+def test_enabled_false_is_rejected_loudly():
+    with pytest.raises(Exception, match="enabled has been removed"):
+        RelativeConfig.model_validate(
+            {"enabled": False, "split_axis": "x", "numerator_when": True, "denominator_when": False}
+        )
+
+
+def test_relative_diff_mode():
+    lf = pl.LazyFrame(
+        {
+            "Key": ["x", "x", "y", "y"],
+            "IsEval": [False, True, False, True],
+            "value": [10.0, 50.0, 7.0, 5.0],
+        }
+    )
+    relative = RelativeConfig(
+        split_axis="IsEval", numerator_when=True, denominator_when=False,
+        mode="diff",
+        denominator_offset=123.0,  # must be ignored in diff mode
+    )
+    out = apply_relative(lf, "value", relative).collect()
+    result = {row["Key"]: row["value"] for row in out.to_dicts()}
+    assert result["x"] == pytest.approx(40.0)   # 50 - 10
+    assert result["y"] == pytest.approx(-2.0)   # 5 - 7

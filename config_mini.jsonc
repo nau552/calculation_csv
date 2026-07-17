@@ -29,7 +29,6 @@
                 "name": "FBC_upper1_A2B_rel",
                 "type": "FBC",
                 "relative": {
-                    "enabled": true,
                     "split_axis": "Read_Override",
                     "numerator_when": true,
                     "denominator_when": false,
@@ -56,7 +55,6 @@
                 "name": "FBC_upper1_A2B_worstWLg",
                 "type": "FBC",
                 "relative": {
-                    "enabled": true,
                     "split_axis": "Read_Override",
                     "numerator_when": true,
                     "denominator_when": false,
@@ -76,28 +74,27 @@
             },
 
             // 3) tR (FBC 以外の type の例): Page 軸は map_Page.csv により L/M/U に解決される。
-            //    Page=U のみ抽出し、相対値化して全平均。
-            // {
-            //     "name": "tR_upper1_U_rel",
-            //     "type": "tR",
-            //     "relative": {
-            //         "enabled": true,
-            //         "split_axis": "Read_Override",
-            //         "numerator_when": true,
-            //         "denominator_when": false,
-            //         "denominator_offset": 1
-            //     },
-            //     "order": ["Read_Label", "Page", "WL", "STR", "Board", "Chip", "Block"],
-            //     "aggregations": {
-            //         "Read_Label": {"op": "filter", "value": "read_level_upper1"},
-            //         "Page": {"op": "filter", "value": "U"},
-            //         "WL": {"op": "mean"},
-            //         "STR": {"op": "mean"},
-            //         "Board": {"op": "mean"},
-            //         "Chip": {"op": "mean"},
-            //         "Block": {"op": "mean"}
-            //     }
-            // },
+            {
+                "name": "tR_delta",
+                "type": "tR",
+                "relative": {
+                    "split_axis": "Read_Override",
+                    "mode": "diff",
+                    "numerator_when": true,
+                    "denominator_when": false,
+                    "denominator_offset": 0
+                },
+                "order": ["Read_Label", "Page", "WL", "STR", "Board", "Chip", "Block", "__relative__"],
+                "aggregations": {
+                    "Read_Label": {"op": "filter", "value": "read_level_upper1"},
+                    "Page": {"op": "mean"},
+                    "WL": {"op": "mean"},
+                    "STR": {"op": "mean"},
+                    "Board": {"op": "mean"},
+                    "Chip": {"op": "mean"},
+                    "Block": {"op": "mean"}
+                }
+            },
 
             // 4) dVtBudget: FBC.csv を読み、自動で相対値化 -> -log10(rel)/b*1000 変換。
             //    b は Generation(B9LS) x Board別実測温度の最近傍キー x State で解決される。
@@ -105,7 +102,6 @@
                 "name": "dVtBudget_R2A",
                 "type": "dVtBudget",
                 "relative": {
-                    "enabled": true,
                     "split_axis": "Read_Override",
                     "numerator_when": true,
                     "denominator_when": false,
@@ -127,7 +123,6 @@
                 "name": "dVtBudget_A2B",
                 "type": "dVtBudget",
                 "relative": {
-                    "enabled": true,
                     "split_axis": "Read_Override",
                     "numerator_when": true,
                     "denominator_when": false,
@@ -146,10 +141,69 @@
             },
 
             {
-                "name": "dVtBudget_custom_flow",
+                "name": "deltaR_upper_tail",
                 "type": "dVtBudget",
                 "relative": {
-                    "enabled": true,
+                    "split_axis": "Read_Override",
+                    "numerator_when": true,
+                    "denominator_when": false,
+                    "denominator_offset": 0          // offsetは下の__offset__ステップで明示的に足すので0
+                },
+                "order": [
+                    "Read_Label",                     // filter（相対化前: 分子側/分母側それぞれに効く）
+                    "__offset__",                     // 全行のFBCに+1
+                    "STR",
+                    "WL",                             // WL平均（分子側・分母側それぞれで集計される）
+                    "__relative__",                   // ここで比を取る
+                    "__dvtbudget__",                  // ここで -log10(rel)/b*1000 変換
+                    "State", "Chip", "Block", "Board"
+                ],
+                "aggregations": {
+                    "__offset__": {"op": "add", "value": 1},
+                    "Read_Label": {"op": "filter", "value": "read_level_upper1"},
+                    "WL": {"op": "mean"},
+                    "State": {"op": "filter", "value": "R2A"},
+                    "STR": {"op": "mean"},
+                    "Board": {"op": "max"},
+                    "Chip": {"op": "mean"},
+                    "Block": {"op": "mean"}
+                }
+            },
+
+            {
+                "name": "deltaA_lower_tail",
+                "type": "dVtBudget",
+                "relative": {
+                    "split_axis": "Read_Override",
+                    "numerator_when": true,
+                    "denominator_when": false,
+                    "denominator_offset": 0          // offsetは下の__offset__ステップで明示的に足すので0
+                },
+                "order": [
+                    "Read_Label",                     // filter（相対化前: 分子側/分母側それぞれに効く）
+                    "__offset__",                     // 全行のFBCに+1
+                    "STR",
+                    "WL",                             // WL平均（分子側・分母側それぞれで集計される）
+                    "__relative__",                   // ここで比を取る
+                    "__dvtbudget__",                  // ここで -log10(rel)/b*1000 変換
+                    "State", "Chip", "Block", "Board"
+                ],
+                "aggregations": {
+                    "__offset__": {"op": "add", "value": 1},
+                    "Read_Label": {"op": "filter", "value": "read_level_lower1"},
+                    "WL": {"op": "mean"},
+                    "State": {"op": "filter", "value": "A2R"},
+                    "STR": {"op": "mean"},
+                    "Board": {"op": "max"},
+                    "Chip": {"op": "mean"},
+                    "Block": {"op": "mean"}
+                }
+            },
+
+            {
+                "name": "deltaA_upper_tail",
+                "type": "dVtBudget",
+                "relative": {
                     "split_axis": "Read_Override",
                     "numerator_when": true,
                     "denominator_when": false,
@@ -177,10 +231,9 @@
             },
 
             {
-                "name": "dVtBudget_custom_flow2",
+                "name": "deltaB_lower_tail",
                 "type": "dVtBudget",
                 "relative": {
-                    "enabled": true,
                     "split_axis": "Read_Override",
                     "numerator_when": true,
                     "denominator_when": false,
@@ -197,9 +250,74 @@
                 ],
                 "aggregations": {
                     "__offset__": {"op": "add", "value": 1},
-                    "Read_Label": {"op": "filter", "value": "read_level_upper1"},
+                    "Read_Label": {"op": "filter", "value": "read_level_lower1"},
                     "WL": {"op": "mean"},
-                    "State": {"op": "filter", "value": "A2B"},
+                    "State": {"op": "filter", "value": "B2A"},
+                    "STR": {"op": "mean"},
+                    "Board": {"op": "max"},
+                    "Chip": {"op": "mean"},
+                    "Block": {"op": "mean"}
+                }
+            },
+
+            {
+                "name": "dAR_margin",
+                "type": "dVtBudget",
+                "relative": {
+                    "split_axis": "Read_Override",
+                    "numerator_when": true,
+                    "denominator_when": false,
+                    "denominator_offset": 0          // offsetは下の__offset__ステップで明示的に足すので0
+                },
+                "order": [
+                    "__offset__",                     // 全行のFBCに+1
+                    "STR",
+                    "WL",                             // WL平均（分子側・分母側それぞれで集計される）
+                    "__relative__",                   // ここで比を取る
+                    "__dvtbudget__",                  // ここで -log10(rel)/b*1000 変換
+                    "Chip", "Block", "Board", "State&Read_Label"
+                ],
+                "aggregations": {
+                    "__offset__": {"op": "add", "value": 1},
+                    "State&Read_Label": {
+                        "op": "diff",
+                        "value": [
+                            {"State": "R2A", "Read_Label": "read_level_upper1"},
+                            {"State": "A2R", "Read_Label": "read_level_lower1"}
+                        ]
+                    },
+                    "WL": {"op": "mean"},
+                    "STR": {"op": "mean"},
+                    "Board": {"op": "max"},
+                    "Chip": {"op": "mean"},
+                    "Block": {"op": "mean"}
+                }
+            },
+
+            {
+                "name": "dBR_margin",
+                "type": "dVtBudget",
+                "relative": {
+                    "split_axis": "Read_Override",
+                    "numerator_when": true,
+                    "denominator_when": false,
+                    "denominator_offset": 0          // offsetは下の__offset__ステップで明示的に足すので0
+                },
+                "order": [
+                    "__offset__",                     // 全行のFBCに+1
+                    "STR",
+                    "WL",                             // WL平均（分子側・分母側それぞれで集計される）
+                    "__relative__",                   // ここで比を取る
+                    "__dvtbudget__",                  // ここで -log10(rel)/b*1000 変換
+                    "Chip", "Block", "Board", "State&Read_Label"
+                ],
+                "aggregations": {
+                    "__offset__": {"op": "add", "value": 1},
+                    "State&Read_Label": {
+                        "op": "expr",
+                        "expr":"-1*by['A2B&read_level_upper1'] + by['B2A&read_level_lower1']"
+                    },
+                    "WL": {"op": "mean"},
                     "STR": {"op": "mean"},
                     "Board": {"op": "max"},
                     "Chip": {"op": "mean"},
@@ -211,7 +329,6 @@
                 "name": "dVtBudget_custom_flow3",
                 "type": "dVtBudget",
                 "relative": {
-                    "enabled": true,
                     "split_axis": "Read_Override",
                     "numerator_when": true,
                     "denominator_when": false,
@@ -242,7 +359,6 @@
                 "name": "dVtBudget_custom_flow4",
                 "type": "dVtBudget",
                 "relative": {
-                    "enabled": true,
                     "split_axis": "Read_Override",
                     "numerator_when": true,
                     "denominator_when": false,
@@ -273,7 +389,6 @@
                 "name": "dVtBudget_custom_flow5",
                 "type": "dVtBudget",
                 "relative": {
-                    "enabled": true,
                     "split_axis": "Read_Override",
                     "numerator_when": true,
                     "denominator_when": false,
@@ -302,6 +417,6 @@
         ],
 
         // "expression": "FBC_upper1_A2B_rel + 0.5 * FBC_upper1_A2B_worstWLg + 0.1 * tR_upper1_U_rel"
-        "expression": "FBC_upper1_A2B_rel + 0.5 * FBC_upper1_A2B_worstWLg"
+        "expression": "tR_delta - (-1 *deltaR_upper_tail -1 * deltaA_lower_tail -1* deltaA_upper_tail -1* deltaB_lower_tail)"
     }
 }
