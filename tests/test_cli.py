@@ -1,0 +1,109 @@
+import json
+import math
+import subprocess
+import sys
+
+import polars as pl
+import pytest
+
+from scorelib import io_jsonc
+from scorelib.cli import compute_score_file, compute_score_part
+from scorelib.dvtbudget import load_board_temperatures
+from scorelib.expression import evaluate_expression
+
+
+@pytest.fixture
+def run_config(fixtures_dir):
+    return io_jsonc.load_run_config(fixtures_dir / "config.jsonc")
+
+
+@pytest.fixture
+def dvt_inputs(dvtbudget_coef_path, data_dir):
+    return {
+        "dvtbudget_coef": io_jsonc.load_dvtbudget_coef(dvtbudget_coef_path),
+        "board_temperatures": load_board_temperatures(data_dir / "initial_temperature.csv"),
+    }
+
+
+def _expected_fbc_part(data_dir, wlgroup):
+    """Independent (eager, step-by-step) recomputation of the
+    FBC_A2B_upper1_rel score part defined in tests/fixtures/config.jsonc,
+    using the ground-truth expansion in gomi/FBC_expanded.csv.
+    """
+    df = pl.read_csv(data_dir.parent / "gomi" / "FBC_expanded.csv")
+    cols = ["Board", "Chip", "Block", "WL", "STR", "State", "Read_Label", "Read_Override", "FBC"]
+    df = df.select(cols).with_columns(pl.col("Read_Override").cast(pl.Boolean))
+
+    num = df.filter(pl.col("Read_Override")).drop("Read_Override")
+    den = df.filter(~pl.col("Read_Override")).drop("Read_Override")
+
+    # denominator pre-aggregation: mean over WL, then mean over STR
+    den = den.group_by(["Board", "Chip", "Block", "STR", "State", "Read_Label"]).agg(pl.col("FBC").mean())
+    den = den.group_by(["Board", "Chip", "Block", "State", "Read_Label"]).agg(pl.col("FBC").mean())
+    den = den.rename({"FBC": "denom"})
+
+    rel = num.join(den, on=["Board", "Chip", "Block", "State", "Read_Label"], how="left")
+    rel = rel.with_columns(((pl.col("FBC") + 1) / (pl.col("denom") + 1)).alias("FBC")).drop("denom")
+
+    rel = rel.filter(pl.col("Read_Label") == "read_level_upper1").drop("Read_Label")
+    rel = rel.filter(pl.col("State") == "A2B").drop("State")
+
+    # WL: group_reduce with WLgroup (inner mean, outer max)
+    def to_group(wl: int) -> str:
+        for name, (lo, hi) in wlgroup.items():
+            if lo <= wl <= hi:
+                return name
+        raise AssertionError(f"WL {wl} not covered")
+
+    rel = rel.with_columns(pl.col("WL").map_elements(to_group, return_dtype=pl.Utf8).alias("grp")).drop("WL")
+    rel = rel.group_by(["Board", "Chip", "Block", "STR", "grp"]).agg(pl.col("FBC").mean())
+    rel = rel.group_by(["Board", "Chip", "Block", "STR"]).agg(pl.col("FBC").max())
+
+    # STR: mean over subset {0, 1}
+    rel = rel.filter(pl.col("STR").is_in([0, 1]))
+    rel = rel.group_by(["Board", "Chip", "Block"]).agg(pl.col("FBC").mean())
+    # Board mean, Chip mean, Block max
+    rel = rel.group_by(["Chip", "Block"]).agg(pl.col("FBC").mean())
+    rel = rel.group_by(["Block"]).agg(pl.col("FBC").mean())
+    return rel["FBC"].max()
+
+
+def test_fbc_part_matches_independent_recomputation(data_dir, run_config):
+    part = next(p for p in run_config.optimization.score_parts if p.name == "FBC_A2B_upper1_rel")
+    actual = compute_score_part(data_dir, part, group_defs=run_config.group_defs())
+    expected = _expected_fbc_part(data_dir, run_config.optimization.WLgroup)
+    assert actual == pytest.approx(expected)
+
+
+def test_dvtbudget_part_is_finite(data_dir, run_config, dvt_inputs):
+    part = next(p for p in run_config.optimization.score_parts if p.name == "dVtBudget_R2A")
+    value = compute_score_part(
+        data_dir, part, group_defs=run_config.group_defs(),
+        generation=run_config.Generation, **dvt_inputs,
+    )
+    assert math.isfinite(value)
+
+
+def test_compute_score_file_returns_all_parts(data_dir, run_config, dvt_inputs):
+    result = compute_score_file(data_dir, run_config, **dvt_inputs)
+    assert set(result) == {"Score", "FBC_A2B_upper1_rel", "dVtBudget_R2A"}
+    expected_score = evaluate_expression(
+        run_config.optimization.expression,
+        {k: v for k, v in result.items() if k != "Score"},
+    )
+    assert result["Score"] == pytest.approx(expected_score)
+
+
+def test_cli_subprocess_end_to_end(data_dir, fixtures_dir, dvtbudget_coef_path):
+    cmd = [
+        sys.executable, "-m", "scorelib.cli",
+        "--config", str(fixtures_dir / "config.jsonc"),
+        "--data-dir", str(data_dir),
+        "--dvtbudget-coef", str(dvtbudget_coef_path),
+        "--initial-temperature", str(data_dir / "initial_temperature.csv"),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+    assert set(result) == {"Score", "FBC_A2B_upper1_rel", "dVtBudget_R2A"}
+    assert all(isinstance(v, float) for v in result.values())

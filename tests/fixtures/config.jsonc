@@ -1,0 +1,72 @@
+{
+    "Generation": "B9LS",
+
+    "optimization": {
+
+        "score_function": "gui_score",
+
+        "constraintThreshold": {
+            "FBC_A2B_upper1_rel": {"value": 25},
+            "dVtBudget_R2A": {"value": 10, "active": "True", "type": "percentile", "coef": 20}
+        },
+
+        "WLgroup": {
+            "WLgroup01": [0, 3],
+            "WLgroup02": [4, 8],
+            "WLgroup03": [9, 12],
+            "WLgroup04": [13, 16],
+            "WLgroup05": [17, 20]
+        },
+
+        "score_parts": [
+            {
+                "name": "FBC_A2B_upper1_rel",
+                "type": "FBC",
+                "relative": {
+                    "enabled": true,
+                    "split_axis": "Read_Override",
+                    "numerator_when": true,
+                    "denominator_when": false,
+                    "denominator_offset": 1,
+                    "denominator_pre_aggregation": [
+                        {"axis": "WL", "op": "mean"},
+                        {"axis": "STR", "op": "mean"}
+                    ]
+                },
+                "order": ["Read_Label", "State", "WL", "STR", "Board", "Chip", "Block"],
+                "aggregations": {
+                    "Read_Label": {"op": "filter", "value": "read_level_upper1"},
+                    "State": {"op": "filter", "value": "A2B"},
+                    "WL": {"op": "group_reduce", "group_def": "WLgroup", "inner_op": "mean", "outer_op": "max"},
+                    "STR": {"op": "mean_subset", "values": [0, 1]},
+                    "Board": {"op": "mean"},
+                    "Chip": {"op": "mean"},
+                    "Block": {"op": "max"}
+                }
+            },
+            {
+                "name": "dVtBudget_R2A",
+                "type": "dVtBudget",
+                "relative": {
+                    "enabled": true,
+                    "split_axis": "Read_Override",
+                    "numerator_when": true,
+                    "denominator_when": false,
+                    "denominator_offset": 1
+                },
+                "order": ["__relative__", "Read_Label", "State", "WL", "STR", "Board", "Chip", "Block"],
+                "aggregations": {
+                    "Read_Label": {"op": "filter", "value": "read_level_upper1"},
+                    "State": {"op": "filter", "value": "R2A"},
+                    "WL": {"op": "mean"},
+                    "STR": {"op": "mean"},
+                    "Board": {"op": "max"},
+                    "Chip": {"op": "mean"},
+                    "Block": {"op": "mean"}
+                }
+            }
+        ],
+
+        "expression": "0.5 * FBC_A2B_upper1_rel + dVtBudget_R2A"
+    }
+}

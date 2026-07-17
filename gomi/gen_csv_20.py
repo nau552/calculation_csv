@@ -1,0 +1,30 @@
+import itertools
+import pandas as pd
+
+
+def create_dataframe_with_cyclic_fbc(column_ranges, fbc_max=20, output_csv="output.csv"):
+    columns = list(column_ranges.keys())
+    value_lists = [range(start, end + 1) for start, end in column_ranges.values()]
+
+    combinations = list(itertools.product(*value_lists))
+    df = pd.DataFrame(combinations, columns=columns)
+
+    cycle_length = fbc_max + 1
+    df['tR'] = [i % cycle_length for i in range(len(df))]
+
+    df.to_csv(output_csv, index=False, encoding='utf-8')
+    return df
+
+column_ranges={
+    "InBatchEpoch": (0, 0),
+    "Board": (0, 1),
+    "Chip": (0, 1),
+    "Block": (0, 0),
+    "Measure": (0, 1),
+    "WL": (0, 5),
+    "STR": (0, 2),
+    "Page": (0, 2),
+    # "DataName": (0, 11),
+}
+
+df = create_dataframe_with_cyclic_fbc(column_ranges, fbc_max=13, output_csv="tR_mini.csv")

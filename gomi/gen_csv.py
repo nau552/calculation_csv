@@ -1,0 +1,56 @@
+import itertools
+import random
+import pandas as pd
+
+
+def generate_csv(column_ranges, random_column, random_range, output_file):
+    """
+    column_ranges:
+        {
+            "A": (0, 1),  # 0~1
+            "B": (0, 5),  # 0~5
+            ...
+        }
+
+    random_column:
+        ランダム値を入れる列名
+
+    random_range:
+        (min, max)
+    """
+
+    columns = list(column_ranges.keys())
+
+    value_lists = [
+        range(start, end + 1)
+        for start, end in column_ranges.values()
+    ]
+
+    rows = []
+    for values in itertools.product(*value_lists):
+        row = dict(zip(columns, values))
+        row[random_column] = random.randint(*random_range)
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    df.to_csv(output_file, index=False)
+
+    print(f"{len(df):,} rows saved to {output_file}")
+
+
+generate_csv(
+    column_ranges={
+        "InBatchEpoch": (0, 0),
+        "Board": (0, 1),
+        "Chip": (0, 7),
+        "Block": (0, 1),
+        "Measure": (0, 3),
+        "WL": (0, 119),
+        "STR": (0, 5),
+        "State": (0, 13),
+        # "DataName": (0, 11),
+    },
+    random_column="FBC",
+    random_range=(0, 200),
+    output_file="FBC_normal.csv"
+)

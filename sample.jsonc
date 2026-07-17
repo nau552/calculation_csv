@@ -1,0 +1,21 @@
+{
+    "Generation": "B9LS",
+
+    "optimization":{
+    
+        "score_function": "score_function_1",
+
+        "constraintThreshold": {
+            "tPROG_delta": {"value":25},
+            "dVtBudget": {"value":10, "active":"True", "type":"percentile", "coef":20}
+        },
+
+        "WLgroup": {
+        "WLgroup01":[0,3],
+        "WLgroup02":[4,8],
+        "WLgroup03":[9,12],
+        "WLgroup04":[13,16],
+        "WLgroup05":[17,20]
+        }
+    }
+}
