@@ -4,6 +4,7 @@ See score_gui_design.md sections 3-6 for the design rationale.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field, RootModel, model_validator
@@ -57,6 +58,11 @@ class AggregationSpec(BaseModel):
 
     op: AggOp
     value: Optional[Any] = None
+    # Reference to a named selection set (optimization.selectionSets) used
+    # instead of an inline `value`; resolved before computation, after which
+    # the resolved content passes exactly the same shape checks as an inline
+    # value would.
+    ref: Optional[str] = None
     group_def: Optional[str] = None
     inner_op: Optional[Literal["mean", "sum", "min", "max"]] = None
     outer_op: Optional[Literal["mean", "sum", "min", "max"]] = None
@@ -79,6 +85,13 @@ class AggregationSpec(BaseModel):
     @model_validator(mode="after")
     def _check_value_shape(self):
         op, v = self.op, self.value
+        if self.ref is not None:
+            if v is not None:
+                raise ValueError("give either 'value' or 'ref' (a named selection set), not both")
+            if op in ("add", "expr", "group_reduce"):
+                raise ValueError(f"op '{op}' takes no selections, so 'ref' is not applicable")
+            # value-shape checks run again after the ref is resolved
+            return self
         if op == "filter":
             if isinstance(v, list):
                 if len(v) == 1 and not isinstance(v[0], list):
@@ -206,6 +219,36 @@ class ScorePart(BaseModel):
                     )
         return self
 
+    def resolve_selection_refs(self, selection_sets: Dict[str, List[Any]]) -> "ScorePart":
+        """Return a copy with every `ref` replaced by the referenced
+        selection set's content. Re-validates the whole part so the resolved
+        selections pass exactly the same checks as inline ones."""
+        specs = list(self.aggregations.values())
+        if self.relative:
+            specs += list(self.relative.denominator_pre_aggregation)
+        if not any(s.ref is not None for s in specs):
+            return self
+
+        def _resolve(spec_dict: dict) -> None:
+            ref = spec_dict.get("ref")
+            if ref is None:
+                return
+            if ref not in selection_sets:
+                raise ValueError(
+                    f"score part '{self.name}': unknown selection set '{ref}' "
+                    f"(defined sets: {sorted(selection_sets)})"
+                )
+            spec_dict["value"] = deepcopy(selection_sets[ref])
+            spec_dict["ref"] = None
+
+        data = self.model_dump()
+        for spec_dict in data["aggregations"].values():
+            _resolve(spec_dict)
+        if data.get("relative"):
+            for step_dict in data["relative"]["denominator_pre_aggregation"]:
+                _resolve(step_dict)
+        return ScorePart.model_validate(data)
+
 
 class ConstraintThresholdEntry(BaseModel):
     value: float
@@ -224,12 +267,16 @@ class ScoreFile(BaseModel):
     score_parts: List[ScorePart] = Field(default_factory=list)
     expression: str = ""
     constraintThreshold: Dict[str, ConstraintThresholdEntry] = Field(default_factory=dict)
+    # bundled so an exported score file stays self-contained when its parts
+    # use `ref`
+    selectionSets: Dict[str, List[Any]] = Field(default_factory=dict)
 
 
 class OptimizationConfig(BaseModel):
     score_function: Optional[str] = None
     constraintThreshold: Dict[str, ConstraintThresholdEntry] = Field(default_factory=dict)
     WLgroup: Dict[str, Tuple[int, int]] = Field(default_factory=dict)
+    selectionSets: Dict[str, List[Any]] = Field(default_factory=dict)
     score_parts: List[ScorePart] = Field(default_factory=list)
     expression: str = ""
 
@@ -245,6 +292,7 @@ class RunConfig(BaseModel):
             score_parts=self.optimization.score_parts,
             expression=self.optimization.expression,
             constraintThreshold=self.optimization.constraintThreshold,
+            selectionSets=self.optimization.selectionSets,
         )
 
     def group_defs(self) -> Dict[str, Dict[str, Tuple[int, int]]]:

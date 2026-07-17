@@ -170,3 +170,21 @@ Stateを二つえらんでdiffを取る件、それぞれ異なるRead_Labelを�
 複合軸のときはこんな風に書くことにして、keyはどんなopでもvalueにしてはいけない？
 自分が気になっているのは、UIが導入されるまでの間で、ユーザがvaluesのところを中身は正しいのにkeyだけvalueと書いてしまったせいでエラーになったり計算が間違ったりすると、このopはvalues、このopはvalueという風に覚えないといけないのが面倒なんじゃないかと思った。
 これに問題があれば教えてほしい。
+
+
+複合軸集計で
+        "State&Read_Label": {
+            "op": "sum",
+            "value": [
+                {"State": "R2A", "Read_Label": "read_level_upper1"},   // 上方向はupper1で
+                {"State": "A2B", "Read_Label": "read_level_upper1"},
+                {"State": "A2R", "Read_Label": "read_level_lower1"},   // 下方向はlower1で
+                {"State": "B2A", "Read_Label": "read_level_lower1"}
+            ]
+        },
+このように書いたとして、これを使いまわしたいこともあると思う。
+そのときはこれを毎回そのパーツにコピペするしかない？
+configを手で修正しているときは面倒ではあるが最悪コピペしても良いかもしれないが、
+GUI化した後なんかは、パーツごとにこの複合軸の設定を毎回ひとつずつ記入なり選択しないといけない？
+他に良い方法はある？
+すぐに実装は開始せず、良い案があれば言葉で提案せよ。

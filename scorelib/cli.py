@@ -178,7 +178,9 @@ def compute_score_part(
     dvtbudget_coef: Optional[DvtBudgetCoefFile] = None,
     board_temperatures: Optional[Dict[int, float]] = None,
     shared_ctx: Optional[SharedComputeContext] = None,
+    selection_sets: Optional[Dict[str, list]] = None,
 ) -> float:
+    score_part = score_part.resolve_selection_refs(selection_sets or {})
     source_type = _source_type(score_part)
     required_axes = _required_axes(score_part)
 
@@ -269,6 +271,7 @@ def compute_score_file(
             dvtbudget_coef=dvtbudget_coef,
             board_temperatures=board_temperatures,
             shared_ctx=shared_ctx,
+            selection_sets=score_file.selectionSets,
         )
 
     score = evaluate_expression(score_file.expression, values) if score_file.expression else None

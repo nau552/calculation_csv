@@ -293,6 +293,44 @@ read_level_lower1 で見て、それらを合成したい」のように、**複
 - `filter`（辞書1個）、`diff`（辞書2個の差。異なるRead_Label同士でも可）、
   `sum`/`mean`/`min`/`max`（辞書のリスト）がそのまま使える。
 - 辞書のキー名は複合軸名の構成軸と一致している必要があり、違うと読み込み時エラーになる。
+
+#### 選択セット（selectionSets）— 選択リストの名前付き再利用
+
+同じ選択リスト（上下方向の組など）を複数のパーツで使い回す場合は、
+コピペせず **`optimization.selectionSets` に名前付きで定義して `ref` で参照**する
+（WLgroupを `group_def` で参照するのと同じパターン）:
+
+```jsonc
+"optimization": {
+    "selectionSets": {
+        "updown_pairs": [
+            {"State": "R2A", "Read_Label": "read_level_upper1"},
+            {"State": "A2B", "Read_Label": "read_level_upper1"},
+            {"State": "A2R", "Read_Label": "read_level_lower1"},
+            {"State": "B2A", "Read_Label": "read_level_lower1"}
+        ],
+        "upper_states": ["R2A", "A2B"]          // 複合軸専用ではなく通常軸のリストにも使える
+    },
+    "score_parts": [
+        { ...,
+          "aggregations": {
+              "State&Read_Label": {"op": "sum", "ref": "updown_pairs"},   // valueの代わりにref
+              ...
+          }
+        }
+    ]
+}
+```
+
+- `ref` は `value` の代わりに書く（両方書いたらエラー、存在しない名前もエラー）
+- 参照は計算前に展開され、展開後の中身はインラインで書いた場合と**全く同じ検証**を通る
+- セットの定義を直せば、参照している全パーツに一括で反映される（コピペ方式との違い）
+- エクスポートされるスコアファイル（ScoreFile）には `selectionSets` が同梱されるため、
+  `ref` を使うパーツを単体で持ち出しても自己完結する
+- UI実装時の想定: パーツ編集画面では定義済みセットのプルダウン＋新規作成。
+  セット編集画面では「別名で保存」（既存セットを複製してから編集）も提供する。
+  セットはただの名前付きリストなので複製は自明で、別名保存しても既存パーツの
+  参照は元の名前のまま変わらない
 - 複合軸に含めた軸（上の例ではStateとRead_Label）は、orderに単独で
   重ねて書かない（複合軸で一緒に潰れるため）。
 - 制約条件（constraintThreshold）はスコアパーツ名を参照するため、
