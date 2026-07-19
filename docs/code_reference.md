@@ -2,7 +2,8 @@
 
 このファイルは「**今のコードに何があるか**」を説明するリファレンスです（チーム内での報告・引き継ぎ用）。
 「なぜこの設計にしたか」の経緯は `score_gui_design.md`（エンジン）と `score_gui_ui_design.md`（UI）、
-使い方は `README.md`、テストの解説は `testing_guide.md` を参照してください。
+使い方はリポジトリ直下の `README.md`、テストの解説は `testing_guide.md` を参照してください。
+コメント・docstring はコード側もすべて日本語です。
 **コードを変更したら本ファイルも追随更新すること。**
 
 ## 全体アーキテクチャ
@@ -244,8 +245,8 @@ ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算
 | ファイル | 内容 |
 |---|---|
 | `custom_parts.py` | 自作関数の登録テンプレート（SVN登録用。書き方の説明コメント入り） |
-| `config_mini.jsonc` | UI動作確認用のサンプルスコア設定（result_tmp_mini と組で使う） |
+| `config_mini.jsonc` | UI動作確認用のサンプルスコア設定（tests/data/result_tmp_mini と組で使う） |
 | `scripts/convert_dvtbudget_coef.py` | 現行の係数Pythonファイル（`dVtBudget_coef = {...}`）を ast で安全に読み jsonc へ変換 |
-| `result_tmp_mini/` | テスト・動作確認用の小さな測定データ一式 |
+| `tests/data/result_tmp_mini/` | テスト・動作確認用の小さな測定データ一式（git登録済み。実データ result_tmp/ は登録しない） |
 | `tests/` | テスト（解説は `testing_guide.md`） |
-| `gomi/` | 現行スクリプトの参照用コピー（エンジン検証の正解データ生成に使用） |
+| `reference_scripts/` | 現行スクリプトの参照用コピー（エンジン検証の正解データ生成に使用。expand_FBC_measure.py はテストが実行する） |

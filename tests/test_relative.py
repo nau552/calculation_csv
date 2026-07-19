@@ -77,7 +77,7 @@ def test_relative_diff_mode():
     relative = RelativeConfig(
         split_axis="IsEval", numerator_when=True, denominator_when=False,
         mode="diff",
-        denominator_offset=123.0,  # must be ignored in diff mode
+        denominator_offset=123.0,  # diff モードでは無視されるはず
     )
     out = apply_relative(lf, "value", relative).collect()
     result = {row["Key"]: row["value"] for row in out.to_dicts()}

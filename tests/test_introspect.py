@@ -1,5 +1,5 @@
-"""Tests for scorelib.introspect: deriving UI-facing metadata (types, axes,
-value candidates) from a past experiment's output directory."""
+"""scorelib.introspect のテスト: 過去実験の出力ディレクトリからの
+UI向けメタデータ（type・軸・値候補）の導出。"""
 import shutil
 
 import pytest
@@ -48,7 +48,7 @@ def test_find_run_configs(full_dir, data_dir_mini):
 
 def test_axis_catalog_fbc(data_dir_mini):
     catalog = axis_catalog(data_dir_mini, "FBC")
-    # measured axes in csv-header order, then label axes
+    # 測定軸は csv ヘッダ順、その後にラベル軸
     assert list(catalog) == [
         "InBatchEpoch", "Board", "Chip", "Block", "WL", "STR", "State",
         "Erase_Label", "Erase_Override", "Program_Label", "Program_Override",
@@ -57,7 +57,7 @@ def test_axis_catalog_fbc(data_dir_mini):
     assert catalog["State"] == ["R2A", "A2R", "A2B", "B2A"]
     assert catalog["Read_Override"] == [False, True]
     assert "read_level_upper1" in catalog["Read_Label"]
-    assert catalog["WL"] == sorted(catalog["WL"])  # numeric uniques, sorted
+    assert catalog["WL"] == sorted(catalog["WL"])  # 数値軸はユニーク値の昇順
 
 
 def test_axis_catalog_candidates_narrowed_to_present_values(data_dir_mini):

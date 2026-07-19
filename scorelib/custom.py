@@ -1,24 +1,22 @@
-"""User-defined score-part functions (type="custom").
+"""自作スコアパーツ関数（type="custom"）のロードと実行。
 
-A python-literate user writes functions in custom_parts.py — one function per
-score part, returning one finite scalar. The file lives at a FIXED,
-SVN-versioned location (repository root, next to the scorelib package): the
-config never carries a path to it, because a config-supplied path would let
-any experiment config execute arbitrary code on the optimization server.
-Editing custom functions therefore goes through SVN, which is the intended
-gate (review + history). The design UI loads the same file (bundled in the
-zip the GUI serves) so the function list and test computation match the
-revision that will run.
+Pythonが書けるユーザは custom_parts.py に関数を書き、1関数=1スコアパーツと
+して呼べる（戻り値は有限な1スカラー）。ファイルの場所は**固定**（リポジトリ
+直下、scorelib パッケージの隣。SVNで版管理）: config にパスを持たせると
+実験入力から任意コードを実行できてしまうため、あえて固定にしている。
+関数の追加・変更は SVN コミット=レビューを通すのが意図したゲート。
+設計UIは同じファイル（GUIが配る一式zipに同梱）を読み込んで関数一覧と
+テスト計算を提供するので、リビジョンが一致していれば実行側と同じ関数になる。
 
-Function contract::
+関数の契約::
 
     def my_score(ctx) -> float:
         df = pl.read_csv(ctx.data_dir / "FBC.csv")
         ...
         return value
 
-ctx is a CustomContext: data_dir (Path), generation (str | None),
-group_defs (name -> GroupDef), params (the part's params dict).
+ctx は CustomContext: data_dir (Path) / generation (str | None) /
+group_defs (名前 -> GroupDef) / params (そのパーツの params 辞書)。
 """
 from __future__ import annotations
 
@@ -43,13 +41,14 @@ class CustomContext:
 
 
 def default_custom_parts_path() -> Path:
-    """custom_parts.py at the repository root (next to the scorelib package)."""
+    """リポジトリ直下の custom_parts.py（scorelib パッケージの1つ上）。"""
     return Path(__file__).resolve().parent.parent / DEFAULT_FILENAME
 
 
 def load_custom_module(path: str | Path):
-    """Import the user functions file. This EXECUTES its top-level code —
-    acceptable because the file is SVN-reviewed, never user-uploaded input."""
+    """ユーザ関数ファイルを import する。＝トップレベルコードが実行される。
+    ファイルは SVN レビュー済みのもの（ユーザのアップロード入力ではない）が
+    前提なので許容している。"""
     path = Path(path)
     spec = importlib.util.spec_from_file_location("scorelib_custom_parts", path)
     if spec is None or spec.loader is None:
@@ -60,7 +59,7 @@ def load_custom_module(path: str | Path):
 
 
 def list_custom_functions(module) -> list[str]:
-    """Public functions defined in the module itself (imports excluded)."""
+    """モジュール自身で定義された公開関数名（import した名前・`_`始まりは除外）。"""
     return sorted(
         name
         for name, fn in vars(module).items()
@@ -86,6 +85,7 @@ def compute_custom_part(
         value = fn(ctx)
     except Exception as err:
         raise ValueError(f"custom function '{fname}' raised: {err}") from err
+    # bool は int のサブクラスなので明示的に弾く
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         raise ValueError(
             f"custom function '{fname}' must return one finite number, got {value!r}"

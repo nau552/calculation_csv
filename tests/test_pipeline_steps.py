@@ -1,5 +1,5 @@
-"""Tests for virtual pipeline steps in `order`: __relative__, __dvtbudget__,
-and user-named transforms like __offset__ (see cli.py)."""
+"""order 内の仮想パイプラインステップのテスト: __relative__、__dvtbudget__、
+__offset__ のようなユーザ命名の変換ステップ（cli.py 参照）。"""
 import pytest
 
 from scorelib import io_jsonc
@@ -21,9 +21,9 @@ def _base_aggs():
 
 
 def test_explicit_offset_step_equals_ratio_time_offset(data_dir_mini):
-    """offset -> mean(WL) -> mean(STR) -> relative  must equal the classic
-    form (denominator pre-aggregated over WL/STR, offset applied to both
-    sides at ratio time), because mean commutes with adding a constant.
+    """offset → WL平均 → STR平均 → 相対化 は、古典形（分母を WL/STR で
+    事前集計し、比を取る時点で offset を両辺に加算）と一致するはず。
+    平均は定数加算と可換だから。
     """
     classic = ScorePart.model_validate(
         {
@@ -52,13 +52,13 @@ def test_explicit_offset_step_equals_ratio_time_offset(data_dir_mini):
                 "split_axis": "Read_Override",
                 "numerator_when": True,
                 "denominator_when": False,
-                "denominator_offset": 0,  # offset now an explicit step instead
+                "denominator_offset": 0,  # offset は明示ステップ側で加算する
             },
             "order": [
                 "Read_Label", "State",
                 "__offset__",           # add 1 to every FBC value
-                "WL", "STR",            # aggregated per numerator/denominator side
-                "__relative__",         # then take the ratio
+                "WL", "STR",            # 分子側・分母側それぞれで先に集計
+                "__relative__",         # その後に比を取る
                 "Board", "Chip", "Block",
             ],
             "aggregations": {**_base_aggs(), "__offset__": {"op": "add", "value": 1}},
@@ -114,7 +114,7 @@ def test_dvtbudget_step_after_state_aggregation_raises(data_dir_mini, dvtbudget_
                 "denominator_when": False,
                 "denominator_offset": 1,
             },
-            # State is filtered away BEFORE the conversion -> must fail clearly
+            # 変換より**前**に State を filter で潰している → 明確に失敗すべき
             "order": ["__relative__", "Read_Label", "State", "__dvtbudget__", "WL", "STR", "Board", "Chip", "Block"],
             "aggregations": _base_aggs(),
         }

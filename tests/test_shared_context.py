@@ -1,8 +1,8 @@
-"""Equivalence and cache-behavior tests for SharedComputeContext (案A+B).
+"""SharedComputeContext（type単位共有+prefix キャッシュ）の等価性・挙動テスト。
 
-The optimization must be observationally invisible: compute_score_file
-(shared caches) must produce the same values as computing every part
-standalone (fresh resolve per part, no cache).
+この最適化は観測上見えてはならない: compute_score_file（キャッシュ共有）は、
+各パーツを単独で計算した場合（パーツごとに読み直し・キャッシュ無し）と
+完全に同じ値を返す必要がある。
 """
 import polars as pl
 import pytest
@@ -78,15 +78,14 @@ def test_resolve_runs_once_per_type(data_dir_mini, mini_config, dvt_inputs, monk
     monkeypatch.setattr(cli.axis_resolve, "resolve_axes", counting)
     compute_score_file(data_dir_mini, mini_config, **dvt_inputs)
 
-    # fixture config has FBC parts + a dVtBudget part (source FBC): one FBC
-    # resolve total, regardless of part count.
+    # fixture の config は FBC パーツ + dVtBudget パーツ（読み元はFBC）:
+    # パーツ数によらず FBC の resolve は合計1回のはず
     assert calls.count("FBC") == 1
 
 
 def test_prefix_shared_across_states(data_dir_mini, dvt_inputs, monkeypatch):
-    """Parts differing only in their State filter must share the whole
-    resolve + relative + dVtBudget prefix (the '全State分まとめて計算して
-    選ぶ' pattern)."""
+    """State の filter だけが違うパーツ同士は、resolve + 相対化 + dVtBudget の
+    前段全体を共有すること（「全State分まとめて計算して選ぶ」パターン）。"""
     relative_calls = []
     original = cli.apply_relative
 
@@ -104,22 +103,22 @@ def test_prefix_shared_across_states(data_dir_mini, dvt_inputs, monkeypatch):
             data_dir_mini, p, generation="B9LS", shared_ctx=ctx, **dvt_inputs
         )
 
-    assert len(relative_calls) == 1  # relative computed once, reused 3 times
+    assert len(relative_calls) == 1  # 相対化は1回計算され、3回再利用される
     for p in parts:
         standalone = compute_score_part(data_dir_mini, p, generation="B9LS", **dvt_inputs)
         assert values[p.name] == pytest.approx(standalone, rel=1e-12)
 
 
 def test_different_offset_does_not_share_prefix(data_dir_mini, dvt_inputs):
-    """A part with a different relative config must NOT reuse another
-    part's cached prefix."""
+    """相対化設定（offset）が違うパーツは、他パーツのキャッシュ済み前段を
+    再利用してはならない。"""
     a = _dvt_part("a", "A2B", offset=1)
     b = _dvt_part("b", "A2B", offset=20)
     ctx = SharedComputeContext(data_dir_mini, [a, b])
 
     va = compute_score_part(data_dir_mini, a, generation="B9LS", shared_ctx=ctx, **dvt_inputs)
     vb = compute_score_part(data_dir_mini, b, generation="B9LS", shared_ctx=ctx, **dvt_inputs)
-    assert va != vb  # different offsets must give different values
+    assert va != vb  # offset が違えば値も違うはず（共有されていない証拠）
 
     vb_standalone = compute_score_part(data_dir_mini, b, generation="B9LS", **dvt_inputs)
     assert vb == pytest.approx(vb_standalone, rel=1e-12)

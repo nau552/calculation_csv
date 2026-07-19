@@ -1,5 +1,5 @@
-"""Tests for combined axes ("State&Read_Label") — selecting/reducing over
-(State, Read_Label) pairs inside a single score part."""
+"""複合軸（"State&Read_Label"）のテスト — 1つのスコアパーツ内で
+(State, Read_Label) の組に対して選択・集計する。"""
 import pytest
 
 from scorelib import io_jsonc
@@ -65,10 +65,9 @@ def _filtered_part(name, state_agg, read_label):
 
 
 def test_updown_sum_equals_two_filtered_parts_added(data_dir_mini, dvt_kwargs):
-    """The user's real use case: upward Budget states (R2A, A2B) measured at
-    read_level_upper1 plus downward states (A2R, B2A) at read_level_lower1,
-    summed into one score part. Must equal the sum of the two per-direction
-    parts because every later aggregation is linear."""
+    """実際のユースケース: 上方向のBudget State（R2A, A2B）は read_level_upper1、
+    下方向（A2R, B2A）は read_level_lower1 で測り、1つのパーツに合算する。
+    以降の集計はすべて線形なので、方向別に作った2パーツの和と一致するはず。"""
     combined = compute_score_part(
         data_dir_mini,
         _combined_part(
@@ -159,8 +158,8 @@ def test_expr_updown_difference(data_dir_mini, dvt_kwargs):
 
 
 def test_positional_pair_list_rejected():
-    """The old positional form ["R2A", "read_level_upper1"] is ambiguous and
-    must be rejected with a pointer to the dict form."""
+    """位置指定の旧形式 ["R2A", "read_level_upper1"] は曖昧なので、
+    辞書形式への案内つきで拒否されること。"""
     with pytest.raises(Exception, match="dict naming its axes"):
         _combined_part("bad", {"op": "sum", "value": ["R2A", "read_level_upper1"]})
 

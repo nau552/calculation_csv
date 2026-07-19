@@ -1,4 +1,4 @@
-"""Tests for named selection sets (optimization.selectionSets + `ref`)."""
+"""名前付き選択セット（optimization.selectionSets + `ref` 参照）のテスト。"""
 import pytest
 
 from scorelib import io_jsonc
@@ -79,8 +79,8 @@ def test_ref_on_op_without_selections_rejected():
 
 
 def test_resolved_content_is_validated(data_dir_mini, dvt_kwargs):
-    """A set whose dicts have wrong keys must fail with the same error an
-    inline selection would produce."""
+    """キー名の間違ったセットは、インラインで書いた場合と同じエラーで
+    失敗すること（ref 解決後にも同じ検証が走る）。"""
     bad_set = [{"State": "R2A", "ReadLabel": "read_level_upper1"}]
     with pytest.raises(ValueError, match="expects keys"):
         compute_score_part(

@@ -178,6 +178,17 @@ tests/               # フラット配置、モジュール名対応（test_ui_s
    - 新規ドキュメント: **code_reference.md**（全ファイル・全関数の解説。チーム報告用）と
      **testing_guide.md**（テスト概念入門+全テストファイル解説+AppTestの限界）。
      どちらも「コード変更時に追随更新」を冒頭に明記。
+17. **リポジトリ整理+日本語化**（ユーザーと合意の上で実施）:
+   - 構成変更: gomi/ → reference_scripts/、result_tmp_mini/ → tests/data/result_tmp_mini/
+     （**git登録**。従来 .gitignore の result_tmp* に巻き込まれて未追跡=クローンでテスト全滅だった）、
+     設計書類 → docs/（docs/README.md に対象読者つき索引）。.gitignore は実データ
+     （result_tmp/・ルートの csv・reference_scripts/*.csv）だけを除外する形に整理。
+   - テストの実データ依存を解消（test_axis_resolve/test_dvtbudget が result_tmp を
+     参照していた → mini とその場生成の csv に変更。data_dir fixture 削除）。
+   - **全コードのコメント・docstring を日本語化**（scorelib 全部・ui 全部・scripts・
+     conftest・全テストの説明文）。エンジンの**エラーメッセージは英語のまま**
+     （pydantic 組み込みメッセージと混ざるため+テストが文字列照合しているため。対象外と合意）。
+   - パスの追随: conftest（reference_scripts 実行、tests/data 参照）、README、docs 内相互参照。
    → **ここまで完了、ユーザーのブラウザ確認待ち**。
 
 ## 6. 未解決・保留事項

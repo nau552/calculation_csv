@@ -1,4 +1,4 @@
-"""Load/save the pydantic models in scorelib.models to/from jsonc files."""
+"""scorelib.models の pydantic モデル ⇔ jsonc ファイルの読み書き。"""
 from __future__ import annotations
 
 from pathlib import Path

@@ -21,9 +21,9 @@ REQUIRED_AXES = {
 
 
 def test_resolved_axes_match_known_expansion(expanded_mini_dir):
-    """Cross-check against FBC_expanded.csv produced by the original
-    (non-generalized) expansion script, run on a self-contained copy of
-    result_tmp_mini -- ground truth for the join/mapping logic.
+    """現行の（一般化前の）展開スクリプトを result_tmp_mini の自己完結コピーに
+    実行して作った FBC_expanded.csv と突き合わせる — 結合・map解決ロジックの
+    正解データ。
     """
     data_dir = expanded_mini_dir
     expected = pl.read_csv(data_dir / "FBC_expanded.csv")
@@ -55,8 +55,8 @@ def test_resolved_axes_match_known_expansion(expanded_mini_dir):
     assert (merged["FBC"] == merged["FBC_expected"]).all()
 
 
-def test_resolve_only_requested_axes_present(data_dir):
-    resolved = resolve_axes(data_dir, "FBC", {"State", "Board"}).collect()
+def test_resolve_only_requested_axes_present(data_dir_mini):
+    resolved = resolve_axes(data_dir_mini, "FBC", {"State", "Board"}).collect()
     assert set(resolved.columns) == {"FBC", "State", "Board"}
     assert resolved["State"].dtype == pl.String
 
@@ -69,7 +69,7 @@ def test_generic_type_with_generic_map_axis(data_dir_mini):
     assert set(resolved.columns) == {"tR", "Page", "Read_Label", "Read_Override", "WL"}
     assert set(resolved["Page"].unique().to_list()) == {"L", "M", "U"}
     assert resolved["Read_Override"].dtype == pl.Boolean
-    assert resolved["WL"].dtype == pl.Int64  # no map_WL.csv -> stays numeric
+    assert resolved["WL"].dtype == pl.Int64  # map_WL.csv が無い → 数値のまま
 
 
 def test_unresolvable_axis_raises(data_dir_mini):

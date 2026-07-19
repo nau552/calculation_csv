@@ -1,24 +1,22 @@
-"""Resolve only the axes a ScorePart actually needs, without materializing a
-fully expanded (FBC_expanded.csv-like) dataframe.
+"""スコアパーツが実際に必要とする軸だけを解決する（FBC_expanded.csv のような
+全展開 DataFrame は作らない）。
 
-For a given `type_` (e.g. "FBC"), the following files are expected in
-`data_dir`, following the current naming convention (see
-score_gui_design.md section 3.1/3.2):
+`type_`（例: "FBC"）に対して、`data_dir` に現行の命名規約
+（docs/score_gui_design.md 3.1/3.2節）のファイル群があることを期待する:
 
-- ``{type_}.csv``: measured axes (Board, Chip, Block, WL, STR, State, ...)
-  + ``Measure`` + a value column named after the type (e.g. ``FBC``)
-- ``parameterLabel_{type_}.csv``: resolves ``Measure`` -> Erase/Program/Read
-  Label + Override, joined on (InBatchEpoch, Board, Chip, Block, Measure)
-- ``dataName_{type_}.csv``: resolves ``Measure`` -> DataName (numeric),
-  same join key
-- ``map_*.csv``: shared numeric -> text lookups (2 columns, no header).
-  The mapping file for an axis is found generically: ``{Erase,Program,Read}_Label``
-  -> ``map_Label.csv``, ``*_Override`` -> ``map_Override.csv``, ``DataName`` ->
-  ``map_dataName.csv``, and any other axis ``X`` -> ``map_X.csv`` if that file
-  exists (e.g. ``State`` -> ``map_State.csv``, ``Page`` -> ``map_Page.csv``).
-  Axes with no mapping file (WL, STR, Board, ...) stay numeric.
+- ``{type_}.csv``: 測定軸（Board, Chip, Block, WL, STR, State, ...）
+  + ``Measure`` + type名の値列（例: ``FBC``）
+- ``parameterLabel_{type_}.csv``: ``Measure`` → Erase/Program/Read の
+  Label + Override への解決。結合キーは (InBatchEpoch, Board, Chip, Block, Measure)
+- ``dataName_{type_}.csv``: ``Measure`` → DataName（数値コード）。結合キー同上
+- ``map_*.csv``: 共有の数値→テキスト対応表（2列・ヘッダなし）。
+  軸に対応する map ファイルは規約で決まる: ``{Erase,Program,Read}_Label``
+  → ``map_Label.csv``、``*_Override`` → ``map_Override.csv``、``DataName`` →
+  ``map_dataName.csv``、それ以外の軸 ``X`` はファイルがあれば ``map_X.csv``
+  （例: ``State`` → ``map_State.csv``、``Page`` → ``map_Page.csv``）。
+  map ファイルの無い軸（WL, STR, Board, ...）は数値のまま。
 
-Only mapping files needed for the requested axes are read/joined.
+要求された軸に必要な map ファイルだけを読んで結合する。
 """
 from __future__ import annotations
 
@@ -54,9 +52,9 @@ def resolve_axes(
     type_: str,
     required_axes: Iterable[str],
 ) -> pl.LazyFrame:
-    """Return a LazyFrame with `type_` (the value column) plus every axis in
-    `required_axes`, resolved to human-readable text where applicable
-    (Label/Override/State/DataName), joined in only where actually needed.
+    """`type_`（値列）+ `required_axes` の各軸を持つ LazyFrame を返す。
+    Label/Override/State/DataName などは人間可読なテキストへ解決済み。
+    必要なところにだけ join を入れる。
     """
     data_dir = Path(data_dir)
     required_axes = set(required_axes)
@@ -65,8 +63,8 @@ def resolve_axes(
     lf = pl.scan_csv(data_dir / f"{type_}.csv")
     base_cols = set(lf.collect_schema().names())
 
-    # Axes not present in {type}.csv itself come from parameterLabel_{type}.csv
-    # (Erase/Program/Read Label + Override) or dataName_{type}.csv (DataName).
+    # {type}.csv 自体に無い軸は parameterLabel_{type}.csv（Erase/Program/Read の
+    # Label + Override）または dataName_{type}.csv（DataName）から来る。
     missing_axes = required_axes - base_cols
 
     label_path = data_dir / f"parameterLabel_{type_}.csv"
@@ -88,7 +86,7 @@ def resolve_axes(
             f"(not in {type_}.csv, parameterLabel_{type_}.csv, or dataName_{type_}.csv)"
         )
 
-    # Measure itself is only a join key, never exposed as an axis.
+    # Measure は結合キーとしてのみ使い、軸としては決して公開しない
     if "Measure" in lf.collect_schema().names():
         lf = lf.drop("Measure")
 
@@ -101,15 +99,13 @@ def resolve_axes(
         lf = lf.join(map_lf, left_on=axis, right_on=code_col, how="left")
         lf = lf.drop(axis).rename({text_col: axis})
         if axis.endswith(OVERRIDE_SUFFIX) and lf.collect_schema()[axis] != pl.Boolean:
-            # map_Override.csv's text column is usually auto-inferred as
-            # Boolean by the CSV reader already (TRUE/FALSE literals); only
-            # normalize by hand when it comes through as text instead.
+            # map_Override.csv のテキスト列は通常 csv リーダが Boolean と自動推論
+            # する（TRUE/FALSE リテラル）。テキストのまま来た場合だけ手で正規化
             lf = lf.with_columns(
                 pl.col(axis).cast(pl.Utf8).str.to_uppercase().is_in(["TRUE", "1"]).alias(axis)
             )
 
-    # Keep only the value column + requested axes (drop anything incidental,
-    # e.g. join keys that were not asked for).
+    # 値列 + 要求された軸だけ残す（要求されていない結合キー等の付随列は落とす）
     keep = [value_col] + sorted(a for a in required_axes if a in lf.collect_schema().names())
     lf = lf.select(keep)
     return lf

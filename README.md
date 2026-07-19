@@ -1,7 +1,7 @@
-# scorelib — スコア計算エンジン (score_gui Phase1 バックエンド)
+﻿# scorelib — スコア計算エンジン (score_gui Phase1 バックエンド)
 
-`score_gui.md` の仕様・`score_gui_design.md` の設計に基づく、スコア／スコアパーツ計算エンジンの実装。
-`score_gui_ui_design.md` に基づく Streamlit スコア設計UI（`ui/`）を同梱する。
+`docs/score_gui.md` の仕様・`docs/score_gui_design.md` の設計に基づく、スコア／スコアパーツ計算エンジンの実装。
+`docs/score_gui_ui_design.md` に基づく Streamlit スコア設計UI（`ui/`）を同梱する。
 
 ## ディレクトリ構成
 
@@ -107,7 +107,7 @@ python scripts/convert_dvtbudget_coef.py sample.py dvtbudget_coef.jsonc
 .venv/Scripts/streamlit run ui/app.py
 ```
 
-**配置方針**（詳細は `score_gui_ui_design.md` 2.1節）: コードの正は git（本リポジトリ、
+**配置方針**（詳細は `docs/score_gui_ui_design.md` 2.1節）: コードの正は git（本リポジトリ、
 UI+エンジン一体）。実験実行用に **SVN へは `scorelib/` + `custom_parts.py` のみを
 リリース時に同期登録**する。一般ユーザ向けの正式な形は「サーバでUIを1つ立てて共用+
 一式zipアップロード」（ユーザの環境構築なし）で、個人でのUI起動は開発者向けモード。
@@ -115,7 +115,7 @@ UIはエンジンに同梱依存する（検証・軸候補・テスト計算を
 設計のため分割しない）。エンジン版は `scorelib.__version__` で管理し、UIサイドバーと
 CLI（stderr / `--version`）に表示される — SVN側エンジンとの版ズレ確認用。
 
-サイドバーで切り替える5画面（詳細は `score_gui_ui_design.md`）:
+サイドバーで切り替える5画面（詳細は `docs/score_gui_ui_design.md`）:
 
 1. **データ読み込み** — **同系統の過去実験の測定結果ディレクトリ**（result_tmp相当）を
    指定して読み込み、type一覧・軸一覧・値候補を導出する。optimization設定jsonc
@@ -167,8 +167,8 @@ CLI（stderr / `--version`）に表示される — SVN側エンジンとの版�
 
 現行のoptimization設定（更新版 `sample.jsonc` の形式）に `score_parts` と `expression` を
 追加した形。テストで実際に使用している `tests/fixtures/config.jsonc` が完全な実例。
-コードの中身（全ファイル・全関数）の解説は `code_reference.md`、テストの考え方と
-各テストの解説は `testing_guide.md` を参照。
+コードの中身（全ファイル・全関数）の解説は `docs/code_reference.md`、テストの考え方と
+各テストの解説は `docs/testing_guide.md` を参照。
 
 ```jsonc
 {
@@ -497,8 +497,8 @@ Board/Stateを相対化より後に集計すること。
 
 - **軸解決の正しさ** (`test_axis_resolve.py`):
   `result_tmp` の実データ（FBC.csv 80,640行 + parameterLabel/dataName/map系）を
-  本エンジンで解決した結果が、現行ロジック（`gomi/expand_FBC_measure.py`）の出力である
-  `gomi/FBC_expanded.csv` と**全行一致**することを確認。展開せず遅延joinする新方式が
+  本エンジンで解決した結果が、現行ロジック（`reference_scripts/expand_FBC_measure.py`）の出力である
+  `reference_scripts/FBC_expanded.csv` と**全行一致**することを確認。展開せず遅延joinする新方式が
   現行の展開方式と同じ結果を返すことの保証。
 - **各集計opの単体テスト** (`test_aggregate.py`): 手計算で答えの分かる小さなデータで
   filter/mean/subset/expr/グループ派生軸を検証。orderが全軸を潰し切らない場合の
@@ -545,9 +545,9 @@ Board/Stateを相対化より後に集計すること。
 「識別軸（例: Epoch）を残して潰す」形に一般化済み（`aggregate.collapse`）。
 現在は識別軸なし＝1スカラーで従来と同じ動作。
 
-## 現行スクリプトとの数値比較手順（result_tmp_mini）
+## 現行スクリプトとの数値比較手順（tests/data/result_tmp_mini）
 
-現行スクリプトの計算結果と数値一致を確認するための最小データが `result_tmp_mini/` にある
+現行スクリプトの計算結果と数値一致を確認するための最小データが `tests/data/result_tmp_mini/` にある
 （FBC.csv 1152行 + tR.csv 432行。tRはState軸の代わりに**Page軸**を持ち、`map_Page.csv` で
 L/M/U に解決される。map系ファイルは `map_{軸名}.csv` の命名規則により自動発見されるため、
 FBCに無い軸でもエンジン側の変更なしで扱える）。
@@ -557,9 +557,9 @@ FBCに無い軸でもエンジン側の変更なしで扱える）。
 ```bash
 .venv/Scripts/python -m scorelib.cli \
     --config config_mini.jsonc \
-    --data-dir result_tmp_mini \
+    --data-dir tests/data/result_tmp_mini \
     --dvtbudget-coef dvtbudget_coef.jsonc \
-    --initial-temperature result_tmp_mini/initial_temperature.csv
+    --initial-temperature tests/data/result_tmp_mini/initial_temperature.csv
 ```
 
 出力例:
@@ -579,7 +579,7 @@ dVtBudget）を定義してあり、コメント付きなので、現行スク�
 
 - **offset**: 相対値は `(分子+offset)/(分母+offset)`。現行スクリプト側も同じoffset値
   （config上の `denominator_offset`）を使っているか確認すること。
-- **温度の最近傍選択**: `result_tmp_mini/initial_temperature.csv` は 25℃ / 30.83℃ だが、
+- **温度の最近傍選択**: `tests/data/result_tmp_mini/initial_temperature.csv` は 25℃ / 30.83℃ だが、
   係数キーが -30 / 85 の場合、25℃→**-30**（|25-(-30)|=55 < |25-85|=60）、
   30.83℃→**85** に解決される。室温近辺のBoard同士でも異なる係数が選ばれるため、
   現行スクリプトの温度→係数の選択ルールが「最近傍」でない場合は数値がズレる。
@@ -589,7 +589,7 @@ dVtBudget）を定義してあり、コメント付きなので、現行スク�
 
 ## 未確定事項（実装は差し替え可能な形にしてある）
 
-`score_gui_design.md` の11節を参照。残っているのは:
+`docs/score_gui_design.md` の11節を参照。残っているのは:
 
 1. 相対値の分子/分母判定軸（Read_Override / Program_Override）のtype別デフォルト
    （担当者確認中。現状はスコアパーツ側の `split_axis` で明示指定）

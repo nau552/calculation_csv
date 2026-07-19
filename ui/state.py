@@ -1,9 +1,9 @@
-"""Pure editing-state logic for the score-design UI.
+"""スコア設計UIの編集ロジック（純関数層）。
 
-Everything here is streamlit-free and pytest-able (score_gui_ui_design.md
-section 2). The ScoreFile being edited is held as a plain dict (the shape
-of scorelib.models.ScoreFile); pydantic is used for validation only, so the
-UI shows exactly the messages the engine would produce at load time.
+ここにあるものはすべて streamlit 非依存で pytest 可能
+（docs/score_gui_ui_design.md 2節）。編集中の ScoreFile は素の dict
+（scorelib.models.ScoreFile の形）として保持し、pydantic は検証にのみ使う。
+これにより UI はエンジンが読み込み時に出すのと全く同じメッセージを表示する。
 """
 from __future__ import annotations
 
@@ -21,8 +21,8 @@ from scorelib.models import COMBINED_SEP, ScoreFile
 
 DRAFT_PATH = Path.home() / ".scorelib_draft.jsonc"
 
-# Preset used when a new part's type has a Read_Override axis
-# (score_gui_ui_design.md screen 2: relative defaults to ON).
+# 新規パーツの type に Read_Override 軸があるときのプリセット
+# （docs/score_gui_ui_design.md 画面2: 相対化はデフォルトON）
 DEFAULT_RELATIVE = {
     "split_axis": "Read_Override",
     "numerator_when": True,
@@ -31,14 +31,13 @@ DEFAULT_RELATIVE = {
     "denominator_offset": 1,
 }
 
-# InBatchEpoch is never an aggregation target (user decision, design doc
-# section 5); leaving it out of `order` makes the engine aggregate over it
-# implicitly together with the surrounding axes.
+# InBatchEpoch は集計対象にしない（ユーザ判断。設計書5節）。order に
+# 入れないことで、エンジンは周囲の軸と一緒に暗黙に集約する
 _EXCLUDED_AXES = {"InBatchEpoch"}
 _LAST_AXES = ["Board", "Chip", "Block"]
 
 
-# ---------------------------------------------------------------- score file
+# ------------------------------------------------------------ スコアファイル
 
 def empty_score_file() -> Dict[str, Any]:
     return {
@@ -51,13 +50,13 @@ def empty_score_file() -> Dict[str, Any]:
 
 
 def ensure_uids(score_file: Dict[str, Any]) -> None:
-    """Give each part a stable internal id used for widget keys (index-based
-    keys would leak state across parts after a delete). pydantic ignores the
-    extra field, so validation and export are unaffected.
+    """各パーツにウィジェットキー用の安定した内部ID（_uid）を付ける
+    （添字ベースのキーだと削除後に別パーツへ状態が漏れる）。pydantic は
+    未知フィールドを無視するので検証・エクスポートには影響しない。
 
-    Duplicate ids are regenerated: two parts sharing an id would share every
-    widget (name field, relative checkbox, ...), so editing one would silently
-    rewrite the other. Also repairs drafts saved while that bug existed."""
+    重複IDは振り直す: IDを共有した2パーツは全ウィジェット（名前欄・相対化
+    チェック等）を共有してしまい、片方の編集がもう片方を静かに書き換える。
+    そのバグがあった期間に保存された下書きも、これで開くだけで治る。"""
     seen: set = set()
     for p in score_file["score_parts"]:
         uid = p.get("_uid")
@@ -79,11 +78,11 @@ def unique_part_name(score_file: Dict[str, Any], base: str = "part") -> str:
     return f"{base}_{i}"
 
 
-# --------------------------------------------------------------- part skeleton
+# ------------------------------------------------------------------ 雛形生成
 
 def default_axis_order(catalog: Dict[str, Optional[list]], exclude: set[str] = frozenset()) -> List[str]:
-    """Skeleton axis order: Label axes -> Override axes -> other categorical
-    (State, Page, ...) -> numeric (WL, STR, ...) -> Board, Chip, Block."""
+    """雛形の軸順: Label系 → Override系 → その他カテゴリ（State, Page, ...）
+    → 数値（WL, STR, ...）→ Board, Chip, Block。"""
     skip = _EXCLUDED_AXES | set(exclude)
     axes = [a for a in catalog if a not in skip]
 
@@ -99,22 +98,22 @@ def default_axis_order(catalog: Dict[str, Optional[list]], exclude: set[str] = f
             return 2
         return 3
 
-    ordered = sorted(axes, key=lambda a: bucket(a))  # stable: keeps csv order inside buckets
+    ordered = sorted(axes, key=lambda a: bucket(a))  # 安定ソート: 同バケツ内は csv 順のまま
     return [a for a in ordered if a not in _LAST_AXES] + [a for a in _LAST_AXES if a in axes]
 
 
 def default_aggregation(axis: str, candidates: Optional[list]) -> Dict[str, Any]:
-    """Categorical/bool axes start as filter-on-first-candidate (meaningful and
-    always computable); numeric/free axes start as mean."""
+    """カテゴリ/bool軸は先頭候補の filter から始める（意味があり、かつ必ず
+    計算が通る）。数値・自由入力軸は mean から。"""
     if candidates and isinstance(candidates[0], (str, bool)):
         return {"op": "filter", "value": candidates[0]}
     return {"op": "mean"}
 
 
 def part_skeleton(name: str, type_: str, catalog: Dict[str, Optional[list]]) -> Dict[str, Any]:
-    """A new part that is computable as-is: every axis is in `order` with a
-    default op, relative is preset ON when a Read_Override axis exists
-    (its split_axis is consumed by relative, so it stays out of `order`)."""
+    """**そのまま計算が通る**新規パーツ: 全軸をデフォルトopつきで `order` に
+    並べ、Read_Override 軸があれば相対化をプリセットON（split 軸は相対化が
+    消費するので `order` には入れない）。"""
     relative = dict(DEFAULT_RELATIVE) if "Read_Override" in catalog else None
     exclude = {relative["split_axis"]} if relative else set()
     order = default_axis_order(catalog, exclude)
@@ -126,8 +125,8 @@ def part_skeleton(name: str, type_: str, catalog: Dict[str, Optional[list]]) -> 
 
 
 def custom_part_skeleton(name: str, functions: List[str]) -> Dict[str, Any]:
-    """A new type="custom" part: no pipeline fields, just the function to
-    call (first available one) and an empty params dict."""
+    """type="custom" の新規パーツ: パイプライン系フィールドは持たず、
+    呼ぶ関数（先頭の候補）と空の params だけ。"""
     return {
         "name": name,
         "type": "custom",
@@ -137,9 +136,9 @@ def custom_part_skeleton(name: str, functions: List[str]) -> Dict[str, Any]:
 
 
 def switch_part_type(part: Dict[str, Any], new_type: str) -> Optional[str]:
-    """Adjust a part's fields for its new type; returns a user notice or
-    None. custom parts must not carry pipeline fields (and vice versa) —
-    the engine rejects the mix, so the UI strips it at the switch."""
+    """type 変更に合わせてフィールドを整える。ユーザ向けの通知文字列
+    （不要なら None）を返す。custom とパイプライン系フィールドの混在は
+    エンジンが拒否するので、切替時点で UI 側が外す。"""
     part["type"] = new_type
     if new_type == "custom":
         dropped = [part.pop(k, None) for k in ("relative", "order", "aggregations")]
@@ -169,10 +168,9 @@ def _remove_axis_from_order(part: Dict[str, Any], axis: Optional[str]) -> None:
 
 
 def _restore_axis_to_order(part: Dict[str, Any], axis: Optional[str], catalog: Dict[str, Optional[list]]) -> bool:
-    """Put an axis back into `order` (with a default op) unless it is already
-    covered. Needed when relative is turned off: the engine silently
-    aggregates over axes missing from `order`, which would mix numerator and
-    denominator rows."""
+    """軸を（デフォルトopつきで）`order` に戻す。既にカバーされていれば
+    何もしない。相対化OFF時に必要: エンジンは `order` に無い軸を黙って
+    集約するため、放置すると分子と分母の行が混ざってしまう。"""
     if not axis or axis not in catalog or axis in _axes_in_order(part):
         return False
     part["order"].append(axis)
@@ -190,10 +188,9 @@ def enable_relative(part: Dict[str, Any], catalog: Dict[str, Optional[list]]) ->
 
 
 def disable_relative(part: Dict[str, Any], catalog: Dict[str, Optional[list]]) -> Optional[str]:
-    """Turn relative off; returns the split axis if it was restored into
-    `order` (so the UI can tell the user). An explicitly placed __relative__
-    step is removed too — without a relative config it would be a validation
-    error."""
+    """相対化をOFFにする。split 軸を `order` に復帰させた場合はその軸名を
+    返す（UIがユーザに知らせるため）。明示配置された __relative__ ステップも
+    除去する — 相対化設定なしで残ると検証エラーになるため。"""
     rel = part.pop("relative", None)
     if not rel:
         return None
@@ -205,9 +202,8 @@ def disable_relative(part: Dict[str, Any], catalog: Dict[str, Optional[list]]) -
 
 
 def drop_stale_virtual_steps(part: Dict[str, Any]) -> Optional[str]:
-    """After a type change away from dVtBudget, an explicitly placed
-    __dvtbudget__ step would be a validation error; remove it. Returns the
-    removed step name (for a UI notice) or None."""
+    """type を dVtBudget から他へ変えた後、明示配置の __dvtbudget__ が残ると
+    検証エラーになるので除去する。除去したステップ名（UI通知用）か None を返す。"""
     if part.get("type") != "dVtBudget" and "__dvtbudget__" in part.get("order", []):
         part["order"].remove("__dvtbudget__")
         part["aggregations"].pop("__dvtbudget__", None)
@@ -216,6 +212,7 @@ def drop_stale_virtual_steps(part: Dict[str, Any]) -> Optional[str]:
 
 
 def change_split_axis(part: Dict[str, Any], new_axis: str, catalog: Dict[str, Optional[list]]) -> None:
+    """split 軸の変更: 旧軸を `order` へ戻し、新軸を `order` から外す。"""
     rel = part.get("relative")
     if rel is None or rel.get("split_axis") == new_axis:
         return
@@ -228,8 +225,8 @@ def change_split_axis(part: Dict[str, Any], new_axis: str, catalog: Dict[str, Op
 def duplicate_part(score_file: Dict[str, Any], index: int) -> int:
     src = score_file["score_parts"][index]
     copy = json.loads(json.dumps(src))
-    # the copy must get its own widget-key id: sharing one would make both
-    # parts share every widget's remembered state
+    # コピーには必ず新しいウィジェットキー用IDを割り当てる: 共有すると
+    # 2パーツが全ウィジェットの記憶状態を共有してしまう
     copy.pop("_uid", None)
     copy["name"] = unique_part_name(score_file, base=src.get("name", "part"))
     score_file["score_parts"].append(copy)
@@ -237,7 +234,7 @@ def duplicate_part(score_file: Dict[str, Any], index: int) -> int:
 
 
 def move_entry(lst: list, index: int, delta: int) -> int:
-    """Swap lst[index] with its neighbour; returns the new index."""
+    """lst[index] を隣と入れ替える。新しい添字を返す（端では何もしない）。"""
     j = index + delta
     if 0 <= j < len(lst):
         lst[index], lst[j] = lst[j], lst[index]
@@ -245,13 +242,12 @@ def move_entry(lst: list, index: int, delta: int) -> int:
     return index
 
 
-# ---------------------------------------------------------------- group defs
+# ------------------------------------------------------------- グループ定義
 
 def import_config_group_defs(score_file: Dict[str, Any], wlgroup: Optional[Dict[str, Any]]) -> bool:
-    """Bring the config jsonc's WLgroup in as an editable definition. The
-    score file is self-contained (its groupDefs are what the engine uses);
-    the config's WLgroup is only the initial template. Returns True when the
-    definition was added."""
+    """設定jsoncの WLgroup を編集可能な定義として取り込む。score file は
+    自己完結（エンジンが使うのは score file 側の groupDefs）で、config の
+    WLgroup はあくまで初期テンプレート。追加したら True を返す。"""
     defs = score_file.setdefault("groupDefs", {})
     if not wlgroup or "WLgroup" in defs:
         return False
@@ -260,12 +256,12 @@ def import_config_group_defs(score_file: Dict[str, Any], wlgroup: Optional[Dict[
 
 
 def _part_axis_names(part: Dict[str, Any]) -> set:
-    """Every axis-like name a part mentions (order entries incl. combined
-    components, relative split axis, denominator pre-aggregation axes).
+    """パーツが言及する軸的な名前すべて（order エントリ=複合軸の構成軸込み、
+    相対化の split 軸、分母事前集計の軸）。
 
-    scorelib/cli.py:_named_axes is the pydantic-model counterpart used at
-    compute time; this one tolerates half-edited dicts — intentionally
-    parallel, do not try to merge them."""
+    scorelib/cli.py の _named_axes は計算時に使う pydantic モデル版の対。
+    こちらは編集途中の不完全な dict に耐える — 意図的な並行実装であり、
+    統合を試みないこと。"""
     axes = set(_axes_in_order(part))
     rel = part.get("relative") or {}
     if rel.get("split_axis"):
@@ -303,19 +299,17 @@ def delete_group_def(score_file: Dict[str, Any], name: str) -> None:
     score_file.get("groupDefs", {}).pop(name, None)
 
 
-# ------------------------------------------------------------- selection sets
+# --------------------------------------------------------------- 選択セット
 
 def _part_specs(part: Dict[str, Any]) -> List[Any]:
-    """Every aggregation spec a part carries, incl. the denominator
-    pre-aggregation steps (used for ref scanning)."""
+    """パーツが持つ全集計spec（分母事前集計のステップ込み。ref の走査用）。"""
     specs = list(part.get("aggregations", {}).values())
     specs += (part.get("relative") or {}).get("denominator_pre_aggregation", [])
     return specs
 
 
 def referencing_parts(score_file: Dict[str, Any], set_name: str) -> List[str]:
-    """Names of parts whose aggregations (incl. denominator_pre_aggregation)
-    reference the given selection set."""
+    """指定の選択セットを（分母事前集計も含めて）参照しているパーツ名の一覧。"""
     return [
         part.get("name", "?")
         for part in score_file["score_parts"]
@@ -331,8 +325,8 @@ def delete_selection_set(score_file: Dict[str, Any], name: str) -> None:
 
 
 def save_set_as(score_file: Dict[str, Any], src_name: str, new_name: str) -> None:
-    """別名で保存: copy a set under a new name; existing refs keep pointing
-    at the original."""
+    """別名で保存: セットを新しい名前でコピーする。既存の ref は元の名前を
+    指したまま変わらない。"""
     if not new_name:
         raise ValueError("新しいセット名を入力してください")
     if new_name in score_file["selectionSets"]:
@@ -340,12 +334,13 @@ def save_set_as(score_file: Dict[str, Any], src_name: str, new_name: str) -> Non
     score_file["selectionSets"][new_name] = json.loads(json.dumps(score_file["selectionSets"][src_name]))
 
 
-# ------------------------------------------------------------------ validation
+# ---------------------------------------------------------------------- 検証
 
 def _format_pydantic_error(err: ValidationError, data: Optional[Dict[str, Any]] = None) -> List[str]:
-    """Readable messages. With the raw `data`, a location like
-    'score_parts.12.aggregations.WL' becomes パーツ '<name>' の aggregations.WL
-    (an index tells the user nothing about which part is broken)."""
+    """読めるエラーメッセージに整形する。元データ `data` があれば、
+    'score_parts.12.aggregations.WL' のような位置表記を
+    「パーツ '<名前>' の aggregations.WL」に変換する（添字ではどのパーツが
+    壊れているのかユーザに伝わらない）。"""
     msgs = []
     for e in err.errors():
         loc = [x for x in e["loc"] if x != "__root__"]
@@ -371,9 +366,9 @@ def _format_pydantic_error(err: ValidationError, data: Optional[Dict[str, Any]] 
 
 
 def validate_score_file(data: Dict[str, Any]) -> List[str]:
-    """All problems the engine would report at load time, as readable strings
-    (empty list = OK). Includes expression parse/reference checks and
-    duplicate part names, which pydantic alone does not cover."""
+    """エンジンが読み込み時に報告する問題すべてを、読める文字列のリストで
+    返す（空リスト = OK）。pydantic だけでは見ない expression の
+    パース/参照チェックとパーツ名の重複も含む。"""
     try:
         sf = ScoreFile.model_validate(data)
     except ValidationError as err:
@@ -398,6 +393,7 @@ def validate_score_file(data: Dict[str, Any]) -> List[str]:
 
 
 def _expression_problems(expression: str, names: List[str]) -> List[str]:
+    """全パーツ値を 1.0 のダミーにして式を評価してみる（構文と参照の検査）。"""
     try:
         evaluate_expression(expression, {n: 1.0 for n in names})
     except Exception as err:
@@ -406,7 +402,7 @@ def _expression_problems(expression: str, names: List[str]) -> List[str]:
 
 
 def validate_part(part: Dict[str, Any], selection_sets: Optional[Dict[str, list]] = None) -> List[str]:
-    """Validation for a single part while it is being edited."""
+    """編集中のパーツ1つぶんの検証。"""
     single = {
         "score_parts": [part],
         "expression": "",
@@ -416,14 +412,14 @@ def validate_part(part: Dict[str, Any], selection_sets: Optional[Dict[str, list]
     return validate_score_file(single)
 
 
-# --------------------------------------------------------------------- context
+# -------------------------------------------------- コンテキスト（画面1）
 
 def _resolve_optional_file(explicit: Optional[str], discover, label: str):
-    """An optional companion file: an explicitly given path wins (and must
-    exist); otherwise fall back to discovery inside the data directory.
-    `discover` returns a candidate LIST — more than one match is an error
-    (silently taking the alphabetically first would design against the
-    wrong file). Returns (path or None, '指定' | '自動検出' | None)."""
+    """任意の同梱ファイルの解決: 明示指定が最優先（存在必須）、無ければ
+    データディレクトリ内の自動検出にフォールバック。`discover` は候補の
+    **リスト**を返し、2件以上はエラー（アルファベット順の先頭を黙って
+    採用すると、意図と違うファイルで設計してしまう）。
+    (パス or None, '指定' | '自動検出' | None) を返す。"""
     if explicit and str(explicit).strip():
         p = Path(str(explicit).strip()).resolve()
         if not p.is_file():
@@ -445,14 +441,14 @@ def build_context(
     geninfo_path: Optional[str] = None,
     custom_path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Everything screen 1 derives from the measurement-output directory
-    (a past run of the same experiment family -- design doc section 5.1).
+    """画面1が測定結果ディレクトリ（同系統の過去実験の出力 — 設計書 5.1節）
+    から導出するもの一式。
 
-    result_tmp normally holds measurement outputs only, so the optimization
-    config jsonc and the dVtBudget coefficient jsonc are given as separate
-    (optional) paths; in-directory discovery is kept as a convenience for
-    when they do happen to be there."""
+    result_tmp には通常測定結果しか入らないため、optimization設定jsonc と
+    dVtBudget係数jsonc 等は別の（任意の）パスとして受け取る。たまたま
+    ディレクトリ内に置いてある場合のための自動検出も残してある。"""
     if not str(data_dir).strip():
+        # Path("") はカレントディレクトリ扱いになり、起動場所を誤って走査してしまう
         raise ValueError("測定結果ディレクトリのパスを入力してください")
     d = Path(str(data_dir).strip()).resolve()
     if not d.is_dir():
@@ -502,6 +498,7 @@ def build_context(
         try:
             run_config = io_jsonc.load_run_config(config_file)
         except ValidationError as err:
+            # パーツ名つきの読めるメッセージにするため、生の dict を読み直して整形する
             try:
                 raw = jsonc.loads(Path(config_file).read_text(encoding="utf-8"))
             except Exception:
@@ -532,9 +529,9 @@ def build_context(
         ctx["geninfo_path"] = str(geninfo_file)
         ctx["geninfo_source"] = geninfo_source
 
-    # custom_parts.py: SVN-versioned user functions (scorelib/custom.py).
-    # Loading = importing = executing its top-level code; acceptable because
-    # the file comes from the reviewed repository, not from arbitrary users.
+    # custom_parts.py: SVN 管理された自作関数（scorelib/custom.py）。
+    # 読み込み = import = トップレベルコードの実行になるが、レビュー済み
+    # リポジトリ由来のファイルが前提（任意ユーザの入力ではない）ので許容
     custom_file, custom_source = _resolve_optional_file(
         custom_path,
         lambda: [p for p in [d / scorelib_custom.DEFAULT_FILENAME] if p.is_file()],
@@ -549,17 +546,17 @@ def build_context(
         ctx["custom_path"] = str(custom_file)
         ctx["custom_source"] = custom_source
         ctx["custom_functions"] = functions
-        # after `catalogs`: the custom pseudo-type has no axis catalog
+        # `catalogs` を作った後に足す: custom 擬似typeには軸カタログが無い
         ctx["part_types"] = ctx["part_types"] + ["custom"]
     return ctx
 
 
 def extract_bundle_zip(data: bytes) -> str:
-    """Extract an uploaded 一式zip (result_tmp files + config jsonc + coef
-    jsonc + generation info json + custom_parts.py) into a temp directory and
-    return the directory to hand to build_context — every companion file is
-    then picked up by the normal in-directory auto-detection. Descends into a
-    single top-level folder (zips made from a folder usually have one)."""
+    """アップロードされた一式zip（result_tmp のファイル群 + 設定jsonc +
+    係数jsonc + 世代情報json + custom_parts.py）を一時ディレクトリへ展開し、
+    そのディレクトリを返す（後段は locate_bundle_inputs / build_context）。
+    フォルダごと圧縮された zip によくある「トップに1フォルダ」の場合は
+    その中へ降りる。"""
     import io
     import tempfile
     import zipfile
@@ -569,7 +566,7 @@ def extract_bundle_zip(data: bytes) -> str:
         for m in z.infolist():
             parts = Path(m.filename).parts
             if not parts or m.filename.startswith(("/", "\\")) or ".." in parts:
-                continue  # zip-slip guard
+                continue  # zip-slip（絶対パス・.. による展開先脱出）対策
             z.extract(m, target)
     entries = list(target.iterdir())
     if len(entries) == 1 and entries[0].is_dir():
@@ -587,15 +584,14 @@ def _walk_dirs(root: Path, max_depth: int = 4) -> List[Path]:
 
 
 def locate_bundle_inputs(extracted_dir: str) -> Dict[str, Optional[str]]:
-    """Locate the measurement directory and companion files anywhere inside
-    an extracted 一式zip (depth-limited walk), using the same CONTENT-based
-    identification as the in-directory auto-detection: measurement dir = a
-    directory where types are detectable (parameterLabel_*/dataName_*/
-    Measure-column csvs), config = jsonc with an optimization{} block,
-    coef = jsonc validating as the 3-level {a, b} table, generation info =
-    {Generation}.json (Generation read from the config), custom =
-    custom_parts.py. Ambiguity (two candidates for one role) is an error —
-    silently picking one would design against the wrong file."""
+    """展開済み一式zipの中から測定ディレクトリと同梱ファイルを探す（深さ制限
+    つきのツリー探索）。判別はディレクトリ内自動検出と同じ**中身ベース**:
+    測定ディレクトリ = type が検出できるディレクトリ（parameterLabel_*/
+    dataName_*/Measure列つきcsv）、設定 = optimization{} ブロックを持つ jsonc、
+    係数 = 3段 {a, b} 表として検証が通る jsonc、世代情報 = {Generation}.json
+    （Generation は設定から読む）、custom = custom_parts.py。
+    同じ役割の候補が2つ以上あったらエラー — 黙って1つ選ぶと意図と違う
+    ファイルで設計してしまう。"""
     root = Path(extracted_dir)
     dirs = _walk_dirs(root)
 
@@ -647,8 +643,8 @@ def locate_bundle_inputs(extracted_dir: str) -> Dict[str, Optional[str]]:
 
 
 def axis_counts(geninfo: Optional[Dict[str, Any]]) -> Dict[str, int]:
-    """Axis -> number of values, from the per-generation chip info json
-    (B9LS.json shape). Only the axes the file describes."""
+    """世代情報json（B9LS.json の形）から 軸 → 本数 の対応を取り出す。
+    ファイルに記述のある軸だけ。"""
     counts: Dict[str, int] = {}
     if isinstance(geninfo, dict):
         if isinstance(geninfo.get("numWLs"), int):
@@ -659,7 +655,7 @@ def axis_counts(geninfo: Optional[Dict[str, Any]]) -> Dict[str, int]:
 
 
 def _format_value_runs(values: List[int]) -> str:
-    """[0,1,2,5] -> '0–2, 5' (compact display for uncovered-value lists)."""
+    """[0,1,2,5] → '0–2, 5'（未カバー値一覧の圧縮表示）。"""
     runs: List[str] = []
     start = prev = values[0]
     for v in values[1:] + [None]:  # type: ignore[list-item]
@@ -673,11 +669,10 @@ def _format_value_runs(values: List[int]) -> str:
 
 
 def group_def_warnings(score_file: Dict[str, Any], geninfo: Optional[Dict[str, Any]]) -> List[str]:
-    """Mismatches between group definitions and the generation's axis counts
-    (numWLs / numStrings). Warnings, not errors: the score still computes,
-    but a range disagreeing with the chip's WL/STR count is almost always a
-    config mistake (joint WLs are NOT normally excluded from groups, per
-    担当者確認)."""
+    """グループ定義と世代の軸本数（numWLs / numStrings）の不整合を列挙する。
+    エラーではなく警告: 計算自体は通るが、チップの WL/STR 本数と食い違う
+    範囲はほぼ確実に設定ミス（joint WL をグループから除外する運用は基本
+    無い、と担当者確認済みなので全値をチェックする）。"""
     counts = axis_counts(geninfo)
     warnings: List[str] = []
     for name, gd in (score_file.get("groupDefs") or {}).items():
@@ -707,17 +702,19 @@ def group_def_warnings(score_file: Dict[str, Any], geninfo: Optional[Dict[str, A
     return warnings
 
 
+# -------------------------------------------------------------- 表示ラベル
+# 純関数にしてある理由: D&D コンポーネントの描画内容は AppTest から観測でき
+# ないため、マーカー等のロジックはここで単体テストできる形に切り出しておく
+
 def part_list_labels(
     score_file: Dict[str, Any],
     selected_uid: Optional[str],
     invalid_uids: set,
     rows: Optional[List[Dict[str, str]]] = None,
 ) -> List[str]:
-    """Labels for the always-draggable parts list: ⠿ drag handle, ⚠ on parts
-    failing validation, ← 編集中 on the selected part. Pure on purpose: the
-    D&D component's rendering is invisible to AppTest, so the marker logic
-    must be verifiable here. `rows` (part_summary_rows output) can be passed
-    in when the caller already computed it."""
+    """常時ドラッグ可能なパーツ一覧のラベル: ⠿ ドラッグハンドル、検証NGの
+    パーツに ⚠、選択中のパーツに ← 編集中。`rows`（part_summary_rows の
+    出力）は呼び出し元が計算済みなら渡せる。"""
     rows = rows if rows is not None else part_summary_rows(score_file)
     labels = []
     for i, (row, p) in enumerate(zip(rows, score_file["score_parts"])):
@@ -731,11 +728,11 @@ def part_list_labels(
 
 
 def part_select_labels(score_file: Dict[str, Any], invalid_uids: set) -> Dict[str, str]:
-    """uid -> display label for the part-selection pulldown. Numbered so the
-    labels stay unique even when two parts (temporarily) share a name:
-    Streamlit's selectbox frontend matches items by their displayed label,
-    and duplicate labels make clicks resolve to the wrong part or not
-    register at all. The numbering also matches the ⠿ list."""
+    """パーツ選択プルダウンの uid → 表示ラベル。番号付きにして、2パーツが
+    （一時的にでも）同名になってもラベルが一意になるようにする: Streamlit の
+    selectbox フロントエンドは表示ラベルで項目を照合するため、重複ラベルが
+    あるとクリックが別パーツに解決されたり無反応になったりする。番号は
+    ⠿ 一覧とも揃う。"""
     return {
         p.get("_uid"): (
             f"{i + 1}. "
@@ -747,6 +744,7 @@ def part_select_labels(score_file: Dict[str, Any], invalid_uids: set) -> Dict[st
 
 
 def part_summary_rows(score_file: Dict[str, Any]) -> List[Dict[str, str]]:
+    """一覧表の行（名前 / type / 相対化 / 軸。custom パーツは関数名を表示）。"""
     rows = []
     for p in score_file["score_parts"]:
         if p.get("type") == "custom":
@@ -771,7 +769,7 @@ def part_summary_rows(score_file: Dict[str, Any]) -> List[Dict[str, str]]:
     return rows
 
 
-# ----------------------------------------------------------------- draft/export
+# ---------------------------------------------- 下書き・エクスポート・計算
 
 def score_file_to_jsonc(score_file: Dict[str, Any]) -> str:
     cleaned = ScoreFile.model_validate(score_file).model_dump(exclude_none=True)
@@ -783,19 +781,17 @@ def save_draft(
     context_inputs: Optional[Dict[str, Optional[str]]] = None,
     path: Optional[Path] = None,
 ) -> None:
-    """The draft carries the screen-1 inputs (data_dir / config_path /
-    coef_path) alongside the score file, so restoring a draft can also
-    restore the loaded-data context instead of sending the user back to
-    screen 1."""
-    path = path or DRAFT_PATH  # resolved at call time so tests can repoint DRAFT_PATH
+    """下書きには score file と一緒に画面1の入力（data_dir / config_path /
+    coef_path / ...）も保存する。復元時にデータ読み込みまで再現でき、
+    ユーザを画面1からやり直させずに済む。"""
+    path = path or DRAFT_PATH  # テストが DRAFT_PATH を差し替えられるよう呼び出し時に解決
     payload = {"score_file": score_file, "context_inputs": context_inputs or {}}
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def load_draft(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
-    """Returns {"score_file": ..., "context_inputs": {...}} or None.
-    Drafts from before context_inputs existed (a bare ScoreFile dict) are
-    still accepted."""
+    """{"score_file": ..., "context_inputs": {...}} か None を返す。
+    context_inputs 導入前の旧形式（素の ScoreFile dict）も受け付ける。"""
     path = path or DRAFT_PATH
     if not path.exists():
         return None
@@ -807,19 +803,19 @@ def load_draft(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
         return None
     if isinstance(data.get("score_file"), dict) and "score_parts" in data["score_file"]:
         return {"score_file": data["score_file"], "context_inputs": data.get("context_inputs") or {}}
-    if "score_parts" in data:  # legacy format
+    if "score_parts" in data:  # 旧形式
         return {"score_file": data, "context_inputs": {}}
     return None
 
 
 def _part_refs(part: Dict[str, Any]) -> List[str]:
-    """Selection-set names a part references (for export bundling)."""
+    """パーツが参照している選択セット名（エクスポート同梱用）。"""
     return sorted({s["ref"] for s in _part_specs(part) if isinstance(s, dict) and s.get("ref")})
 
 
 def export_part(score_file: Dict[str, Any], index: int) -> str:
-    """A single part as a self-contained score.jsonc (referenced selection
-    sets and group definitions bundled) so it can be re-imported elsewhere."""
+    """パーツ1つを自己完結の score.jsonc としてエクスポートする（参照する
+    選択セットとグループ定義を同梱）。別の場所で再インポートできる。"""
     part = score_file["score_parts"][index]
     refs = _part_refs(part)
     missing = [r for r in refs if r not in score_file["selectionSets"]]
@@ -845,10 +841,9 @@ def run_test_compute(
     coef_path: Optional[str] = None,
     custom_path: Optional[str] = None,
 ) -> Dict[str, float]:
-    """Screen 5: run the engine on real data. The coefficient file is taken
-    from `coef_path` when given (it normally lives outside result_tmp);
-    initial_temperature.csv is a measurement output, so it is always read
-    from the data directory."""
+    """画面5: 実データでエンジンを走らせる。係数ファイルは指定があれば
+    `coef_path` から（通常 result_tmp の外にある）。initial_temperature.csv
+    は測定出力なので常にデータディレクトリから読む。"""
     from scorelib.cli import compute_score_file
     from scorelib.dvtbudget import load_board_temperatures
     from scorelib.models import RunConfig
@@ -864,9 +859,9 @@ def run_test_compute(
             "optimization": {
                 "score_parts": dump["score_parts"],
                 "expression": sf.expression,
-                "constraintThreshold": {},  # thresholds do not change part values
+                "constraintThreshold": {},  # 閾値はパーツの値に影響しない
                 "selectionSets": sf.selectionSets,
-                # the score file's own definitions win over the config WLgroup
+                # score file 側の定義が config の WLgroup より優先される
                 "WLgroup": wlgroup or {},
                 "groupDefs": dump.get("groupDefs", {}),
             },
@@ -882,8 +877,8 @@ def run_test_compute(
 
 
 def import_score_file(text: str) -> Dict[str, Any]:
-    """Parse an exported score.jsonc (ScoreFile shape) or a full run config
-    (Generation + optimization{...}) into the editable dict."""
+    """エクスポートされた score.jsonc（ScoreFile 形）またはフル run config
+    （Generation + optimization{...}）を編集用 dict にパースする。"""
     data = jsonc.loads(text)
     if not isinstance(data, dict):
         raise ValueError("jsoncのトップレベルがオブジェクトではありません")

@@ -40,7 +40,7 @@ def test_simple_op_with_value_list_restricts_before_reducing():
 
 
 def test_legacy_spellings_normalized():
-    # values is accepted as an alias for value; *_subset ops map to plain ops
+    # values は value の別名として受理。*_subset op は通常opへ自動変換
     spec = AggregationSpec.model_validate({"op": "mean_subset", "values": [0, 1]})
     assert spec.op == "mean"
     assert spec.value == [0, 1]
@@ -62,8 +62,8 @@ def test_filter_accepts_single_element_list():
 
 
 def test_group_reduce_removed_with_guidance():
-    """The op was replaced by derived group axes (groupDefs + the name in
-    `order`); old configs must fail with a pointer to the new spelling."""
+    """group_reduce op は派生グループ軸（groupDefs + order に定義名）へ
+    置き換えられた。旧 config は新しい書き方への案内つきで失敗すること。"""
     with pytest.raises(Exception, match="removed.*groupDefs"):
         AggregationSpec.model_validate(
             {"op": "group_reduce", "group_def": "g", "inner_op": "min", "outer_op": "max"}
@@ -71,8 +71,8 @@ def test_group_reduce_removed_with_guidance():
 
 
 def test_derived_group_axis_aggregates_like_a_real_axis():
-    """A pre-built group column (as _with_group_columns creates at load time)
-    can be reduced at any position: WL min first, group max later."""
+    """（_with_group_columns が読み込み時に作るのと同様の）作成済みグループ列は
+    任意の位置で潰せる: 先に WL、後からグループ間 max。"""
     lf = pl.LazyFrame({"WL": [0, 1, 2, 3], "value": [10.0, 5.0, 8.0, 20.0]})
     lf = lf.with_columns(group_column_expr("WL", {"g1": (0, 1), "g2": (2, 3)}).alias("g")).drop("WL")
     aggregations = {"g": AggregationSpec(op="max")}

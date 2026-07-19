@@ -1,10 +1,8 @@
-"""Sequential per-axis aggregation.
+"""軸ごとの逐次集計。
 
-Given a LazyFrame with a value column and one or more axis columns, apply
-the aggregation instructions for each axis, in `order`, until every axis is
-collapsed and a single scalar remains for the value column.
-
-See score_gui_design.md section 4.2 for the op catalogue.
+値列と軸列を持つ LazyFrame に対し、`order` の順に各軸の集計指示を適用して
+軸を1つずつ潰していき、最終的に値列が1スカラーになるまで畳む。
+op の一覧は docs/score_gui_design.md 4.2節。
 """
 from __future__ import annotations
 
@@ -20,9 +18,9 @@ TRANSFORM_OPS = {"add"}
 
 
 def group_column_expr(axis: str, ranges: Mapping[str, Tuple[int, int]]) -> pl.Expr:
-    """Label expression for a derived group axis (models.GroupDef): rows get
-    the name of the range containing their source-axis value. Used at
-    data-load time; afterwards the group column aggregates like a real axis."""
+    """グループ派生軸（models.GroupDef）のラベル式: 各行の元軸の値が入る範囲の
+    グループ名を割り当てる。データ読み込み直後に使われ、以降グループ列は
+    普通の軸として集計される。"""
     expr = pl.lit(None, dtype=pl.Utf8)
     for name, (lo, hi) in ranges.items():
         expr = pl.when((pl.col(axis) >= lo) & (pl.col(axis) <= hi)).then(pl.lit(name)).otherwise(expr)
@@ -37,9 +35,8 @@ def _reduce(lf: pl.LazyFrame, value_col: str, group_keys: Sequence[str], op: str
 
 
 def apply_transform(lf: pl.LazyFrame, value_col: str, spec: AggregationSpec) -> pl.LazyFrame:
-    """Apply a row-wise transform to the value column. Unlike apply_axis_op
-    this collapses no axis; it is used by virtual "__xxx__" steps in `order`
-    (e.g. an explicit offset-addition step placed before relative-ization).
+    """値列への行単位変換。apply_axis_op と違って軸は潰さない。order 内の
+    仮想ステップ "__xxx__"（例: 相対化の前にオフセットを足す __offset__）が使う。
     """
     if spec.op == "add":
         if spec.value is None:
@@ -55,19 +52,19 @@ def apply_axis_op(
     spec: AggregationSpec,
     group_keys: Sequence[str],
 ) -> pl.LazyFrame:
-    """Apply a single axis's aggregation instruction, collapsing `axis` away
-    (the resulting frame no longer has an `axis` column, only `group_keys` +
-    `value_col`).
+    """1つの軸を1つの集計指示で潰す（結果の frame から `axis` 列は消え、
+    `group_keys` + 値列だけが残る）。
     """
     if spec.op == "filter":
         return lf.filter(pl.col(axis) == spec.value).drop(axis)
 
     if spec.op in _SIMPLE_OPS:
-        # optional `value` list restricts the reduction to those selections
+        # `value` リストを付けると、その選択集合に限定してから集計する
         target = lf.filter(pl.col(axis).is_in(spec.value)) if spec.value is not None else lf
         return _reduce(target, value_col, group_keys, spec.op)
 
     if spec.op == "diff":
+        # 2つの選択の差で潰す: value(a) - value(b)。自分自身との結合で対にする
         a_val, b_val = spec.value
         a = lf.filter(pl.col(axis) == a_val).drop(axis)
         b = lf.filter(pl.col(axis) == b_val).drop(axis).rename({value_col: "__b__"})
@@ -80,6 +77,7 @@ def apply_axis_op(
             raise ValueError(f"expr op for axis '{axis}' requires 'expr'")
 
         def _eval(vals: list, axis_vals: list) -> float:
+            # 式の中では values（この軸の全値のリスト）と by[軸の値] が使える
             by: dict = {}
             for k, v in zip(axis_vals, vals):
                 if k in by:
@@ -110,10 +108,12 @@ def apply_aggregations(
     order: Sequence[str],
     aggregations: Dict[str, AggregationSpec],
 ) -> pl.LazyFrame:
-    """Apply the aggregation instructions for each axis in `order`, collapsing
-    those axes away one by one. Does not require the result to be a scalar --
-    callers that process a partial order (e.g. axes before/after the
-    `__relative__` step) use this directly.
+    """order の各軸の集計指示を順に適用して軸を1つずつ潰す。ここでは結果が
+    スカラーであることは要求しない（`__relative__` ステップの前後など、
+    order の一部分だけを処理する呼び出し元があるため）。
+
+    重要: グループキーは「その時点で残っている全列」。order に置いた
+    グループ派生列などが自然にキーとして生き残る仕組みの要。
     """
     for axis in order:
         if axis not in aggregations:
@@ -130,12 +130,11 @@ def apply_aggregations(
 def collapse(
     lf: pl.LazyFrame, value_col: str, identity_axes: Sequence[str] = ()
 ) -> pl.DataFrame:
-    """Verify the pipeline collapsed everything except `identity_axes` and
-    return the result as a DataFrame (one row per identity-axis combination).
+    """`identity_axes` 以外がすべて潰れていることを検証して DataFrame を返す
+    （identity 軸の組み合わせごとに1行）。
 
-    identity_axes is empty today (single-epoch operation -> one scalar); it
-    exists so batch processing over historical epochs can later keep an Epoch
-    column through the whole pipeline and get one row per epoch.
+    identity_axes は現状常に空（単一epoch運用 → 1スカラー）。将来、過去epoch
+    一括処理で Epoch 列をパイプライン全体に通す場合に使うための引数。
     """
     df = lf.collect()
     expected = set(identity_axes) | {value_col}
@@ -166,8 +165,6 @@ def aggregate_score_part(
     order: Sequence[str],
     aggregations: Dict[str, AggregationSpec],
 ) -> float:
-    """Run the full per-axis aggregation pipeline for a ScorePart, returning
-    the resulting scalar value.
-    """
+    """1スコアパーツぶんの逐次集計パイプラインを最後まで実行してスカラーを返す。"""
     lf = apply_aggregations(lf, value_col, order, aggregations)
     return collapse_to_scalar(lf, value_col)

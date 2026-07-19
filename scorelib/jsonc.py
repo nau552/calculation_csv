@@ -1,8 +1,8 @@
-"""Minimal jsonc (JSON with // and /* */ comments, trailing commas) support.
+"""jsonc（`//` と `/* */` コメント・末尾カンマを許す JSON）の最小実装。
 
-No third-party dependency: the format used in this project (sample.jsonc) is
-plain JSON plus comments and occasional trailing commas, so a small hand
-rolled stripper is enough and keeps the dependency list short.
+このプロジェクトで扱う形式（sample.jsonc）は「素の JSON + コメント +
+たまに末尾カンマ」だけなので、外部ライブラリを増やさず小さな自前の
+ストリッパで済ませている。
 """
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ from typing import Any
 
 
 def strip_jsonc_comments(text: str) -> str:
+    """文字列リテラル内の `//` を壊さないよう、1文字ずつ状態を追いながら
+    コメントを除去する（正規表現一発では文字列内と区別できない）。"""
     out = []
     i = 0
     n = len(text)

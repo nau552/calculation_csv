@@ -7,15 +7,23 @@ from scorelib import io_jsonc
 from scorelib.dvtbudget import apply_dvtbudget, load_board_temperatures
 
 
-def test_load_board_temperatures(data_dir):
-    temps = load_board_temperatures(data_dir / "initial_temperature.csv")
+def _write_temps(tmp_path):
+    """実データの温度と同じ内容の initial_temperature.csv をその場で作る
+    （リポジトリに登録しない実データディレクトリへの依存を避ける）。"""
+    p = tmp_path / "initial_temperature.csv"
+    p.write_text("0,-28.236\n1,82.934\n", encoding="utf-8")
+    return p
+
+
+def test_load_board_temperatures(tmp_path):
+    temps = load_board_temperatures(_write_temps(tmp_path))
     assert temps[0] == pytest.approx(-28.236)
     assert temps[1] == pytest.approx(82.934)
 
 
-def test_apply_dvtbudget_nearest_temperature_and_formula(dvtbudget_coef_path, data_dir):
+def test_apply_dvtbudget_nearest_temperature_and_formula(dvtbudget_coef_path, tmp_path):
     coef = io_jsonc.load_dvtbudget_coef(dvtbudget_coef_path)
-    board_temps = load_board_temperatures(data_dir / "initial_temperature.csv")
+    board_temps = load_board_temperatures(_write_temps(tmp_path))
 
     lf = pl.LazyFrame(
         {

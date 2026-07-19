@@ -1,13 +1,12 @@
-"""CLI entry point: computes Score + every ScorePart's value from real epoch
-data, meant to be invoked as a subprocess from the (python3.7) optimizer's
-`get_score()` -- see score_gui_design.md sections 2 and 7.
+"""CLI エントリポイント: 実epochデータから Score + 全スコアパーツの値を計算する。
+現行最適化スクリプト（python3.7）の `get_score()` からサブプロセスとして
+起動される想定（docs/score_gui_design.md 2節・7節）。
 
     python -m scorelib.cli --config config.jsonc --data-dir <epoch_dir> \
         [--dvtbudget-coef coef.jsonc] [--initial-temperature initial_temperature.csv]
 
-Prints a single JSON object to stdout: {"Score": ..., "<part name>": ..., ...}
-(no InBatchEpoch column - see score_gui_design.md section 5/7 for the output
-contract).
+stdout に JSON オブジェクトを1つだけ出力する: {"Score": ..., "<パーツ名>": ..., ...}
+（InBatchEpoch 列は出さない — 出力契約は docs/score_gui_design.md 5節・7節）。
 """
 from __future__ import annotations
 
@@ -26,23 +25,22 @@ from .expression import evaluate_expression
 from .models import COMBINED_SEP, CUSTOM_TYPE, DvtBudgetCoefFile, GroupDef, RunConfig, ScorePart
 from .relative import apply_relative
 
-# Virtual entries usable in `order` alongside axis names (score_gui_design.md
-# section 4.1). Entries starting with "__" are pipeline steps, not axes:
-# - RELATIVE_STEP: where relative-ization happens (default: before everything)
-# - DVTBUDGET_STEP: where the dVtBudget conversion happens (default: right
-#   after relative). Board/State must still be un-aggregated at that point.
-# - any other "__xxx__" name: a row-wise transform on the value column, whose
-#   spec lives in `aggregations` under the same name (e.g.
-#   "__offset__": {"op": "add", "value": 1}).
+# order に軸名と並べて置ける仮想エントリ（docs/score_gui_design.md 4.1節）。
+# "__" 始まりのエントリは軸ではなくパイプラインステップ:
+# - RELATIVE_STEP: 相対化を実行する位置（省略時は先頭）
+# - DVTBUDGET_STEP: dVtBudget 変換を実行する位置（省略時は相対化の直後）。
+#   その時点で Board/State がまだ潰されていない必要がある
+# - それ以外の "__xxx__": 値列への行単位変換。指示は同名キーで aggregations に
+#   置く（例: "__offset__": {"op": "add", "value": 1}）
 RELATIVE_STEP = "__relative__"
 DVTBUDGET_STEP = "__dvtbudget__"
 
-# An order entry may bundle several axes into one combined axis, e.g.
-# "State&Read_Label". Its aggregation spec then takes dict selections:
+# order エントリは複数の軸を1つの複合軸に束ねられる（例: "State&Read_Label"）。
+# その集計指示は辞書選択を取る:
 #   {"op": "sum", "value": [{"State": "R2A", "Read_Label": "read_level_upper1"},
 #                           {"State": "A2R", "Read_Label": "read_level_lower1"}]}
-# The bundled axes collapse together as one axis, so filter/sum/diff/expr all
-# work on (State, Read_Label) pairs. Axis values must not contain "&".
+# 束ねた軸は1つの軸として一緒に潰れるので、filter/sum/diff/expr がすべて
+# (State, Read_Label) の組に対して働く。軸の値に "&" を含んではならない。
 
 
 def _is_virtual(step: str) -> bool:
@@ -54,13 +52,11 @@ def _step_axes(step: str) -> list[str]:
 
 
 def _named_axes(score_part: ScorePart) -> Set[str]:
-    """Every axis-like name the part itself mentions (order entries incl.
-    combined components, the relative split axis, denominator pre-aggregation
-    axes). May contain derived group-axis names.
+    """パーツ自身が言及する軸的な名前の集合（order エントリ=複合軸の構成軸
+    込み、相対化の split 軸、分母事前集計の軸）。グループ派生軸名を含みうる。
 
-    ui/state.py:_part_axis_names is the dict-shaped counterpart operating on
-    parts still being edited (possibly incomplete) — intentionally parallel,
-    do not try to merge them."""
+    ui/state.py の _part_axis_names は「編集途中の（不完全かもしれない）dict」
+    を対象にした対になる実装 — 意図的な並行であり、統合を試みないこと。"""
     axes: Set[str] = set()
     for entry in score_part.order:
         if not _is_virtual(entry):
@@ -75,7 +71,7 @@ def _named_axes(score_part: ScorePart) -> Set[str]:
 def _referenced_group_defs(
     score_part: ScorePart, group_defs: Optional[Dict[str, GroupDef]]
 ) -> Dict[str, GroupDef]:
-    """The group definitions this part actually uses as derived axes."""
+    """このパーツが派生軸として実際に使うグループ定義。"""
     if not group_defs:
         return {}
     used = {n: group_defs[n] for n in _named_axes(score_part) if n in group_defs}
@@ -90,8 +86,8 @@ def _referenced_group_defs(
 def _required_axes(
     score_part: ScorePart, group_defs: Optional[Dict[str, GroupDef]] = None
 ) -> Set[str]:
-    """Real csv/map axes to load: derived group-axis names are replaced by
-    their source axis (the group column is built from it after loading)."""
+    """csv/map から実際に読み込むべき軸: グループ派生軸名はその元軸に
+    読み替える（グループ列は読み込み後に元軸から作られる）。"""
     named = _named_axes(score_part)
     derived = _referenced_group_defs(score_part, group_defs)
     axes = {a for a in named if a not in derived} | {gd.axis for gd in derived.values()}
@@ -103,19 +99,18 @@ def _required_axes(
 def _with_group_columns(
     lf, score_part: ScorePart, group_defs: Optional[Dict[str, GroupDef]]
 ):
-    """Create the derived group columns this part references; afterwards they
-    aggregate like real axes. A source axis loaded only for the derivation is
-    dropped again: axes absent from the part's own entries are implicitly
-    mixed by design, and a leftover column would instead fail the final
-    collapse."""
+    """このパーツが参照するグループ派生列を生成する。以降は普通の軸として
+    集計される。派生のためだけに読み込んだ元軸は再び落とす: パーツ自身の
+    エントリに無い軸は暗黙集約（混ぜる）が仕様であり、列が残ると最終の
+    collapse がエラーになってしまうため。"""
     derived = _referenced_group_defs(score_part, group_defs)
     if not derived:
         return lf
     lf = lf.with_columns(
         [group_column_expr(gd.axis, gd.groups).alias(name) for name, gd in derived.items()]
     )
-    # rows outside every range would form a silent null-label group — that is
-    # almost always a stale definition, so fail with the offending values
+    # どの範囲にも入らない行は「名無し(null)グループ」として静かに混ざって
+    # しまう — ほぼ確実に定義の古さが原因なので、該当値の一覧つきで失敗させる
     for name, gd in derived.items():
         uncovered = lf.filter(pl.col(name).is_null()).select(pl.col(gd.axis).unique()).collect()
         if uncovered.height:
@@ -132,20 +127,18 @@ def _with_group_columns(
 
 
 def _combined_key(v) -> str:
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    return str(v)
+    return ("true" if v else "false") if isinstance(v, bool) else str(v)
 
 
 def _combine_selection(sel: dict, axes: list[str]) -> str:
-    """Turn one dict selection (validated by ScorePart) into the internal
-    joined key matching the fused column."""
+    """辞書選択1つ（ScorePart 検証済み）を、融合列に一致する内部の
+    連結キー文字列へ変換する。"""
     return COMBINED_SEP.join(_combined_key(sel[a]) for a in axes)
 
 
 def _effective_order(score_part: ScorePart) -> list[str]:
-    """Insert the implicit pipeline steps where the user did not place them
-    explicitly: relative first, dVtBudget conversion right after relative."""
+    """ユーザが明示配置しなかった暗黙のパイプラインステップを補完する:
+    相対化は先頭、dVtBudget 変換は相対化の直後。"""
     order = list(score_part.order)
     relative_enabled = score_part.relative is not None
 
@@ -163,24 +156,23 @@ def _effective_order(score_part: ScorePart) -> list[str]:
 
 
 def _source_type(score_part: ScorePart) -> str:
+    """実際に読む csv の type（dVtBudget パーツは FBC.csv を読む）。"""
     return "FBC" if score_part.type == "dVtBudget" else score_part.type
 
 
 class SharedComputeContext:
-    """Per-invocation caches shared across score parts. Purely an internal
-    optimization: results are identical with or without it.
+    """1回の呼び出し内でスコアパーツ間で共有するキャッシュ。純粋な内部最適化
+    であり、有無で結果は変わらない。
 
-    - resolved(): each source type's csv is scanned/joined once with the
-      union of all parts' axes; parts then project down to exactly the
-      columns they would have gotten from a standalone resolve, so pairing
-      and grouping semantics are untouched.
-    - prefix_cache: intermediates collected right after a __relative__ or
-      __dvtbudget__ step, keyed by (source type, required axes, and the full
-      signature of every step applied so far). Only parts whose settings
-      match byte-for-byte up to that point share an entry.
+    - resolved(): source type ごとに、全パーツの軸の和集合で csv を1回だけ
+      読み込み・結合する。各パーツは単独 resolve と全く同じ列に射影し直して
+      使うので、ペアリングやグループキーの意味は変わらない。
+    - prefix_cache: __relative__ / __dvtbudget__ ステップ直後の中間結果。
+      キーは（source type・必要軸・そこまでに適用した全ステップの署名）で、
+      そこまでの設定が完全一致するパーツだけがエントリを共有する。
 
-    Lifetime is one compute_score_file() call; nothing persists across
-    epochs, so there is no staleness to manage.
+    寿命は compute_score_file() 1回分。epoch をまたいで何も残らないので、
+    キャッシュの陳腐化を管理する必要はない。
     """
 
     def __init__(
@@ -193,7 +185,7 @@ class SharedComputeContext:
         self._union_axes: Dict[str, Set[str]] = {}
         for part in score_parts:
             if part.type == CUSTOM_TYPE:
-                continue  # custom parts read data themselves
+                continue  # custom パーツはデータを自分で読む
             st = _source_type(part)
             self._union_axes.setdefault(st, set()).update(_required_axes(part, group_defs))
         self._resolved: Dict[str, "object"] = {}
@@ -208,9 +200,9 @@ class SharedComputeContext:
 
 
 def _apply_axis_step(lf, value_col: str, step: str, score_part: ScorePart):
-    """Apply one non-virtual order entry: a plain axis, or a combined axis
-    ("A&B") whose component columns are fused into one temporary key column
-    so the existing per-axis ops work on value tuples."""
+    """仮想でない order エントリ1つを適用する: 単一軸ならそのまま、複合軸
+    ("A&B") なら構成列を一時的な1本のキー列に融合し、既存の軸単位opが
+    値の組に対して働くようにする。"""
     axes = _step_axes(step)
     if len(axes) == 1:
         return apply_aggregations(lf, value_col, [step], score_part.aggregations)
@@ -232,6 +224,7 @@ def _apply_axis_step(lf, value_col: str, step: str, score_part: ScorePart):
 
 
 def _step_signature(score_part: ScorePart, step: str) -> tuple:
+    """prefix_cache のキーに使う、1ステップの設定内容の署名。"""
     if step == RELATIVE_STEP:
         return ("relative", score_part.relative.model_dump_json())
     if step == DVTBUDGET_STEP:
@@ -252,6 +245,8 @@ def compute_score_part(
     selection_sets: Optional[Dict[str, list]] = None,
     custom_module=None,
 ) -> float:
+    """スコアパーツ1つの値を計算する。type="custom" は関数呼び出しへ分岐し、
+    それ以外は resolve → グループ派生列 → order の逐次適用、で1スカラーに畳む。"""
     if score_part.type == CUSTOM_TYPE:
         if custom_module is None:
             raise ValueError(
@@ -275,9 +270,9 @@ def compute_score_part(
 
     if shared_ctx is not None:
         base = shared_ctx.resolved(source_type)
-        # Project down to exactly what a standalone resolve would return:
-        # extra union columns would change relative pairing keys and
-        # aggregation group keys, so this projection is load-bearing.
+        # 単独 resolve が返すのと厳密に同じ列へ射影し直す: 和集合の余分な列が
+        # 残ると相対化のペアリングキーや集計のグループキーが変わってしまうため、
+        # この射影は結果の正しさを支えている（消してはいけない）
         cols = [source_type] + sorted(required_axes)
         lf = base.lazy().select(cols)
     else:
@@ -288,9 +283,8 @@ def compute_score_part(
     steps = _effective_order(score_part)
     sigs = [_step_signature(score_part, s) for s in steps]
 
-    # Cache points sit right after each __relative__/__dvtbudget__ step; the
-    # key covers everything that influenced the frame up to that point
-    # (including the content of any derived group axes).
+    # キャッシュ点は各 __relative__ / __dvtbudget__ ステップの直後。キーは
+    # その時点までの frame に影響した全て（グループ派生軸の中身も含む）を覆う
     cache_keys: Dict[int, tuple] = {}
     if shared_ctx is not None:
         defs_sig = tuple(
@@ -306,6 +300,7 @@ def compute_score_part(
             if s in (RELATIVE_STEP, DVTBUDGET_STEP)
         }
 
+    # いちばん後ろのキャッシュ点から再開できるところを探す
     start = 0
     for i in sorted(cache_keys, reverse=True):
         cached = shared_ctx.prefix_cache.get(cache_keys[i])
@@ -347,13 +342,14 @@ def compute_score_file(
     board_temperatures: Optional[Dict[int, float]] = None,
     custom_parts_path: Optional[str | Path] = None,
 ) -> Dict[str, float]:
+    """config の全スコアパーツを計算し、expression を評価して
+    {"Score": ..., パーツ名: ...} を返す。"""
     score_file = run_config.to_score_file()
     group_defs = run_config.group_defs()
 
-    # type="custom" parts call user functions from the SVN-versioned
-    # custom_parts.py at the repository root; the config never carries the
-    # path (a config-supplied path would mean arbitrary code execution from
-    # experiment input). `custom_parts_path` exists for tests/the design UI.
+    # type="custom" のパーツは、リポジトリ直下の SVN 管理された custom_parts.py
+    # の関数を呼ぶ。config にパスは持たせない（configから任意コードを実行
+    # できてしまうため）。`custom_parts_path` はテスト・設計UI用の上書き
     custom_module = None
     if any(p.type == CUSTOM_TYPE for p in score_file.score_parts):
         path = Path(custom_parts_path) if custom_parts_path else custom.default_custom_parts_path()
@@ -411,8 +407,8 @@ def main(argv: Optional[list[str]] = None) -> None:
         args.data_dir, run_config, dvtbudget_coef, board_temperatures,
         custom_parts_path=args.custom_parts,
     )
-    # stdout carries ONLY the result JSON (the optimizer parses it); the
-    # version marker goes to stderr for the run logs
+    # stdout には結果 JSON **だけ**を出す（最適化側がパースする）。
+    # 版数の目印は実行ログ用に stderr へ
     print(f"scorelib {__version__}", file=sys.stderr)
     print(json.dumps(result))
 

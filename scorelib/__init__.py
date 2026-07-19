@@ -1,10 +1,9 @@
-"""scorelib: score computation engine for GUI-designed optimization scores.
+"""scorelib: GUIで設計したスコア定義を計算するエンジン。
 
-__version__ is the engine's release marker: bump it when syncing scorelib/
-into the SVN scripts repository (git is the development master; SVN carries
-an engine-only snapshot for optimization runs — see score_gui_ui_design.md
-配置・起動形態). The design UI shows it in the sidebar and the CLI prints it
-to stderr, so a mismatch between the UI's bundled engine and the SVN engine
-can be spotted.
+__version__ はエンジンのリリース版数。scorelib/ を SVN のスクリプト領域へ
+同期登録するたびに上げる（開発の正は git、SVN には実行用スナップショットのみ
+置く — docs/score_gui_ui_design.md 2.1節「配置・起動形態」参照）。
+設計UIのサイドバーと CLI（stderr / --version）に表示され、UIに同梱された
+エンジンと SVN 側エンジンの版ズレに気づくための目印になる。
 """
 __version__ = "0.1.0"

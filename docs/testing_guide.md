@@ -63,7 +63,7 @@ def test_filter_then_mean():
 ## 4. このリポジトリのテスト方針（経験から得た教訓を含む）
 
 1. **正解は独立に計算する** — エンジンの検証は「エンジン自身の別経路」ではなく、
-   テスト内に素朴な eager polars で書いた**別実装**や、現行スクリプト(gomi/)の出力と照合する。
+   テスト内に素朴な eager polars で書いた**別実装**や、現行スクリプト(reference_scripts/)の出力と照合する。
    同じバグを共有しない相手と比べることに意味がある
 2. **検証ロジックはテストでも二重実装しない** — UIの検証はエンジンの pydantic を使う設計なので、
    テストも「エンジンのエラーがUIにそのまま出るか」を見る
@@ -82,9 +82,9 @@ def test_filter_then_mean():
 ### 共通準備: `tests/conftest.py`
 | fixture | 内容 |
 |---|---|
-| `data_dir_mini` | `result_tmp_mini/`（リポジトリ同梱の小さな測定データ） |
+| `data_dir_mini` | `tests/data/result_tmp_mini/`（リポジトリ同梱・git登録済みの小さな測定データ） |
 | `fixtures_dir` / `dvtbudget_coef_path` | `tests/fixtures/`（config.jsonc / dvtbudget_coef.jsonc / B9LS.json / custom_parts.py） |
-| `expanded_mini_dir` | **現行の展開スクリプト(gomi/)をそのまま実行**して FBC_expanded.csv を生成した一時コピー。エンジンの結果を「現行方式の正解」と照合するための基準データ |
+| `expanded_mini_dir` | **現行の展開スクリプト(reference_scripts/)をそのまま実行**して FBC_expanded.csv を生成した一時コピー。エンジンの結果を「現行方式の正解」と照合するための基準データ |
 
 ### エンジン単体テスト
 | ファイル | 層 | 内容 |

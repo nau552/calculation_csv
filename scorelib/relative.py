@@ -1,17 +1,14 @@
-"""Relative value (numerator/denominator) calculation.
+"""相対値（分子/分母）計算。
 
-split_axis (e.g. Read_Override or Program_Override, pending final
-confirmation - see score_gui_design.md section 11) determines which rows are
-"evaluation" (numerator) vs "reference" (denominator). The denominator can
-optionally be pre-aggregated over some axes (e.g. mean over WL, STR) before
-the ratio is taken.
+split_axis（読み込み系なら Read_Override、書き込み系なら Program_Override
+想定 — docs/score_gui_design.md 11節参照）の値で、各行を「評価側=分子」と
+「基準側=分母」に振り分ける。分母は比を取る前に一部の軸（例: WL, STR）で
+先に集計しておくこともできる（denominator_pre_aggregation）。
 
-denominator_offset is added to BOTH sides of the ratio
-((num + offset) / (den + offset)): the denominator needs it to avoid division
-by zero, and the numerator needs it because downstream transforms (dVtBudget's
-log10) break on a relative value of exactly 0, which happens routinely when
-the evaluated FBC is 0. Pending confirmation - see score_gui_design.md
-section 11.
+denominator_offset は比の**両辺**に加算する（(分子+o)/(分母+o)）。
+分母側はゼロ割防止のため、分子側は「相対値がちょうど0」だと後段の
+dVtBudget の log10 が発散するため（評価FBCが0になるのは日常的に起きる）。
+確認事項として docs/score_gui_design.md 11節に記録あり。
 """
 from __future__ import annotations
 
@@ -40,13 +37,14 @@ def apply_relative(
     join_keys = [c for c in denominator.collect_schema().names() if c != "__denom__"]
 
     if join_keys:
+        # その時点で残っている全軸の値が一致する行同士をペアにする
         out = numerator.join(denominator, on=join_keys, how="left")
     else:
-        # Denominator fully collapsed to a single scalar: broadcast it.
+        # 分母が1スカラーまで潰れている場合: 全行にブロードキャスト
         out = numerator.join(denominator, how="cross")
     if relative.mode == "diff":
-        # delta value: numerator - denominator. Offset would cancel out
-        # ((num+o)-(den+o) == num-den), so it is simply not applied.
+        # delta値: 分子 - 分母。offset は差で相殺される（(a+o)-(b+o)==a-b）
+        # ため、単に適用しない
         combined = pl.col(value_col) - pl.col("__denom__")
     else:
         offset = relative.denominator_offset

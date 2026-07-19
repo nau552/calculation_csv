@@ -1,15 +1,14 @@
-"""dVtBudget conversion.
+"""dVtBudget 変換。
 
-type == "dVtBudget" score parts read FBC.csv (see axis_resolve), are
-relative-ized (relative.py) same as any other relative FBC score part, and
-then converted row-wise here while Board/State are still present as columns:
+type == "dVtBudget" のスコアパーツは FBC.csv を読み（axis_resolve）、他の
+相対値FBCパーツと同じく相対化（relative.py）された後、Board / State が
+まだ列として残っている時点でここで行単位に変換される:
 
-    dVtBudget = -log10(relative_value) / b * 1000
+    dVtBudget = -log10(相対値) / b * 1000
 
-`b` is looked up per State from the coefficient table for the chip
-Generation (read from the run config) and the temperature nearest to the
-Board's actually-measured temperature (initial_temperature.csv), per
-score_gui_design.md section 3.5. `a` is not used.
+`b` は、チップ世代（configの Generation）の係数表から、Board の実測温度
+（initial_temperature.csv）に**最も近い温度キー**を選び、State ごとに引く
+（docs/score_gui_design.md 3.5節）。`a` は使わない。
 """
 from __future__ import annotations
 
@@ -22,6 +21,7 @@ from .models import DvtBudgetCoefFile
 
 
 def load_board_temperatures(initial_temperature_path: str | Path) -> Dict[int, float]:
+    """initial_temperature.csv（ヘッダなし: Board, 温度）→ {Board: 温度}。"""
     df = pl.read_csv(initial_temperature_path, has_header=False, new_columns=["Board", "Temperature"])
     return {int(board): float(temp) for board, temp in zip(df["Board"], df["Temperature"])}
 
@@ -48,6 +48,7 @@ def apply_dvtbudget(
     gen_coefs = coef.root[generation]
     temp_keys = list(gen_coefs.keys())
 
+    # (Board, State) → b の小さな対応表を作って結合する
     rows = []
     for board, temp in board_temperatures.items():
         nearest = _nearest_temp_key(temp_keys, temp)

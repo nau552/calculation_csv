@@ -31,8 +31,8 @@ VIRTUAL_FIXED = ("__relative__", "__dvtbudget__")
 
 
 HISTORY_LIMIT = 20
-# session_state keys that hold app data rather than widget state; everything
-# else is wiped on undo so widgets re-read their values from score_file
+# アプリデータを保持する session_state のキー。これ以外はウィジェット状態と
+# みなし、undo 時に全消しして score_file から値を読み直させる
 _RESERVED_STATE = {
     "score_file", "context", "selected_part", "draft_prompt_done",
     "history", "last_snapshot", "screen",
@@ -54,9 +54,9 @@ def _snapshot(obj) -> str:
 
 
 def _track_history() -> None:
-    """One undo entry per user action: runs at the end of each settled rerun
-    (reruns triggered mid-script skip this, so intermediate states are not
-    recorded)."""
+    """undo 履歴は「ユーザ操作1回につき1エントリ」: 落ち着いた（途中で
+    st.rerun されなかった）実行の末尾でのみ記録する。スクリプト途中で
+    rerun された実行はここに到達しないため、中間状態は積まれない。"""
     ss = st.session_state
     snap = _snapshot(ss.score_file)
     if ss.last_snapshot is None:
@@ -74,8 +74,8 @@ def _undo() -> None:
     prev = ss.history.pop()
     ss.score_file = json.loads(prev)
     ss.last_snapshot = prev
-    # widgets remember their own state, so without this the screen would
-    # keep showing the pre-undo values
+    # ウィジェットは自分の状態を記憶しているので、これをしないと画面は
+    # undo 前の値を表示し続けてしまう
     for k in list(ss.keys()):
         if k not in _RESERVED_STATE:
             del ss[k]
@@ -99,10 +99,10 @@ def _offer_draft_restore() -> None:
     if c1.button("復元する", key="restore_btn"):
         ss.score_file = draft["score_file"]
         state.ensure_uids(ss.score_file)
-        # pre-fill the screen-1 inputs too (they are not instantiated yet in
-        # this run, so writing their widget state is safe): otherwise the
-        # jsonc fields show empty and a re-click of 読み込み would silently
-        # drop the restored config/coef paths
+        # 画面1の入力欄にも書き戻す（この実行ではまだインスタンス化されて
+        # いないので、キー付き状態への書き込みは安全）。やらないと jsonc の
+        # 欄が空のまま表示され、読み込みボタンの再押下で復元した設定/係数の
+        # パス指定が静かに外れてしまう
         ss["data_dir_input"] = ci.get("data_dir") or ""
         ss["config_path_input"] = ci.get("config_path") or ""
         ss["coef_path_input"] = ci.get("coef_path") or ""
@@ -159,9 +159,9 @@ def _catalog_for_part(ctx, part) -> dict:
 
 
 def _with_group_axes(catalog: dict, sf: dict) -> dict:
-    """Editor catalog: the real axes plus the derived group axes (their value
-    candidates are the group names). Skeleton generation keeps using the raw
-    catalog, so group axes never enter a part uninvited."""
+    """エディタ用カタログ: 実在の軸 + グループ派生軸（値候補はグループ名）。
+    雛形生成は生のカタログを使い続けるので、グループ軸が勝手にパーツへ
+    入り込むことはない。"""
     merged = dict(catalog)
     for name, gd in sf.get("groupDefs", {}).items():
         merged.setdefault(name, list(gd.get("groups", {})))
@@ -189,8 +189,8 @@ def screen_data() -> None:
             try:
                 extracted = state.extract_bundle_zip(up_zip.getvalue())
                 found = state.locate_bundle_inputs(extracted)
-                # the path inputs render below this expander, so their widget
-                # state can still be written in this run
+                # パス入力欄はこの expander より下で描画されるため、
+                # この実行中でもキー付き状態への書き込みが間に合う
                 ss["data_dir_input"] = found["data_dir"]
                 ss["config_path_input"] = found.get("config_path") or ""
                 ss["coef_path_input"] = found.get("coef_path") or ""
@@ -374,18 +374,18 @@ def _add_entry_controls(part: dict, catalog: dict, uid: str) -> None:
 
 
 def _order_editor(part: dict, catalog: dict, sets: dict, uid: str) -> None:
-    """Order list: summary rows with reorder/delete, plus one always-open
-    editor for the selected entry (an expander would collapse whenever its
-    label changed, making value editing painful)."""
+    """order エディタ: 一覧（並べ替え・削除）+ 選択エントリ用の常時表示
+    エディタ1つ。expander はラベルが変わるたびに閉じてしまい値の編集が
+    苦痛になるため使わない。"""
     sel_key = f"{uid}_sel_entry"
     order = part["order"]
     if st.session_state.get(sel_key) not in order:
         st.session_state[sel_key] = order[0] if order else None
 
-    # One always-draggable list (案A): reordering needs no mode switch. The
-    # community D&D component can only render plain string lists, so entry
-    # selection lives in a selectbox and deletion in the editor below. The
-    # ⠿ glyph signals draggability; ← 編集中 ties the list to the editor.
+    # 常時ドラッグ可能なリスト1本（案A）: 並べ替えにモード切替は不要。
+    # コミュニティ製D&D部品は文字列リストしか描画できないため、エントリの
+    # 選択は selectbox、削除は下のエディタ内に分離。⠿ はドラッグ可能の
+    # 目印、← 編集中 がリストとエディタの対応を示す。
     sel = st.session_state.get(sel_key)
     labels = [
         "⠿ " + _order_entry_label(e, part) + (" ← 編集中" if e == sel else "")
@@ -464,9 +464,9 @@ def _custom_part_editor(part: dict, ctx, uid: str) -> None:
         st.error(f"関数 '{part['function']}' は読み込んだ custom_parts.py にありません")
 
     st.markdown("**params（ctx.params として関数に渡す追加パラメータ）**")
-    # row editor structure mirrors _group_defs_section's group rows; kept as
-    # two concrete loops on purpose — the column sets differ and a shared
-    # abstraction would be longer than either loop
+    # 行エディタの構造は _group_defs_section のグループ行と似ているが、
+    # あえて別々の具体的なループのままにしている — 列構成が違い、共通化の
+    # 抽象コードの方がどちらのループより長くなるため
     params = part.setdefault("params", {})
 
     def _reset_param_widgets() -> None:
@@ -511,13 +511,13 @@ def screen_parts() -> None:
     sf = ss.score_file
     state.ensure_uids(sf)
 
-    # Selection is held as a part _uid in KEYED widget state ("part_sel"), so
-    # the new selection is already known at the START of the rerun the
-    # pulldown triggers — the list above it would otherwise render one action
-    # behind. Programmatic selection (add/duplicate) goes through
-    # part_sel_pending because keyed state must not be written after the
-    # widget was instantiated in the same run. Reordering needs no handling:
-    # the uid does not change, so the selection follows automatically.
+    # パーツ選択は _uid を**キー付き**ウィジェット状態（"part_sel"）で持つ。
+    # これによりプルダウン操作が引き起こす再実行の**開始時点**で新しい選択が
+    # 分かる — キー無しだと上に描画済みの一覧が1操作遅れてしまう。
+    # プログラムからの選択移動（追加・複製）は part_sel_pending 経由:
+    # 同一実行内でウィジェットのインスタンス化後にキー付き状態を書くと
+    # 例外になるため、次の実行の冒頭で反映する。並べ替えは対応不要
+    # （uid は変わらないので選択が自動で追従する）。
     uids = [p["_uid"] for p in sf["score_parts"]]
     pending = ss.pop("part_sel_pending", None)
     if pending in uids:
@@ -528,8 +528,8 @@ def screen_parts() -> None:
     ss.selected_part = uids.index(sel_uid) if sel_uid in uids else 0
 
     rows = state.part_summary_rows(sf)
-    # validation marker: the D&D component renders plain strings only, so a
-    # per-item color is impossible — a ⚠ prefix is the visible alternative
+    # 検証マーカー: D&D部品は文字列しか描画できず項目単位の色分けが
+    # 不可能なため、⚠ の接頭記号を見た目の代替にする
     invalid = {
         p["_uid"] for p in sf["score_parts"] if state.validate_part(p, sf["selectionSets"])
     }
@@ -586,7 +586,7 @@ def screen_parts() -> None:
         "編集するパーツ", uids, key="part_sel",
         format_func=lambda u: select_labels.get(u, "?"),
     )
-    idx = ss.selected_part  # derived from part_sel at the top of the screen
+    idx = ss.selected_part  # 画面冒頭で part_sel から導出済み
     part = sf["score_parts"][idx]
     uid = part["_uid"]
 
@@ -609,9 +609,9 @@ def screen_parts() -> None:
 
     part["name"] = st.text_input("name", value=part.get("name", ""), key=f"{uid}_name")
     cur_type = part.get("type")
-    # keep the current type selectable even when its prerequisites are not
-    # loaded (custom file / coef jsonc absent) — otherwise the selectbox
-    # would silently rewrite the part to another type
+    # 前提ファイル未読み込みの type（custom ファイルや係数 jsonc が無い等）
+    # でも現在の type は選択肢に残す — 残さないと selectbox がパーツの type
+    # を黙って別の値に書き換えてしまう
     types = ctx["part_types"] + ([cur_type] if cur_type not in ctx["part_types"] else [])
     tsel, tregen = st.columns([3, 1])
     new_type = tsel.selectbox(
@@ -793,8 +793,8 @@ def _group_defs_section(sf: dict, ctx) -> None:
     )
 
     def _reset_row_widgets() -> None:
-        # row widgets are keyed by index; after a structural change the
-        # remembered widget state would show the wrong row's values
+        # 行ウィジェットのキーは添字ベースなので、行の増減後は記憶された
+        # 状態が別の行の値を表示してしまう → 構造変更時にキーごと破棄する
         for k in list(st.session_state):
             if str(k).startswith(f"gdef_{name}_"):
                 del st.session_state[k]
@@ -854,8 +854,8 @@ def screen_compose() -> None:
         if cols[i % len(cols)].button(n, key=f"ins_{n}", help="式の末尾に挿入"):
             new_expr = (sf["expression"] + " + " + n).strip(" +") if sf["expression"] else n
             sf["expression"] = new_expr
-            # the input widget remembers its own state and would keep showing
-            # the old expression; update it too (safe: buttons render first)
+            # 入力ウィジェットは自分の状態を記憶していて古い式を表示し続ける
+            # ため、こちらも更新する（安全: ボタンは入力欄より先に描画される）
             st.session_state["expr_input"] = new_expr
             st.rerun()
     sf["expression"] = st.text_input("expression", value=sf["expression"], key="expr_input")
@@ -1011,11 +1011,11 @@ def main() -> None:
     if warning:
         st.warning(warning)
 
-    # Change detection for ALL screens: when widgets mutated the score file
-    # during this run, rerun immediately so every summary row / warning /
-    # label reflects the change without a second click. Done here (not per
-    # screen) so a newly added screen cannot forget it — screen 3's group-def
-    # warnings lagged one action behind for exactly that reason.
+    # 全画面共通の変更検知: この実行中にウィジェットが score file を変更して
+    # いたら即座に再実行し、要約行・警告・ラベルが2度目のクリックなしで
+    # 追従するようにする。画面ごとではなくここでやるのは、新しい画面を
+    # 作ったときに入れ忘れられないようにするため — 画面3のグループ定義警告が
+    # まさに写し忘れで1操作遅れた。
     before = _snapshot(st.session_state.score_file)
     if screen == SCREENS[0]:
         screen_data()

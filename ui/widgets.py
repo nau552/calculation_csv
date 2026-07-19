@@ -1,8 +1,8 @@
-"""Reusable Streamlit widgets for the score-design UI.
+"""スコア設計UIの再利用ウィジェット。
 
-Each editor mutates the passed-in dict (part of the session's score_file)
-in place; validation happens afterwards in the calling screen via
-ui.state.validate_*, so error messages are always the engine's own.
+各エディタは渡された dict（session の score_file の一部）をその場で書き換える。
+検証は呼び出し元の画面が後段で ui.state.validate_* を通して行うので、
+エラーメッセージは常にエンジン自身のものになる。
 """
 from __future__ import annotations
 
@@ -12,24 +12,23 @@ import streamlit as st
 
 from scorelib.models import COMBINED_SEP, MULTI_OPS
 
-# Drag & drop reordering is a soft dependency: a community custom component
-# (streamlit-sortables) that could break on a Streamlit major update. When it
-# is missing or fails, callers fall back to up/down buttons, so the app never
-# depends on it (design doc section 8-3).
+# ドラッグ&ドロップ並べ替えはソフト依存: コミュニティ製カスタムコンポーネント
+# （streamlit-sortables）は Streamlit 本体のメジャー更新で壊れうる。
+# 未インストール・故障時は呼び出し側が上下ボタンへフォールバックするので、
+# アプリ本体はこれに依存しない（設計書 8-3節）。
 try:
     from streamlit_sortables import sort_items as _sort_items
 
     HAS_SORTABLES = True
-except Exception:  # ImportError or a broken component install
+except Exception:  # ImportError またはコンポーネントの破損
     HAS_SORTABLES = False
 
 AXIS_OPS = ["filter", "mean", "sum", "min", "max", "diff", "expr"]
 
-# The component's default item style is the theme primary color (bright red on
-# the default theme, user feedback: 目が痛い) with centered text (the ⠿ handles
-# did not line up). Restyle: left-aligned, and a translucent gray one shade
-# apart from the surrounding frames so the items read as separate objects in
-# both light and dark themes.
+# コンポーネントの既定スタイルはテーマの primary 色（既定テーマだと真っ赤。
+# ユーザ評: 目が痛い）+ 中央揃え（⠿ ハンドルが縦に揃わない）。
+# 左揃え+周囲の枠と一段違う半透明グレーに上書きし、ライト/ダーク両テーマで
+# 「項目が独立した物」に見えるようにする。
 _SORTABLE_STYLE = """
 .sortable-item, .sortable-item:hover {
     background-color: rgba(128, 128, 128, 0.2);
@@ -43,13 +42,13 @@ _SORTABLE_STYLE = """
 
 
 def sortable_list(items: List[str], key: str) -> Optional[List[str]]:
-    """Render `items` as a drag&drop list and return the (possibly reordered)
-    list. Returns None when the component is unavailable or misbehaves --
-    the caller then falls back to up/down buttons.
+    """`items` をドラッグ&ドロップのリストとして描画し、（並べ替え後かも
+    しれない）リストを返す。コンポーネントが使えない・挙動が怪しいときは
+    None を返し、呼び出し側が上下ボタンへフォールバックする。
 
-    The key is derived from the item texts: when they change (edit elsewhere,
-    or a reorder we applied), the component remounts with the fresh order
-    instead of showing stale internal state."""
+    key は項目テキスト由来にしてある: テキストが変わったら（別の場所での編集や
+    こちらが適用した並べ替え）、古い内部状態を見せ続けずに新しい並びで
+    再マウントさせるため。"""
     if not HAS_SORTABLES or not items:
         return None
     try:
@@ -64,7 +63,7 @@ def sortable_list(items: List[str], key: str) -> Optional[List[str]]:
 
 
 def parse_scalar(text: str) -> Any:
-    """Free-text input -> typed axis value (bool / int / float / str)."""
+    """自由入力テキスト → 型付きの軸の値（bool / int / float / str）。"""
     t = text.strip()
     if t.lower() == "true":
         return True
@@ -79,8 +78,8 @@ def parse_scalar(text: str) -> Any:
 
 
 def value_widget(container, label: str, candidates: Optional[list], current: Any, key: str) -> Any:
-    """One axis-value input: dropdown when candidates are known, free text
-    (parsed to a typed scalar) otherwise."""
+    """軸の値1つの入力: 候補が分かればプルダウン、無ければ自由入力
+    （型付きスカラーにパース）。"""
     if candidates:
         index = candidates.index(current) if current in candidates else 0
         return container.selectbox(label, candidates, index=index, key=key, format_func=str)
@@ -89,7 +88,7 @@ def value_widget(container, label: str, candidates: Optional[list], current: Any
 
 
 def dict_selection_row(axes: List[str], catalog: Dict[str, Optional[list]], current: Any, key: str) -> Dict[str, Any]:
-    """One combined-axis selection: a per-axis dropdown row -> dict."""
+    """複合軸の選択1つ: 軸ごとのプルダウンを1行に並べて辞書を返す。"""
     cols = st.columns(len(axes))
     current = current if isinstance(current, dict) else {}
     return {
@@ -99,7 +98,7 @@ def dict_selection_row(axes: List[str], catalog: Dict[str, Optional[list]], curr
 
 
 def selection_widget(axes: List[str], catalog: Dict[str, Optional[list]], current: Any, key: str) -> Any:
-    """One selection on a plain or combined axis."""
+    """単一軸・複合軸どちらにも対応した選択1つぶんの入力。"""
     if len(axes) > 1:
         return dict_selection_row(axes, catalog, current, key)
     return value_widget(st, axes[0], catalog.get(axes[0]), current, key)
@@ -108,8 +107,8 @@ def selection_widget(axes: List[str], catalog: Dict[str, Optional[list]], curren
 def selection_list_widget(
     axes: List[str], catalog: Dict[str, Optional[list]], values: list, key: str
 ) -> list:
-    """A variable-length list of selections (used by mean/sum/min/max and
-    selection-set editing). Rows can be added/removed."""
+    """可変長の選択リスト（mean/sum/min/max の対象選択と選択セット編集で使用）。
+    行の追加・削除ができる。"""
     if len(axes) == 1 and catalog.get(axes[0]):
         cands = catalog[axes[0]]
         default = [v for v in values if v in cands]
@@ -146,9 +145,9 @@ def agg_editor(
     set_names: List[str],
     key: str,
 ) -> None:
-    """The per-order-entry aggregation instruction editor (design doc screen 2).
-    Only the inputs relevant to the chosen op are shown, so the value/values
-    confusion cannot occur in the UI. Mutates `spec` in place."""
+    """order エントリごとの集計指示エディタ（設計書 画面2）。
+    選んだ op に関係する入力欄だけを出すので、value/values の混同は
+    UI 上は構造的に起きない。`spec` をその場で書き換える。"""
     axes = entry.split(COMBINED_SEP)
     is_virtual = entry.startswith("__")
 
@@ -156,8 +155,8 @@ def agg_editor(
     cur_op = spec.get("op") if spec.get("op") in ops else ops[0]
     op = st.selectbox("op", ops, index=ops.index(cur_op), key=f"{key}_op")
     if op != spec.get("op"):
-        # op changed: drop op-specific fields so stale ones don't linger
-        # ("axis" survives: pre-aggregation steps carry their axis in the spec)
+        # op が変わった: op 固有のフィールドが残らないよう掃除する
+        # （"axis" だけは残す: 事前集計ステップは軸名を spec 内に持つため）
         axis_field = spec.get("axis")
         spec.clear()
         if axis_field is not None:
@@ -208,7 +207,8 @@ def agg_editor(
             spec.pop("ref", None)
             if not isinstance(spec.get("value"), list):
                 spec["value"] = []
-            # pass the dict's own list so add/remove-row mutations survive st.rerun()
+            # dict が持つリストそのものを渡す: 行の追加・削除の変更が
+            # st.rerun() をまたいで生き残るように
             spec["value"] = selection_list_widget(axes, catalog, spec["value"], f"{key}_mv")
         return
 
@@ -226,11 +226,11 @@ def relative_editor(
     set_names: List[str],
     key: str,
 ) -> None:
-    """The relative-ization block editor. Presence of part['relative'] means
-    ON (the engine has no enabled flag). Turning it off restores the split
-    axis into `order` (otherwise the engine would silently aggregate over
-    it, mixing numerator and denominator rows); turning it on / changing the
-    split axis removes the new split axis from `order` symmetrically."""
+    """相対化ブロックのエディタ。part['relative'] の存在=ON（エンジンに
+    enabled フラグは無い）。OFF にしたら split 軸を `order` へ復帰させる
+    （放置するとエンジンが暗黙に集約して分子と分母の行が混ざる）。
+    ON にしたとき・split 軸を変えたときは対称に、新しい split 軸を `order`
+    から外す。"""
     from ui import state as ui_state
 
     prev_enabled = part.get("relative") is not None

@@ -1,10 +1,10 @@
-"""Free-form expression evaluation shared by:
+"""自由記述式の評価。以下の2箇所で共用する:
 
-- ScorePart `expr` aggregation op (score_gui_design.md section 4.3)
-- Score composition `expression` (section 5)
+- スコアパーツの `expr` 集計op（docs/score_gui_design.md 4.3節）
+- スコア合成式 `expression`（同 5節）
 
-Uses simpleeval (sandboxed, no arbitrary code execution) rather than a
-hand-rolled DSL.
+自前DSLではなく simpleeval（サンドボックス化された評価器。任意コードは
+実行できない）を採用している。
 """
 from __future__ import annotations
 
@@ -15,11 +15,13 @@ from simpleeval import DEFAULT_FUNCTIONS, EvalWithCompoundTypes
 
 
 def _mean(*xs: float) -> float:
+    """mean(1, 2, 3) と mean([1, 2, 3]) の両方を受ける。"""
     values = xs[0] if len(xs) == 1 and isinstance(xs[0], (list, tuple)) else xs
     return sum(values) / len(values)
 
 
 def _make_functions() -> dict[str, Any]:
+    """式の中で使える関数の登録（log は log10 に割り当てる慣習に注意）。"""
     functions = dict(DEFAULT_FUNCTIONS)
     functions.update(
         {

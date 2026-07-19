@@ -3,7 +3,7 @@
 v1からのフィードバックを反映した改訂版。修正箇所には要点のみ記載し、
 まだ確定していない項目は末尾「11. 確認事項」にまとめる。
 
-参照した実物ファイル: `result_tmp/*`, `gomi/expand_FBC_measure.py`,
+参照した実物ファイル: `result_tmp/*`, `reference_scripts/expand_FBC_measure.py`（旧 gomi/）,
 `sample.jsonc`(WLgroup・Generation・constraintThresholdを含む実際のoptimization設定),
 `sample.py`(dVtBudget係数), `result_tmp/initial_temperature.csv`(Board別実測温度)
 

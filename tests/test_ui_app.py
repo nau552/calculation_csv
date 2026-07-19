@@ -1,5 +1,5 @@
-"""Streamlit AppTest smoke tests: the app starts, loads data, creates a
-part from the skeleton, and runs a test computation end to end."""
+"""Streamlit AppTest によるE2Eテスト: アプリをブラウザなしで起動し、
+データ読み込み → 雛形からパーツ作成 → テスト計算までを一気通貫で検証する。"""
 from pathlib import Path
 
 import pytest
@@ -16,7 +16,7 @@ SCREEN_TEST = "5. テスト実行・エクスポート"
 @pytest.fixture
 def at(tmp_path, monkeypatch):
     apptest = pytest.importorskip("streamlit.testing.v1").AppTest
-    # keep the test away from the user's real draft file
+    # ユーザの実際の下書きファイルに触れないよう保存先を差し替える
     monkeypatch.setattr(state, "DRAFT_PATH", tmp_path / "draft.jsonc")
     t = apptest.from_file(APP, default_timeout=60)
     t.run()
@@ -55,7 +55,7 @@ def test_load_and_create_part(at, data_dir_mini):
     assert not at.exception
     sf = at.session_state["score_file"]
     assert [p["name"] for p in sf["score_parts"]] == ["part_1"]
-    # skeleton passes validation -> the screen shows the OK marker
+    # 雛形は検証に通る → 画面に OK マーカーが出る
     assert any("検証" in s.value and "OK" in s.value for s in at.success)
 
 
@@ -74,8 +74,8 @@ def test_create_part_and_compute(at, data_dir_mini):
 
 
 def test_expression_insert_button_updates_input(at, data_dir_mini):
-    """The part-name button must update the visible expression input
-    immediately, not only the internal dict (widget-state override bug)."""
+    """パーツ名ボタンは内部 dict だけでなく、**見えている** expression 入力欄も
+    即座に更新すること（ウィジェット状態が value= を上書きするバグの回帰）。"""
     _load_data(at, data_dir_mini)
     at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
     at.button(key="add_part_btn").click().run()
@@ -120,17 +120,16 @@ def test_config_wlgroup_imported_as_group_def(at, data_dir_mini, fixtures_dir):
     gd = at.session_state["score_file"]["groupDefs"]["WLgroup"]
     assert gd["axis"] == "WL"
     assert gd["groups"]["WLgroup01"] == [0, 3]
-    # the group-defs editor renders without errors
+    # グループ定義エディタがエラーなく描画されること
     at.sidebar.radio(key="screen").set_value(SCREEN_SETS).run()
     assert not at.exception
 
 
 def test_duplicate_then_switch_keeps_parts_independent(at, data_dir_mini):
-    """The widget-state isolation pattern that was never tested before:
-    edit part B, switch back to part A, and check A's data AND its visible
-    widgets survived. With a shared _uid (the duplicate bug) the copies
-    shared every widget: A's name became B's, and unchecking relative on B
-    also stripped A's relative config."""
+    """それまで欠けていた「文脈切り替え」の検証パターン: パーツBを編集 →
+    Aへ切り替え → Aのデータと**表示ウィジェット**が無事なことを確認する。
+    _uid を共有していた複製バグでは、コピー同士が全ウィジェットを共有し、
+    Aの名前がBのものになり、Bで相対化を外すとAの相対化設定まで消えた。"""
     _load_data(at, data_dir_mini)
     at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
     at.button(key="add_part_btn").click().run()
@@ -142,16 +141,16 @@ def test_duplicate_then_switch_keeps_parts_independent(at, data_dir_mini):
     uid0, uid1 = parts[0]["_uid"], parts[1]["_uid"]
     assert uid0 != uid1
 
-    # the copy is selected: turn ITS relative off
+    # 複製直後はコピー側が選択されている: **コピー側の**相対化をOFFにする
     at.checkbox(key=f"{uid1}_rel_on").set_value(False).run()
     assert not at.exception
     parts = at.session_state["score_file"]["score_parts"]
     assert parts[1].get("relative") is None
-    assert parts[0].get("relative") is not None  # original untouched
+    assert parts[0].get("relative") is not None  # 元パーツは無傷
 
-    # switch back to the original: its widgets must show its own values.
-    # selection is keyed by uid so it is fresh at the start of that same run
-    # (the ← 編集中 marker in the drag list depends on this)
+    # 元パーツへ切り替える: そのウィジェットが自分自身の値を表示すること。
+    # 選択は uid のキー付き状態なので、同じ実行の開始時点から新しい選択が
+    # 有効（ドラッグリストの ← 編集中 マーカーはこれに依存している）
     sel = next(s for s in at.selectbox if s.label == "編集するパーツ")
     sel.set_value(uid0).run()
     assert not at.exception
@@ -166,8 +165,8 @@ def test_duplicate_then_switch_keeps_parts_independent(at, data_dir_mini):
 
 
 def test_relative_off_removes_explicit_step_via_ui(at, data_dir_mini):
-    """Place __relative__ in order via the dedicated button, then turn
-    relative off: the part must stay valid (no orphan step)."""
+    """専用ボタンで __relative__ を order に置いてから相対化をOFFにする:
+    パーツは検証OKのままであること（孤児ステップが残らない）。"""
     _load_data(at, data_dir_mini)
     at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
     at.button(key="add_part_btn").click().run()
@@ -183,7 +182,7 @@ def test_relative_off_removes_explicit_step_via_ui(at, data_dir_mini):
 
 
 def test_custom_part_end_to_end(at, data_dir_mini, fixtures_dir):
-    """Load with custom_parts.py, create a type=custom part, compute it."""
+    """custom_parts.py 付きで読み込み、type=custom パーツを作成して計算する。"""
     at.text_input(key="data_dir_input").set_value(str(data_dir_mini))
     at.text_input(key="custom_path_input").set_value(str(fixtures_dir / "custom_parts.py"))
     at.button(key="load_btn").click().run()
@@ -198,7 +197,7 @@ def test_custom_part_end_to_end(at, data_dir_mini, fixtures_dir):
     assert part["type"] == "custom"
     assert part["function"] in at.session_state["context"]["custom_functions"]
 
-    # pick a specific function via the 関数 pulldown
+    # 「関数」プルダウンで特定の関数を選ぶ
     uid = part["_uid"]
     at.selectbox(key=f"{uid}_func").set_value("fixed_value").run()
     assert at.session_state["score_file"]["score_parts"][0]["function"] == "fixed_value"
@@ -235,9 +234,9 @@ def test_draft_autosaved_and_restored(at, data_dir_mini, dvtbudget_coef_path, tm
     assert draft["context_inputs"]["data_dir"] == str(data_dir_mini.resolve())
     assert draft["context_inputs"]["coef_path"] == str(dvtbudget_coef_path.resolve())
 
-    # a fresh session (same draft path): restoring brings back the score
-    # file, the loaded-data context AND the visible screen-1 inputs (blank
-    # inputs would drop the coef path on the next 読み込み click)
+    # 別セッション（同じ下書きパス）: 復元で score file・データ読み込み
+    # コンテキスト・**画面1の見えている入力欄**まで戻ること（入力欄が空だと
+    # 読み込みボタンの再押下で係数パスの指定が外れてしまう）
     apptest = pytest.importorskip("streamlit.testing.v1").AppTest
     at2 = apptest.from_file(APP, default_timeout=60)
     at2.run()

@@ -1,4 +1,4 @@
-"""Tests for ui.state: pure editing logic behind the Streamlit UI."""
+"""ui.state のテスト: Streamlit UI の背後にある純粋な編集ロジック。"""
 import shutil
 
 import pytest
@@ -24,10 +24,10 @@ def sf():
 def test_skeleton_is_valid_and_relative_on(catalog):
     part = state.part_skeleton("p1", "FBC", catalog)
     assert part["relative"]["split_axis"] == "Read_Override"
-    assert "Read_Override" not in part["order"]  # consumed by relative
+    assert "Read_Override" not in part["order"]  # 相対化が消費するため order には無い
     assert "InBatchEpoch" not in part["order"]
     assert part["order"][-3:] == ["Board", "Chip", "Block"]
-    assert part["order"][0].endswith("_Label")  # labels first
+    assert part["order"][0].endswith("_Label")  # Label系が先頭
     assert state.validate_part(part) == []
 
 
@@ -40,7 +40,7 @@ def test_skeleton_default_ops(catalog):
 
 
 def test_skeleton_computes_as_is(data_dir_mini, catalog):
-    """The whole point of the skeleton: computable without any edits."""
+    """雛形の存在意義そのもの: 一切編集せずに計算が通ること。"""
     part = ScorePart.model_validate(state.part_skeleton("p1", "FBC", catalog))
     value = compute_score_part(data_dir_mini, part)
     assert isinstance(value, float)
@@ -51,7 +51,7 @@ def test_skeleton_without_read_override_has_no_relative(data_dir_mini):
     part = state.part_skeleton("p1", "tR", catalog_tr)
     assert "relative" not in part or part["relative"] is None or "Read_Override" in catalog_tr
     # tR has Read_Override via parameterLabel, so relative should be ON there;
-    # simulate a catalog without it instead:
+    # 代わりに Read_Override の無いカタログを疑似的に作って確認する:
     no_ovr = {a: c for a, c in catalog_tr.items() if a != "Read_Override"}
     part2 = state.part_skeleton("p2", "tR", no_ovr)
     assert "relative" not in part2
@@ -66,7 +66,7 @@ def test_disable_relative_restores_split_axis(catalog):
     assert restored == "Read_Override"
     assert "relative" not in part
     assert "Read_Override" in part["order"]
-    # restored with the safe default: reference side (filter False)
+    # 安全なデフォルト（基準側 = filter False）で復帰する
     assert part["aggregations"]["Read_Override"] == {"op": "filter", "value": False}
     assert state.validate_part(part) == []
 
@@ -86,13 +86,13 @@ def test_change_split_axis_swaps_order_membership(catalog):
     state.change_split_axis(part, "Erase_Override", catalog)
     assert part["relative"]["split_axis"] == "Erase_Override"
     assert "Erase_Override" not in part["order"]
-    assert "Read_Override" in part["order"]  # old split axis returned to order
+    assert "Read_Override" in part["order"]  # 旧 split 軸は order へ戻る
 
 
 def test_disable_relative_removes_explicit_relative_step(catalog):
-    """Feature pair: the UI lets users place __relative__ in order explicitly;
-    turning relative off must remove it too (a __relative__ without a
-    relative config is a validation error)."""
+    """機能の組み合わせ: UIは __relative__ を order に明示配置できる。
+    相対化をOFFにしたらそれも除去されること（相対化設定なしの __relative__
+    は検証エラーになるため）。"""
     part = state.part_skeleton("p", "FBC", catalog)
     part["order"].insert(0, "__relative__")
     state.disable_relative(part, catalog)
@@ -104,7 +104,7 @@ def test_drop_stale_virtual_steps_on_type_change(catalog):
     part = state.part_skeleton("p", "FBC", catalog)
     part["order"].insert(0, "__dvtbudget__")
     part["type"] = "dVtBudget"
-    assert state.drop_stale_virtual_steps(part) is None  # still consistent
+    assert state.drop_stale_virtual_steps(part) is None  # 整合しているので何も起きない
     part["type"] = "FBC"
     assert state.drop_stale_virtual_steps(part) == "__dvtbudget__"
     assert "__dvtbudget__" not in part["order"]
@@ -115,7 +115,7 @@ def test_disable_relative_skips_axis_already_in_combined_entry(catalog):
     part = state.part_skeleton("p", "FBC", catalog)
     part["order"].insert(0, "State&Read_Override")
     restored = state.disable_relative(part, catalog)
-    assert restored is None  # covered by the combined entry -> not re-added
+    assert restored is None  # 複合軸エントリがカバー済み → 再追加されない
     assert part["order"].count("Read_Override") == 0
 
 
@@ -127,9 +127,9 @@ def test_unique_part_name(sf):
 
 
 def test_duplicate_part(sf, catalog):
-    """Input shaped like production: parts carry a _uid by the time the app
-    duplicates them (a shared _uid means shared widgets — the two parts
-    would silently overwrite each other's name/relative)."""
+    """本番と同じ形の入力で検証する: アプリが複製する時点でパーツは _uid を
+    持っている（_uid を共有するとウィジェットも共有され、2パーツが互いの
+    名前・相対化を静かに上書きし合う実バグがあった）。"""
     sf["score_parts"].append(state.part_skeleton("p", "FBC", catalog))
     state.ensure_uids(sf)
     idx = state.duplicate_part(sf, 0)
@@ -138,13 +138,13 @@ def test_duplicate_part(sf, catalog):
     assert sf["score_parts"][1]["name"] == "p_1"
     assert sf["score_parts"][0]["_uid"] != sf["score_parts"][1]["_uid"]
     sf["score_parts"][1]["aggregations"]["WL"]["op"] = "sum"
-    assert sf["score_parts"][0]["aggregations"]["WL"]["op"] == "mean"  # deep copy
+    assert sf["score_parts"][0]["aggregations"]["WL"]["op"] == "mean"  # 深いコピー（元は不変）
 
 
 def test_part_list_labels_marker_handle_and_warning(sf, catalog):
-    """The drag-list labels carry the ⠿ handle, the ⚠ validation marker and
-    the ← 編集中 marker. The D&D component itself is invisible to AppTest,
-    so this pure builder is where the logic is verified."""
+    """ドラッグリストのラベルには ⠿ ハンドル・⚠ 検証マーカー・← 編集中 が
+    付く。D&D部品自体は AppTest から観測できないため、この純関数の側で
+    ロジックを検証する。"""
     a = state.part_skeleton("a", "FBC", catalog)
     b = state.part_skeleton("b", "FBC", catalog)
     sf["score_parts"] = [a, b]
@@ -157,9 +157,9 @@ def test_part_list_labels_marker_handle_and_warning(sf, catalog):
 
 
 def test_part_select_labels_unique_even_with_duplicate_names(sf, catalog):
-    """Streamlit's selectbox matches items by displayed label: two parts
-    accidentally sharing a name must still get distinct pulldown labels,
-    or clicking one selects the other (real bug)."""
+    """Streamlit の selectbox は表示ラベルで項目を照合する: 誤って同名に
+    なった2パーツにも別々のプルダウンラベルが付かないと、片方をクリック
+    したらもう片方が選ばれる（実バグ）。"""
     a = state.part_skeleton("dAR_margin", "FBC", catalog)
     b = state.part_skeleton("dAR_margin", "FBC", catalog)
     sf["score_parts"] = [a, b]
@@ -171,14 +171,14 @@ def test_part_select_labels_unique_even_with_duplicate_names(sf, catalog):
 
 
 def test_ensure_uids_repairs_duplicated_ids(sf, catalog):
-    """Drafts saved while the duplicate-_uid bug existed must heal on load."""
+    """_uid 重複バグの期間に保存された下書きが、開くだけで治ること。"""
     a = state.part_skeleton("a", "FBC", catalog)
     b = state.part_skeleton("b", "FBC", catalog)
     a["_uid"] = b["_uid"] = "same1234"
     sf["score_parts"] = [a, b]
     state.ensure_uids(sf)
     assert a["_uid"] != b["_uid"]
-    assert a["_uid"] == "same1234"  # first keeper stays stable
+    assert a["_uid"] == "same1234"  # 最初の1つは安定して保持される
 
 
 def test_move_entry():
@@ -213,7 +213,7 @@ def test_save_set_as(sf):
     sf["selectionSets"]["ud"] = [{"State": "R2A", "Read_Label": "u1"}]
     state.save_set_as(sf, "ud", "ud2")
     sf["selectionSets"]["ud2"][0]["State"] = "A2B"
-    assert sf["selectionSets"]["ud"][0]["State"] == "R2A"  # deep copy
+    assert sf["selectionSets"]["ud"][0]["State"] == "R2A"  # 深いコピー（元は不変）
     with pytest.raises(ValueError, match="既に存在"):
         state.save_set_as(sf, "ud", "ud2")
 
@@ -224,7 +224,7 @@ def test_import_config_group_defs(sf):
     wlgroup = {"g1": (0, 3), "g2": (4, 8)}
     assert state.import_config_group_defs(sf, wlgroup) is True
     assert sf["groupDefs"]["WLgroup"] == {"axis": "WL", "groups": {"g1": [0, 3], "g2": [4, 8]}}
-    # importing again (or editing first) must not overwrite the editable copy
+    # 再取り込み（や先の編集）で編集可能コピーが上書きされてはならない
     sf["groupDefs"]["WLgroup"]["groups"]["g1"] = [0, 5]
     assert state.import_config_group_defs(sf, wlgroup) is False
     assert sf["groupDefs"]["WLgroup"]["groups"]["g1"] == [0, 5]
@@ -264,12 +264,12 @@ def test_export_part_bundles_group_defs(sf, catalog):
     sf["groupDefs"]["WLgroup"] = {"axis": "WL", "groups": {"g1": [0, 100]}}
     sf["groupDefs"]["unused"] = {"axis": "STR", "groups": {"a": [0, 1]}}
     back = state.import_score_file(state.export_part(sf, 0))
-    assert list(back["groupDefs"]) == ["WLgroup"]  # only the referenced def
+    assert list(back["groupDefs"]) == ["WLgroup"]  # 参照している定義だけ同梱される
 
 
 def test_run_test_compute_with_group_axis(sf, catalog, data_dir_mini):
-    """End-to-end through the UI path: a part using the derived group axis
-    computes on real data (the user's late-group-reduction scenario)."""
+    """UI経由の一気通貫: 派生グループ軸を使うパーツが実データで計算できる
+    （グループ間集計を最後に回すユーザシナリオ）。"""
     part = state.part_skeleton("p", "FBC", catalog)
     part["order"].append("WLgroup")
     part["aggregations"]["WLgroup"] = {"op": "max"}
@@ -327,7 +327,7 @@ def test_validate_unknown_ref(sf, catalog):
 def test_build_context(data_dir_mini):
     ctx = state.build_context(str(data_dir_mini))
     assert ctx["types"] == ["FBC", "tR"]
-    assert ctx["part_types"] == ["FBC", "tR"]  # no coef jsonc in mini dir
+    assert ctx["part_types"] == ["FBC", "tR"]  # mini ディレクトリに係数jsoncは無い
     assert "Page" in ctx["catalogs"]["tR"]
     assert ctx["has_initial_temperature"] is True
     assert ctx["config_path"] is None
@@ -339,16 +339,15 @@ def test_build_context_missing_dir():
 
 
 def test_build_context_empty_path_rejected():
-    """Path('') means the current directory in Python; an empty input must
-    not silently scan wherever the app happened to be launched from."""
+    """Python では Path('') はカレントディレクトリ扱い。空入力のまま、
+    アプリの起動場所を黙って走査してはならない。"""
     for bad in ("", "   "):
         with pytest.raises(ValueError, match="入力してください"):
             state.build_context(bad)
 
 
 def test_build_context_explicit_coef(data_dir_mini, dvtbudget_coef_path):
-    """The coefficient jsonc normally lives outside result_tmp and is given
-    as its own path."""
+    """係数jsoncは通常 result_tmp の外にあり、独立したパスで指定される。"""
     ctx = state.build_context(str(data_dir_mini), coef_path=str(dvtbudget_coef_path))
     assert ctx["part_types"] == ["FBC", "tR", "dVtBudget"]
     assert ctx["coef_source"] == "指定"
@@ -409,7 +408,7 @@ def test_group_def_warnings(sf):
     warns = state.group_def_warnings(sf, geninfo)
     assert any("4–5" in w and "どのグループにも入りません" in w for w in warns)
 
-    # matching ranges -> silent; axes the json does not describe -> skipped
+    # 範囲が本数と合っていれば無音。json に記述のない軸はチェック対象外
     sf["groupDefs"]["WLgroup"]["groups"] = {"g1": [0, 3], "g2": [4, 5]}
     sf["groupDefs"]["PageG"] = {"axis": "Page", "groups": {"x": [0, 99]}}
     assert state.group_def_warnings(sf, geninfo) == []
@@ -501,7 +500,7 @@ def _bundle_zip(data_dir_mini, fixtures_dir, custom_parts_path, layout) -> bytes
 
 
 def test_bundle_zip_flat_layout(data_dir_mini, fixtures_dir, custom_parts_path):
-    """Everything in one folder: the folder itself is the data dir."""
+    """全部1フォルダに入った形: そのフォルダ自体が測定ディレクトリになる。"""
     data = _bundle_zip(data_dir_mini, fixtures_dir, custom_parts_path, "bundle")
     found = state.locate_bundle_inputs(state.extract_bundle_zip(data))
     ctx = state.build_context(
@@ -514,9 +513,8 @@ def test_bundle_zip_flat_layout(data_dir_mini, fixtures_dir, custom_parts_path):
 
 
 def test_bundle_zip_nested_layout(data_dir_mini, fixtures_dir, custom_parts_path):
-    """The GUI's natural layout: measurement csvs inside a result_tmp
-    subfolder, companion files at the bundle root — subdirectories are
-    searched, so this must load too."""
+    """GUIが作る自然な構成: 測定csvは result_tmp サブフォルダ内、同梱
+    ファイルはルート — サブディレクトリも探索するのでこれも読めること。"""
     data = _bundle_zip(data_dir_mini, fixtures_dir, custom_parts_path, "bundle/result_tmp")
     found = state.locate_bundle_inputs(state.extract_bundle_zip(data))
     assert found["data_dir"].endswith("result_tmp")
@@ -543,8 +541,8 @@ def test_bundle_zip_ambiguous_data_dirs_rejected(data_dir_mini, fixtures_dir, cu
 
 
 def test_in_dir_discovery_rejects_ambiguous_configs(tmp_path, data_dir_mini, fixtures_dir):
-    """Two files matching the run-config shape: refuse to pick silently
-    (previously the alphabetically first won without a word)."""
+    """設定jsoncの形に合うファイルが2つ: 黙って選ばず拒否すること
+    （以前はアルファベット順の先頭が無言で採用されていた）。"""
     import shutil as sh
 
     d = tmp_path / "run"
@@ -553,7 +551,7 @@ def test_in_dir_discovery_rejects_ambiguous_configs(tmp_path, data_dir_mini, fix
     sh.copy(fixtures_dir / "config.jsonc", d / "config_b.jsonc")
     with pytest.raises(ValueError, match="候補が複数"):
         state.build_context(str(d))
-    # explicit path resolves the ambiguity
+    # 明示パス指定で曖昧さは解消できる
     ctx = state.build_context(str(d), config_path=str(d / "config_a.jsonc"))
     assert ctx["config_source"] == "指定"
 
@@ -571,7 +569,7 @@ def test_draft_roundtrip(tmp_path, sf, catalog):
 
 
 def test_draft_legacy_format_accepted(tmp_path, sf, catalog):
-    """Drafts written before context_inputs existed (bare ScoreFile dict)."""
+    """context_inputs 導入前の旧形式（素の ScoreFile dict）の下書きも読めること。"""
     import json
 
     sf["score_parts"].append(state.part_skeleton("p", "FBC", catalog))
