@@ -42,7 +42,9 @@ _SUBSET_ALIASES = {
     "max_subset": "max",
 }
 
-_MULTI_OPS = ("mean", "sum", "min", "max")
+# Reducing ops that accept an optional selection list in `value`; shared
+# with the UI (ui/widgets.py) so the two never drift apart.
+MULTI_OPS = ("mean", "sum", "min", "max")
 
 
 class AggregationSpec(BaseModel):
@@ -122,7 +124,7 @@ class AggregationSpec(BaseModel):
                     "op 'diff': each selection must be a scalar or, for combined axes, a "
                     "dict like {\"State\": ..., \"Read_Label\": ...} — not a nested list"
                 )
-        elif op in _MULTI_OPS:
+        elif op in MULTI_OPS:
             if v is not None:
                 if not isinstance(v, list):
                     self.value = v = [v]

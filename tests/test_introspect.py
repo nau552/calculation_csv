@@ -5,11 +5,10 @@ import shutil
 import pytest
 
 from scorelib.introspect import (
-    available_part_types,
     axis_catalog,
     detect_types,
-    find_dvtbudget_coef,
-    find_run_config,
+    find_dvtbudget_coefs,
+    find_run_configs,
 )
 
 REPO_FILES = {"coef": "dvtbudget_coef.jsonc", "sample": "sample.jsonc"}
@@ -37,25 +36,14 @@ def test_detect_types_ignores_reserved_and_map_files(tmp_path, data_dir_mini):
     assert detect_types(d) == ["FBC", "tR"]
 
 
-def test_available_part_types_without_coef(data_dir_mini):
-    # result_tmp_mini has no coefficient jsonc -> no dVtBudget offered
-    assert available_part_types(data_dir_mini) == ["FBC", "tR"]
+def test_find_dvtbudget_coefs(full_dir, data_dir_mini):
+    assert [p.name for p in find_dvtbudget_coefs(full_dir)] == ["dvtbudget_coef.jsonc"]
+    assert find_dvtbudget_coefs(data_dir_mini) == []
 
 
-def test_available_part_types_with_coef(full_dir):
-    assert available_part_types(full_dir) == ["FBC", "tR", "dVtBudget"]
-
-
-def test_find_dvtbudget_coef(full_dir, data_dir_mini):
-    found = find_dvtbudget_coef(full_dir)
-    assert found is not None and found.name == "dvtbudget_coef.jsonc"
-    assert find_dvtbudget_coef(data_dir_mini) is None
-
-
-def test_find_run_config(full_dir, data_dir_mini):
-    found = find_run_config(full_dir)
-    assert found is not None and found.name == "config.jsonc"
-    assert find_run_config(data_dir_mini) is None
+def test_find_run_configs(full_dir, data_dir_mini):
+    assert [p.name for p in find_run_configs(full_dir)] == ["config.jsonc"]
+    assert find_run_configs(data_dir_mini) == []
 
 
 def test_axis_catalog_fbc(data_dir_mini):

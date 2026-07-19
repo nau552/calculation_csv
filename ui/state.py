@@ -261,7 +261,11 @@ def import_config_group_defs(score_file: Dict[str, Any], wlgroup: Optional[Dict[
 
 def _part_axis_names(part: Dict[str, Any]) -> set:
     """Every axis-like name a part mentions (order entries incl. combined
-    components, relative split axis, denominator pre-aggregation axes)."""
+    components, relative split axis, denominator pre-aggregation axes).
+
+    scorelib/cli.py:_named_axes is the pydantic-model counterpart used at
+    compute time; this one tolerates half-edited dicts — intentionally
+    parallel, do not try to merge them."""
     axes = set(_axes_in_order(part))
     rel = part.get("relative") or {}
     if rel.get("split_axis"):
@@ -301,16 +305,22 @@ def delete_group_def(score_file: Dict[str, Any], name: str) -> None:
 
 # ------------------------------------------------------------- selection sets
 
+def _part_specs(part: Dict[str, Any]) -> List[Any]:
+    """Every aggregation spec a part carries, incl. the denominator
+    pre-aggregation steps (used for ref scanning)."""
+    specs = list(part.get("aggregations", {}).values())
+    specs += (part.get("relative") or {}).get("denominator_pre_aggregation", [])
+    return specs
+
+
 def referencing_parts(score_file: Dict[str, Any], set_name: str) -> List[str]:
     """Names of parts whose aggregations (incl. denominator_pre_aggregation)
     reference the given selection set."""
-    users = []
-    for part in score_file["score_parts"]:
-        specs = list(part.get("aggregations", {}).values())
-        specs += (part.get("relative") or {}).get("denominator_pre_aggregation", [])
-        if any(isinstance(s, dict) and s.get("ref") == set_name for s in specs):
-            users.append(part.get("name", "?"))
-    return users
+    return [
+        part.get("name", "?")
+        for part in score_file["score_parts"]
+        if any(isinstance(s, dict) and s.get("ref") == set_name for s in _part_specs(part))
+    ]
 
 
 def delete_selection_set(score_file: Dict[str, Any], name: str) -> None:
@@ -701,13 +711,16 @@ def part_list_labels(
     score_file: Dict[str, Any],
     selected_uid: Optional[str],
     invalid_uids: set,
+    rows: Optional[List[Dict[str, str]]] = None,
 ) -> List[str]:
     """Labels for the always-draggable parts list: ⠿ drag handle, ⚠ on parts
     failing validation, ← 編集中 on the selected part. Pure on purpose: the
     D&D component's rendering is invisible to AppTest, so the marker logic
-    must be verifiable here."""
+    must be verifiable here. `rows` (part_summary_rows output) can be passed
+    in when the caller already computed it."""
+    rows = rows if rows is not None else part_summary_rows(score_file)
     labels = []
-    for i, (row, p) in enumerate(zip(part_summary_rows(score_file), score_file["score_parts"])):
+    for i, (row, p) in enumerate(zip(rows, score_file["score_parts"])):
         labels.append(
             "⠿ "
             + ("⚠ " if p.get("_uid") in invalid_uids else "")
@@ -800,9 +813,8 @@ def load_draft(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
 
 
 def _part_refs(part: Dict[str, Any]) -> List[str]:
-    specs = list(part.get("aggregations", {}).values())
-    specs += (part.get("relative") or {}).get("denominator_pre_aggregation", [])
-    return sorted({s["ref"] for s in specs if isinstance(s, dict) and s.get("ref")})
+    """Selection-set names a part references (for export bundling)."""
+    return sorted({s["ref"] for s in _part_specs(part) if isinstance(s, dict) and s.get("ref")})
 
 
 def export_part(score_file: Dict[str, Any], index: int) -> str:

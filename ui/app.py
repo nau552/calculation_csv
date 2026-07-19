@@ -349,7 +349,7 @@ def _add_entry_controls(part: dict, catalog: dict, uid: str) -> None:
     if st.button("＋ 定数加算ステップを追加", key=f"{uid}_addvirt_btn",
                  help="値に定数を足すステップ（__offset__）を order に追加します。"
                       "典型例: オフセットを足してから相対化する。実行位置は上下ボタンで調整してください"):
-        base, name, n = "__offset__", "__offset__", 2
+        name, n = "__offset__", 2
         while name in part["order"]:
             name = f"__offset{n}__"
             n += 1
@@ -464,6 +464,9 @@ def _custom_part_editor(part: dict, ctx, uid: str) -> None:
         st.error(f"関数 '{part['function']}' は読み込んだ custom_parts.py にありません")
 
     st.markdown("**params（ctx.params として関数に渡す追加パラメータ）**")
+    # row editor structure mirrors _group_defs_section's group rows; kept as
+    # two concrete loops on purpose — the column sets differ and a shared
+    # abstraction would be longer than either loop
     params = part.setdefault("params", {})
 
     def _reset_param_widgets() -> None:
@@ -534,7 +537,7 @@ def screen_parts() -> None:
         r["検証"] = "⚠ NG" if p["_uid"] in invalid else "OK"
     parts_dnd = False
     if widgets.HAS_SORTABLES and len(sf["score_parts"]) > 1:
-        labels = state.part_list_labels(sf, sel_uid, invalid)
+        labels = state.part_list_labels(sf, sel_uid, invalid, rows=rows)
         new_labels = widgets.sortable_list(labels, key="parts_dnd")
         if new_labels is not None:
             parts_dnd = True
@@ -586,7 +589,6 @@ def screen_parts() -> None:
     idx = ss.selected_part  # derived from part_sel at the top of the screen
     part = sf["score_parts"][idx]
     uid = part["_uid"]
-    catalog = _with_group_axes(_catalog_for_part(ctx, part), sf)
 
     cup, cdn, cdup, cdel = st.columns(4)
     if cup.button("▲ 上へ", disabled=idx == 0, help="このパーツを一覧の1つ上へ"):
@@ -634,6 +636,7 @@ def screen_parts() -> None:
     if part.get("type") == "custom":
         _custom_part_editor(part, ctx, uid)
     else:
+        catalog = _with_group_axes(_catalog_for_part(ctx, part), sf)
         widgets.relative_editor(
             part, catalog,
             set_names=sorted(sf["selectionSets"]),

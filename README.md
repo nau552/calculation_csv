@@ -167,6 +167,8 @@ CLI（stderr / `--version`）に表示される — SVN側エンジンとの版�
 
 現行のoptimization設定（更新版 `sample.jsonc` の形式）に `score_parts` と `expression` を
 追加した形。テストで実際に使用している `tests/fixtures/config.jsonc` が完全な実例。
+コードの中身（全ファイル・全関数）の解説は `code_reference.md`、テストの考え方と
+各テストの解説は `testing_guide.md` を参照。
 
 ```jsonc
 {

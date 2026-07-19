@@ -166,6 +166,18 @@ tests/               # フラット配置、モジュール名対応（test_ui_s
    - `scorelib.__version__` 新設（SVN同期時に更新する運用）。UIサイドバー+CLI
      （stderr / --version）に表示。stdoutの結果JSONは汚さない。
    - ui設計書2.1節「配置・起動形態」+README に明記。
+16. **リファクタリング+コード/テスト解説ドキュメント**（ユーザーと合意の上で実施）:
+   - 削除: app.py の未使用変数 `base`、introspect.py の本番未使用3関数
+     （available_part_types / 単数形 find_run_config / find_dvtbudget_coef —
+     「複数候補で先頭を無言採用」の古い動作を残していたため危険だった）。
+   - 統一: `_part_specs` ヘルパー（state.py の2箇所コピペ解消）、`MULTI_OPS` を
+     models 公開にして widgets と共有、part_summary_rows の二重計算解消、
+     custom パーツ時の不要なカタログ構築を分岐内へ。
+   - 意図的な並行実装（cli._named_axes ⇔ state._part_axis_names、行エディタ2種）には
+     「統合するな」の相互参照コメントを明文化。state.py 分割は見送り（利益<コスト）。
+   - 新規ドキュメント: **code_reference.md**（全ファイル・全関数の解説。チーム報告用）と
+     **testing_guide.md**（テスト概念入門+全テストファイル解説+AppTestの限界）。
+     どちらも「コード変更時に追随更新」を冒頭に明記。
    → **ここまで完了、ユーザーのブラウザ確認待ち**。
 
 ## 6. 未解決・保留事項

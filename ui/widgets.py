@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
-from scorelib.models import COMBINED_SEP
+from scorelib.models import COMBINED_SEP, MULTI_OPS
 
 # Drag & drop reordering is a soft dependency: a community custom component
 # (streamlit-sortables) that could break on a Streamlit major update. When it
@@ -24,7 +24,6 @@ except Exception:  # ImportError or a broken component install
     HAS_SORTABLES = False
 
 AXIS_OPS = ["filter", "mean", "sum", "min", "max", "diff", "expr"]
-_MULTI_OPS = ("mean", "sum", "min", "max")
 
 # The component's default item style is the theme primary color (bright red on
 # the default theme, user feedback: 目が痛い) with centered text (the ⠿ handles
@@ -190,7 +189,7 @@ def agg_editor(
             spec["value"] = [a, b]
         return
 
-    if op in _MULTI_OPS:
+    if op in MULTI_OPS:
         modes = ["全値", "値を選択", "選択セット(ref)"]
         if spec.get("ref"):
             mode_idx = 2

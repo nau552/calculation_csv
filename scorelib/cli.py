@@ -56,7 +56,11 @@ def _step_axes(step: str) -> list[str]:
 def _named_axes(score_part: ScorePart) -> Set[str]:
     """Every axis-like name the part itself mentions (order entries incl.
     combined components, the relative split axis, denominator pre-aggregation
-    axes). May contain derived group-axis names."""
+    axes). May contain derived group-axis names.
+
+    ui/state.py:_part_axis_names is the dict-shaped counterpart operating on
+    parts still being edited (possibly incomplete) — intentionally parallel,
+    do not try to merge them."""
     axes: Set[str] = set()
     for entry in score_part.order:
         if not _is_virtual(entry):

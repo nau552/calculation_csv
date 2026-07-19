@@ -68,11 +68,6 @@ def find_dvtbudget_coefs(data_dir: str | Path) -> List[Path]:
     return found
 
 
-def find_dvtbudget_coef(data_dir: str | Path) -> Optional[Path]:
-    found = find_dvtbudget_coefs(data_dir)
-    return found[0] if found else None
-
-
 def find_generation_info(data_dir: str | Path, generation: Optional[str]) -> Optional[Path]:
     """The per-generation chip-info json ({Generation}.json: numWLs,
     numStrings, ...) when it happens to sit in the data directory."""
@@ -96,20 +91,6 @@ def find_run_configs(data_dir: str | Path) -> List[Path]:
         if isinstance(content, dict) and "optimization" in content:
             found.append(f)
     return found
-
-
-def find_run_config(data_dir: str | Path) -> Optional[Path]:
-    found = find_run_configs(data_dir)
-    return found[0] if found else None
-
-
-def available_part_types(data_dir: str | Path) -> List[str]:
-    """Types offered in the UI's type dropdown: measurement types, plus
-    dVtBudget when FBC data and a coefficient file are both present."""
-    types = detect_types(data_dir)
-    if "FBC" in types and find_dvtbudget_coef(data_dir) is not None:
-        types.append("dVtBudget")
-    return types
 
 
 def axis_catalog(data_dir: str | Path, type_: str) -> Dict[str, Optional[list]]:
