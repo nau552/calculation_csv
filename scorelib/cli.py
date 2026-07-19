@@ -388,7 +388,10 @@ def compute_score_file(
 
 
 def main(argv: Optional[list[str]] = None) -> None:
+    from . import __version__
+
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--version", action="version", version=f"scorelib {__version__}")
     parser.add_argument("--config", required=True, help="run config jsonc (Generation + optimization{...})")
     parser.add_argument("--data-dir", required=True, help="directory containing {type}.csv etc. for this epoch")
     parser.add_argument("--dvtbudget-coef", help="dVtBudget coefficient jsonc (required if any score part uses type=dVtBudget)")
@@ -404,6 +407,9 @@ def main(argv: Optional[list[str]] = None) -> None:
         args.data_dir, run_config, dvtbudget_coef, board_temperatures,
         custom_parts_path=args.custom_parts,
     )
+    # stdout carries ONLY the result JSON (the optimizer parses it); the
+    # version marker goes to stderr for the run logs
+    print(f"scorelib {__version__}", file=sys.stderr)
     print(json.dumps(result))
 
 

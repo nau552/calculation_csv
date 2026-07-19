@@ -16,6 +16,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import scorelib  # noqa: E402
 from scorelib.models import COMBINED_SEP  # noqa: E402
 from ui import state, widgets  # noqa: E402
 
@@ -997,6 +998,10 @@ def main() -> None:
         if sf["score_parts"]:
             n = len(state.validate_score_file(sf))
             (st.success if n == 0 else st.error)("検証 OK" if n == 0 else f"検証エラー {n} 件")
+        st.caption(
+            f"engine scorelib {scorelib.__version__}",
+            help="このUIに同梱されたエンジンの版。実験実行側（SVNの scorelib）と一致しているかの確認用",
+        )
 
     _offer_draft_restore()
     warning = st.session_state.pop("restore_warning", None)

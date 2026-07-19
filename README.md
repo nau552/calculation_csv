@@ -107,6 +107,14 @@ python scripts/convert_dvtbudget_coef.py sample.py dvtbudget_coef.jsonc
 .venv/Scripts/streamlit run ui/app.py
 ```
 
+**配置方針**（詳細は `score_gui_ui_design.md` 2.1節）: コードの正は git（本リポジトリ、
+UI+エンジン一体）。実験実行用に **SVN へは `scorelib/` + `custom_parts.py` のみを
+リリース時に同期登録**する。一般ユーザ向けの正式な形は「サーバでUIを1つ立てて共用+
+一式zipアップロード」（ユーザの環境構築なし）で、個人でのUI起動は開発者向けモード。
+UIはエンジンに同梱依存する（検証・軸候補・テスト計算をエンジンのコードそのもので行う
+設計のため分割しない）。エンジン版は `scorelib.__version__` で管理し、UIサイドバーと
+CLI（stderr / `--version`）に表示される — SVN側エンジンとの版ズレ確認用。
+
 サイドバーで切り替える5画面（詳細は `score_gui_ui_design.md`）:
 
 1. **データ読み込み** — **同系統の過去実験の測定結果ディレクトリ**（result_tmp相当）を
