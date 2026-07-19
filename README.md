@@ -1,7 +1,7 @@
 # scorelib — スコア計算エンジン (score_gui Phase1 バックエンド)
 
 `score_gui.md` の仕様・`score_gui_design.md` の設計に基づく、スコア／スコアパーツ計算エンジンの実装。
-Streamlit UI（未実装・次ステップ）が出力する設定を受け取り、実測データからスコアを計算する。
+`score_gui_ui_design.md` に基づく Streamlit スコア設計UI（`ui/`）を同梱する。
 
 ## ディレクトリ構成
 
@@ -16,6 +16,12 @@ scorelib/                   # 本体パッケージ
   dvtbudget.py              # dVtBudget変換
   expression.py             # 自由記述式の評価（simpleeval）
   cli.py                    # サブプロセス起動用エントリポイント
+  introspect.py             # 過去実験の出力からtype一覧・軸一覧・値候補を導出（UIの情報源。
+                            #   streamlit非依存の純粋関数なのでscorelib側に置く）
+ui/                         # Streamlitスコア設計UI（エンジンとはディレクトリを分離）
+  app.py                    # エントリポイント。サイドバーで5画面を切替
+  state.py                  # 編集状態の純粋ロジック（雛形生成・検証・下書き保存等。pytest対象）
+  widgets.py                # 集計指示エディタ等の画面部品
 scripts/
   convert_dvtbudget_coef.py # dVtBudget係数のPythonファイル → jsonc 変換
 tests/
@@ -30,6 +36,9 @@ tests/
   test_expression.py        # 式評価のテスト（サンドボックス性含む）
   test_jsonc.py             # jsonc読み書き・ラウンドトリップ
   test_cli.py               # 実データを使ったエンドツーエンドテスト
+  test_introspect.py        # type検出・軸カタログ・値候補の導出
+  test_ui_state.py          # UI編集ロジック（雛形が編集なしで計算可能なこと等）
+  test_ui_app.py            # Streamlit AppTestによる画面のスモークテスト
 pyproject.toml              # パッケージ定義（pip install -e . 用）
 .venv/                      # ローカルvenv（Python 3.11 + polars/pydantic/simpleeval/pytest）
 ```
@@ -91,6 +100,43 @@ result = compute_score_file("result_tmp", config, coef, temps)
 ```bash
 python scripts/convert_dvtbudget_coef.py sample.py dvtbudget_coef.jsonc
 ```
+
+## スコア設計UI（Streamlit）
+
+```bash
+.venv/Scripts/streamlit run ui/app.py
+```
+
+サイドバーで切り替える5画面（詳細は `score_gui_ui_design.md`）:
+
+1. **データ読み込み** — **同系統の過去実験の測定結果ディレクトリ**（result_tmp相当）を
+   指定して読み込み、type一覧・軸一覧・値候補を導出する。optimization設定jsonc
+   （Generation / WLgroup / 既存スコア設定）と dVtBudget係数jsonc は通常 result_tmp に
+   含まれないため別の任意入力欄でパス指定する（ディレクトリ内にあれば自動検出）。
+   値候補は map の全語彙ではなく**実データに存在する値だけ**（map順）に絞られる
+2. **スコアパーツ編集** — 「追加」で**そのまま計算が通る雛形**（全軸をデフォルト順に並べ、
+   カテゴリ軸は先頭候補のfilter・数値軸はmean・相対化ON）を生成し、差分編集していく。
+   order は要約行リスト（✎で選択・上下ボタン・削除）＋選択エントリの常時表示エディタ。
+   複合軸の束ね、定数加算ステップ（`__offset__`）の追加、opごとに必要な入力欄だけを
+   出す集計エディタ。相対化のON/OFF・split_axis変更時は order との整合を自動で取る
+   （OFFにすると split_axis が filter False で order に復帰する）。
+   分母の事前集計にも同じ集計エディタをフルで使える。
+   編集のたびにエンジンと同一の検証を実行
+3. **選択セット管理** — ref で使い回す選択リストの作成・編集・**別名で保存**・削除
+   （参照中のセットは削除不可）
+4. **スコア合成・制約** — expression の編集（パーツ名クリック挿入・式の即時検証）と
+   constraintThreshold の行エディタ（動的制約 active/type/coef 対応）
+5. **テスト実行・エクスポート** — 実データディレクトリを指定して `compute_score_file` を
+   直接呼び、Score+全パーツ値を表示。`score.jsonc`（selectionSets同梱）や
+   パーツ単体（参照セット同梱）のダウンロード、既存jsoncのインポート
+
+編集内容は**操作のたび**に `~/.scorelib_draft.jsonc` へ自動保存され、次回起動時に復元を提案する。
+サイドバーの「↩ 元に戻す」で直近20操作までアンドゥできる。
+
+**ドラッグ&ドロップ並べ替え**: `streamlit-sortables` が入っていると（`pip install -e ".[ui]"` で入る）、
+パーツ一覧と order の一覧が**常時ドラッグ可能なリスト**になる（モード切替なし。
+編集対象の選択はプルダウン）。コミュニティ製コンポーネントのため soft dependency とし、
+未インストール・故障時は自動的に ✎/上下ボタンの行リスト表示になる（アプリ本体は影響を受けない）。
 
 ## config.jsonc の書き方
 

@@ -10,7 +10,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+# ui: the Streamlit score-design app (ui/app.py); the engine itself never needs it.
+# streamlit-sortables is a soft dependency: without it the app falls back
+# from drag&drop reordering to up/down buttons.
+ui = ["streamlit>=1.50", "streamlit-sortables>=0.3"]
+dev = ["pytest>=8.0", "streamlit>=1.50", "streamlit-sortables>=0.3"]
 
 [build-system]
 requires = ["setuptools>=61.0"]
