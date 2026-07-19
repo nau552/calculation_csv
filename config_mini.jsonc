@@ -50,7 +50,8 @@
                 }
             },
 
-            // 2) WLgroup 単位の worst を見る例（WLgroup 内で平均 → グループ間で最大値）
+            // 2) WLgroup 単位の worst を見る例。WLgroup は optimization.WLgroup 由来の
+            //    派生軸で、order の好きな位置に置いて畳める（ここでは WL 平均の直後に max）
             {
                 "name": "FBC_upper1_A2B_worstWLg",
                 "type": "FBC",
@@ -60,12 +61,12 @@
                     "denominator_when": false,
                     "denominator_offset": 1
                 },
-                "order": ["Read_Label", "State", "WL", "STR", "Board", "Chip", "Block"],
+                "order": ["Read_Label", "State", "WL", "WLgroup", "STR", "Board", "Chip", "Block"],
                 "aggregations": {
                     "Read_Label": {"op": "filter", "value": "read_level_upper1"},
                     "State": {"op": "filter", "value": "A2B"},
-                    "WL": {"op": "group_reduce", "group_def": "WLgroup",
-                           "inner_op": "mean", "outer_op": "max"},
+                    "WL": {"op": "mean"},
+                    "WLgroup": {"op": "max"},
                     "STR": {"op": "mean"},
                     "Board": {"op": "mean"},
                     "Chip": {"op": "mean"},

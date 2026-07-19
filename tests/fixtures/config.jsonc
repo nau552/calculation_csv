@@ -32,11 +32,14 @@
                         {"axis": "STR", "op": "mean"}
                     ]
                 },
-                "order": ["Read_Label", "State", "WL", "STR", "Board", "Chip", "Block"],
+                "order": ["Read_Label", "State", "WL", "WLgroup", "STR", "Board", "Chip", "Block"],
                 "aggregations": {
                     "Read_Label": {"op": "filter", "value": "read_level_upper1"},
                     "State": {"op": "filter", "value": "A2B"},
-                    "WL": {"op": "group_reduce", "group_def": "WLgroup", "inner_op": "mean", "outer_op": "max"},
+                    // WLgroup is a derived group axis (from optimization.WLgroup):
+                    // WL mean inside each group, then max across groups
+                    "WL": {"op": "mean"},
+                    "WLgroup": {"op": "max"},
                     "STR": {"op": "mean", "value": [0, 1]},
                     "Board": {"op": "mean"},
                     "Chip": {"op": "mean"},

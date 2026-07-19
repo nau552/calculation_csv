@@ -89,6 +89,28 @@ def test_change_split_axis_swaps_order_membership(catalog):
     assert "Read_Override" in part["order"]  # old split axis returned to order
 
 
+def test_disable_relative_removes_explicit_relative_step(catalog):
+    """Feature pair: the UI lets users place __relative__ in order explicitly;
+    turning relative off must remove it too (a __relative__ without a
+    relative config is a validation error)."""
+    part = state.part_skeleton("p", "FBC", catalog)
+    part["order"].insert(0, "__relative__")
+    state.disable_relative(part, catalog)
+    assert "__relative__" not in part["order"]
+    assert state.validate_part(part) == []
+
+
+def test_drop_stale_virtual_steps_on_type_change(catalog):
+    part = state.part_skeleton("p", "FBC", catalog)
+    part["order"].insert(0, "__dvtbudget__")
+    part["type"] = "dVtBudget"
+    assert state.drop_stale_virtual_steps(part) is None  # still consistent
+    part["type"] = "FBC"
+    assert state.drop_stale_virtual_steps(part) == "__dvtbudget__"
+    assert "__dvtbudget__" not in part["order"]
+    assert state.validate_part(part) == []
+
+
 def test_disable_relative_skips_axis_already_in_combined_entry(catalog):
     part = state.part_skeleton("p", "FBC", catalog)
     part["order"].insert(0, "State&Read_Override")
@@ -105,12 +127,58 @@ def test_unique_part_name(sf):
 
 
 def test_duplicate_part(sf, catalog):
+    """Input shaped like production: parts carry a _uid by the time the app
+    duplicates them (a shared _uid means shared widgets — the two parts
+    would silently overwrite each other's name/relative)."""
     sf["score_parts"].append(state.part_skeleton("p", "FBC", catalog))
+    state.ensure_uids(sf)
     idx = state.duplicate_part(sf, 0)
+    state.ensure_uids(sf)
     assert idx == 1
     assert sf["score_parts"][1]["name"] == "p_1"
+    assert sf["score_parts"][0]["_uid"] != sf["score_parts"][1]["_uid"]
     sf["score_parts"][1]["aggregations"]["WL"]["op"] = "sum"
     assert sf["score_parts"][0]["aggregations"]["WL"]["op"] == "mean"  # deep copy
+
+
+def test_part_list_labels_marker_handle_and_warning(sf, catalog):
+    """The drag-list labels carry the ⠿ handle, the ⚠ validation marker and
+    the ← 編集中 marker. The D&D component itself is invisible to AppTest,
+    so this pure builder is where the logic is verified."""
+    a = state.part_skeleton("a", "FBC", catalog)
+    b = state.part_skeleton("b", "FBC", catalog)
+    sf["score_parts"] = [a, b]
+    state.ensure_uids(sf)
+    labels = state.part_list_labels(sf, b["_uid"], {a["_uid"]})
+    assert labels[0].startswith("⠿ ⚠ 1. a（")
+    assert "編集中" not in labels[0]
+    assert labels[1].startswith("⠿ 2. b（")
+    assert labels[1].endswith("← 編集中")
+
+
+def test_part_select_labels_unique_even_with_duplicate_names(sf, catalog):
+    """Streamlit's selectbox matches items by displayed label: two parts
+    accidentally sharing a name must still get distinct pulldown labels,
+    or clicking one selects the other (real bug)."""
+    a = state.part_skeleton("dAR_margin", "FBC", catalog)
+    b = state.part_skeleton("dAR_margin", "FBC", catalog)
+    sf["score_parts"] = [a, b]
+    state.ensure_uids(sf)
+    labels = state.part_select_labels(sf, {a["_uid"], b["_uid"]})
+    assert labels[a["_uid"]] == "1. ⚠ dAR_margin"
+    assert labels[b["_uid"]] == "2. ⚠ dAR_margin"
+    assert len(set(labels.values())) == 2
+
+
+def test_ensure_uids_repairs_duplicated_ids(sf, catalog):
+    """Drafts saved while the duplicate-_uid bug existed must heal on load."""
+    a = state.part_skeleton("a", "FBC", catalog)
+    b = state.part_skeleton("b", "FBC", catalog)
+    a["_uid"] = b["_uid"] = "same1234"
+    sf["score_parts"] = [a, b]
+    state.ensure_uids(sf)
+    assert a["_uid"] != b["_uid"]
+    assert a["_uid"] == "same1234"  # first keeper stays stable
 
 
 def test_move_entry():
@@ -148,6 +216,68 @@ def test_save_set_as(sf):
     assert sf["selectionSets"]["ud"][0]["State"] == "R2A"  # deep copy
     with pytest.raises(ValueError, match="既に存在"):
         state.save_set_as(sf, "ud", "ud2")
+
+
+# ----------------------------------------------------------------- group defs
+
+def test_import_config_group_defs(sf):
+    wlgroup = {"g1": (0, 3), "g2": (4, 8)}
+    assert state.import_config_group_defs(sf, wlgroup) is True
+    assert sf["groupDefs"]["WLgroup"] == {"axis": "WL", "groups": {"g1": [0, 3], "g2": [4, 8]}}
+    # importing again (or editing first) must not overwrite the editable copy
+    sf["groupDefs"]["WLgroup"]["groups"]["g1"] = [0, 5]
+    assert state.import_config_group_defs(sf, wlgroup) is False
+    assert sf["groupDefs"]["WLgroup"]["groups"]["g1"] == [0, 5]
+    assert state.import_config_group_defs(sf, None) is False
+
+
+def test_group_def_delete_guarded_by_references(sf, catalog):
+    part = state.part_skeleton("p", "FBC", catalog)
+    part["order"].append("WLgroup")
+    part["aggregations"]["WLgroup"] = {"op": "max"}
+    sf["score_parts"].append(part)
+    sf["groupDefs"]["WLgroup"] = {"axis": "WL", "groups": {"g1": [0, 100]}}
+    assert state.parts_referencing_group_def(sf, "WLgroup") == ["p"]
+    with pytest.raises(ValueError, match="参照されている"):
+        state.delete_group_def(sf, "WLgroup")
+    sf["score_parts"].clear()
+    state.delete_group_def(sf, "WLgroup")
+    assert sf["groupDefs"] == {}
+
+
+def test_add_group_def_rejects_collisions(sf, catalog):
+    with pytest.raises(ValueError, match="入力してください"):
+        state.add_group_def(sf, "  ", "WL", set(catalog))
+    with pytest.raises(ValueError, match="軸名と衝突"):
+        state.add_group_def(sf, "WL", "WL", set(catalog))
+    state.add_group_def(sf, "STRgroup", "STR", set(catalog))
+    assert sf["groupDefs"]["STRgroup"] == {"axis": "STR", "groups": {}}
+    with pytest.raises(ValueError, match="既に存在"):
+        state.add_group_def(sf, "STRgroup", "STR", set(catalog))
+
+
+def test_export_part_bundles_group_defs(sf, catalog):
+    part = state.part_skeleton("p", "FBC", catalog)
+    part["order"].append("WLgroup")
+    part["aggregations"]["WLgroup"] = {"op": "max"}
+    sf["score_parts"].append(part)
+    sf["groupDefs"]["WLgroup"] = {"axis": "WL", "groups": {"g1": [0, 100]}}
+    sf["groupDefs"]["unused"] = {"axis": "STR", "groups": {"a": [0, 1]}}
+    back = state.import_score_file(state.export_part(sf, 0))
+    assert list(back["groupDefs"]) == ["WLgroup"]  # only the referenced def
+
+
+def test_run_test_compute_with_group_axis(sf, catalog, data_dir_mini):
+    """End-to-end through the UI path: a part using the derived group axis
+    computes on real data (the user's late-group-reduction scenario)."""
+    part = state.part_skeleton("p", "FBC", catalog)
+    part["order"].append("WLgroup")
+    part["aggregations"]["WLgroup"] = {"op": "max"}
+    sf["score_parts"].append(part)
+    sf["expression"] = "p"
+    sf["groupDefs"]["WLgroup"] = {"axis": "WL", "groups": {"low": [0, 10], "high": [11, 1000]}}
+    result = state.run_test_compute(sf, str(data_dir_mini))
+    assert isinstance(result["p"], float)
 
 
 # ---------------------------------------------------------------- validation
@@ -244,6 +374,188 @@ def test_build_context_in_dir_discovery_still_works(tmp_path, data_dir_mini, dvt
     ctx = state.build_context(str(d))
     assert ctx["coef_source"] == "自動検出"
     assert "dVtBudget" in ctx["part_types"]
+
+
+# ----------------------------------------------------------- generation info
+
+def test_build_context_geninfo_explicit(data_dir_mini, fixtures_dir):
+    ctx = state.build_context(str(data_dir_mini), geninfo_path=str(fixtures_dir / "B9LS.json"))
+    assert ctx["geninfo_source"] == "指定"
+    assert state.axis_counts(ctx["geninfo"]) == {"WL": 6, "STR": 3}
+
+
+def test_build_context_geninfo_discovered_via_generation(tmp_path, data_dir_mini, fixtures_dir):
+    d = tmp_path / "run"
+    shutil.copytree(data_dir_mini, d)
+    shutil.copy(fixtures_dir / "config.jsonc", d / "config.jsonc")  # Generation: B9LS
+    shutil.copy(fixtures_dir / "B9LS.json", d / "B9LS.json")
+    ctx = state.build_context(str(d))
+    assert ctx["geninfo_source"] == "自動検出"
+    assert ctx["geninfo"]["numWLs"] == 6
+
+
+def test_build_context_missing_geninfo_rejected(data_dir_mini):
+    with pytest.raises(ValueError, match="世代情報json が見つかりません"):
+        state.build_context(str(data_dir_mini), geninfo_path="no/such.json")
+
+
+def test_group_def_warnings(sf):
+    geninfo = {"numWLs": 6, "numStrings": 3}
+    sf["groupDefs"]["WLgroup"] = {"axis": "WL", "groups": {"g1": [0, 3], "g2": [4, 8]}}
+    warns = state.group_def_warnings(sf, geninfo)
+    assert any("範囲外" in w and "g2(4–8)" in w for w in warns)
+
+    sf["groupDefs"]["WLgroup"]["groups"] = {"g1": [0, 3]}
+    warns = state.group_def_warnings(sf, geninfo)
+    assert any("4–5" in w and "どのグループにも入りません" in w for w in warns)
+
+    # matching ranges -> silent; axes the json does not describe -> skipped
+    sf["groupDefs"]["WLgroup"]["groups"] = {"g1": [0, 3], "g2": [4, 5]}
+    sf["groupDefs"]["PageG"] = {"axis": "Page", "groups": {"x": [0, 99]}}
+    assert state.group_def_warnings(sf, geninfo) == []
+    assert state.group_def_warnings(sf, None) == []
+
+
+# --------------------------------------------------- readable error messages
+
+def test_validation_error_names_the_part(sf):
+    sf["score_parts"].append(
+        {"name": "myPart", "type": "FBC", "order": ["State"],
+         "aggregations": {"State": {"op": "filter"}}}
+    )
+    problems = state.validate_score_file(sf)
+    assert any("パーツ 'myPart'" in p for p in problems)
+
+
+def test_import_error_names_the_part():
+    import json
+
+    text = json.dumps(
+        {
+            "score_parts": [
+                {"name": "old_part", "type": "FBC", "order": ["WL"],
+                 "aggregations": {"WL": {"op": "group_reduce", "group_def": "WLgroup"}}}
+            ],
+            "expression": "old_part",
+        }
+    )
+    with pytest.raises(ValueError, match="old_part"):
+        state.import_score_file(text)
+
+
+# -------------------------------------------------------- custom parts / zip
+
+@pytest.fixture
+def custom_parts_path(fixtures_dir):
+    return fixtures_dir / "custom_parts.py"
+
+
+def test_build_context_custom_explicit(data_dir_mini, custom_parts_path):
+    ctx = state.build_context(str(data_dir_mini), custom_path=str(custom_parts_path))
+    assert ctx["custom_source"] == "指定"
+    assert "fixed_value" in ctx["custom_functions"]
+    assert "custom" in ctx["part_types"]
+    assert "custom" not in ctx["catalogs"]  # pseudo-type, no axis catalog
+
+
+def test_build_context_without_custom_hides_type(data_dir_mini):
+    ctx = state.build_context(str(data_dir_mini))
+    assert "custom" not in ctx["part_types"]
+
+
+def test_custom_part_skeleton_and_compute(sf, data_dir_mini, custom_parts_path):
+    part = state.custom_part_skeleton("p", ["mean_fbc_plus_offset"])
+    part["params"] = {"offset": 5}
+    sf["score_parts"].append(part)
+    sf["expression"] = "p"
+    assert state.validate_score_file(sf) == []
+    result = state.run_test_compute(sf, str(data_dir_mini), custom_path=str(custom_parts_path))
+    assert isinstance(result["p"], float)
+
+
+def test_switch_part_type_strips_mismatched_fields(sf, catalog):
+    part = state.part_skeleton("p", "FBC", catalog)
+    state.switch_part_type(part, "custom")
+    assert "order" not in part and "relative" not in part and "aggregations" not in part
+    assert part["function"] == "p"
+    assert state.validate_part(part) == []
+    state.switch_part_type(part, "FBC")
+    assert "function" not in part and "params" not in part
+    assert part["order"] == []
+    assert state.validate_part(part) == []
+
+
+def _bundle_zip(data_dir_mini, fixtures_dir, custom_parts_path, layout) -> bytes:
+    """layout: arcname prefix for the measurement csvs (companions at root)."""
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for f in data_dir_mini.iterdir():
+            z.write(f, f"{layout}/{f.name}")
+        z.write(fixtures_dir / "config.jsonc", "bundle/config.jsonc")
+        z.write(fixtures_dir / "B9LS.json", "bundle/B9LS.json")
+        z.write(custom_parts_path, "bundle/custom_parts.py")
+    return buf.getvalue()
+
+
+def test_bundle_zip_flat_layout(data_dir_mini, fixtures_dir, custom_parts_path):
+    """Everything in one folder: the folder itself is the data dir."""
+    data = _bundle_zip(data_dir_mini, fixtures_dir, custom_parts_path, "bundle")
+    found = state.locate_bundle_inputs(state.extract_bundle_zip(data))
+    ctx = state.build_context(
+        found["data_dir"], found["config_path"], found["coef_path"],
+        found["geninfo_path"], found["custom_path"],
+    )
+    assert ctx["types"] == ["FBC", "tR"]
+    assert ctx["geninfo"]["numWLs"] == 6
+    assert "custom" in ctx["part_types"]
+
+
+def test_bundle_zip_nested_layout(data_dir_mini, fixtures_dir, custom_parts_path):
+    """The GUI's natural layout: measurement csvs inside a result_tmp
+    subfolder, companion files at the bundle root — subdirectories are
+    searched, so this must load too."""
+    data = _bundle_zip(data_dir_mini, fixtures_dir, custom_parts_path, "bundle/result_tmp")
+    found = state.locate_bundle_inputs(state.extract_bundle_zip(data))
+    assert found["data_dir"].endswith("result_tmp")
+    assert found["config_path"] and found["geninfo_path"] and found["custom_path"]
+    ctx = state.build_context(
+        found["data_dir"], found["config_path"], found["coef_path"],
+        found["geninfo_path"], found["custom_path"],
+    )
+    assert ctx["types"] == ["FBC", "tR"]
+    assert "custom" in ctx["part_types"]
+
+
+def test_bundle_zip_ambiguous_data_dirs_rejected(data_dir_mini, fixtures_dir, custom_parts_path):
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for f in data_dir_mini.iterdir():
+            z.write(f, f"bundle/epoch1/{f.name}")
+            z.write(f, f"bundle/epoch2/{f.name}")
+    with pytest.raises(ValueError, match="測定結果ディレクトリの候補が複数"):
+        state.locate_bundle_inputs(state.extract_bundle_zip(buf.getvalue()))
+
+
+def test_in_dir_discovery_rejects_ambiguous_configs(tmp_path, data_dir_mini, fixtures_dir):
+    """Two files matching the run-config shape: refuse to pick silently
+    (previously the alphabetically first won without a word)."""
+    import shutil as sh
+
+    d = tmp_path / "run"
+    sh.copytree(data_dir_mini, d)
+    sh.copy(fixtures_dir / "config.jsonc", d / "config_a.jsonc")
+    sh.copy(fixtures_dir / "config.jsonc", d / "config_b.jsonc")
+    with pytest.raises(ValueError, match="候補が複数"):
+        state.build_context(str(d))
+    # explicit path resolves the ambiguity
+    ctx = state.build_context(str(d), config_path=str(d / "config_a.jsonc"))
+    assert ctx["config_source"] == "指定"
 
 
 # ------------------------------------------------------------- draft / export

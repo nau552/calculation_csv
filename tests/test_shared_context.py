@@ -90,9 +90,9 @@ def test_prefix_shared_across_states(data_dir_mini, dvt_inputs, monkeypatch):
     relative_calls = []
     original = cli.apply_relative
 
-    def counting(lf, value_col, relative, group_defs=None):
+    def counting(lf, value_col, relative):
         relative_calls.append(1)
-        return original(lf, value_col, relative, group_defs)
+        return original(lf, value_col, relative)
 
     monkeypatch.setattr(cli, "apply_relative", counting)
 

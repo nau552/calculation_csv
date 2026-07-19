@@ -1,0 +1,7 @@
+{
+    "numWLs": 6,
+    "jointLogicalWLs": [2],
+    "numTiers": 2,
+    "numStrings": 3,
+    "ROP": "True"
+}

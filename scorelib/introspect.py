@@ -47,11 +47,14 @@ def detect_types(data_dir: str | Path) -> List[str]:
     return sorted(types)
 
 
-def find_dvtbudget_coef(data_dir: str | Path) -> Optional[Path]:
-    """A jsonc file whose content looks like a dVtBudget coefficient table
-    (generation -> temperature -> state -> {a, b})."""
+def find_dvtbudget_coefs(data_dir: str | Path) -> List[Path]:
+    """Every jsonc file whose CONTENT looks like a dVtBudget coefficient
+    table (generation -> temperature -> state -> {a, b}). Identification is
+    by shape, never by filename; callers decide what to do when more than
+    one matches (the UI refuses to pick silently)."""
     from .io_jsonc import load_dvtbudget_coef
 
+    found = []
     for f in sorted(Path(data_dir).glob("*.jsonc")):
         try:
             coef = load_dvtbudget_coef(f)
@@ -61,20 +64,43 @@ def find_dvtbudget_coef(data_dir: str | Path) -> Optional[Path]:
             temps and all(states for states in temps.values()) for temps in coef.root.values()
         ):
             # require the {a, b} leaf shape to have matched at least one entry
-            return f
-    return None
+            found.append(f)
+    return found
 
 
-def find_run_config(data_dir: str | Path) -> Optional[Path]:
-    """A jsonc file with an optimization{} block (sample.jsonc shape)."""
+def find_dvtbudget_coef(data_dir: str | Path) -> Optional[Path]:
+    found = find_dvtbudget_coefs(data_dir)
+    return found[0] if found else None
+
+
+def find_generation_info(data_dir: str | Path, generation: Optional[str]) -> Optional[Path]:
+    """The per-generation chip-info json ({Generation}.json: numWLs,
+    numStrings, ...) when it happens to sit in the data directory."""
+    if not generation:
+        return None
+    p = Path(data_dir) / f"{generation}.json"
+    return p if p.is_file() else None
+
+
+def find_run_configs(data_dir: str | Path) -> List[Path]:
+    """Every jsonc file whose CONTENT has a top-level optimization{} block
+    (sample.jsonc shape). Shape-based like find_dvtbudget_coefs; the two
+    shapes are mutually exclusive (a coef table has no "optimization" key,
+    a run config never validates as a 3-level {a, b} table)."""
+    found = []
     for f in sorted(Path(data_dir).glob("*.jsonc")):
         try:
             content = jsonc.load(f)
         except Exception:
             continue
         if isinstance(content, dict) and "optimization" in content:
-            return f
-    return None
+            found.append(f)
+    return found
+
+
+def find_run_config(data_dir: str | Path) -> Optional[Path]:
+    found = find_run_configs(data_dir)
+    return found[0] if found else None
 
 
 def available_part_types(data_dir: str | Path) -> List[str]:

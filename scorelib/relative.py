@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import polars as pl
 
-from .aggregate import GroupDefs, apply_axis_op
+from .aggregate import apply_axis_op
 from .models import RelativeConfig
 
 
@@ -25,7 +25,6 @@ def apply_relative(
     lf: pl.LazyFrame,
     value_col: str,
     relative: RelativeConfig,
-    group_defs: GroupDefs | None = None,
 ) -> pl.LazyFrame:
     axis = relative.split_axis
 
@@ -35,7 +34,7 @@ def apply_relative(
     for step in relative.denominator_pre_aggregation:
         schema_cols = denominator.collect_schema().names()
         group_keys = [c for c in schema_cols if c not in (value_col, step.axis)]
-        denominator = apply_axis_op(denominator, value_col, step.axis, step, group_keys, group_defs)
+        denominator = apply_axis_op(denominator, value_col, step.axis, step, group_keys)
 
     denominator = denominator.rename({value_col: "__denom__"})
     join_keys = [c for c in denominator.collect_schema().names() if c != "__denom__"]

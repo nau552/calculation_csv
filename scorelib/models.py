@@ -12,6 +12,10 @@ from pydantic import BaseModel, Field, RootModel, model_validator
 # Separator for combined axes in `order` entries (e.g. "State&Read_Label").
 COMBINED_SEP = "&"
 
+# ScorePart.type value that calls a user-defined python function
+# (custom_parts.py, see scorelib/custom.py) instead of the pipeline.
+CUSTOM_TYPE = "custom"
+
 AggOp = Literal[
     "filter",
     # mean/sum/min/max reduce the axis; an optional `value` list restricts
@@ -21,7 +25,6 @@ AggOp = Literal[
     "sum",
     "min",
     "max",
-    "group_reduce",
     "expr",
     # collapse the axis by combining exactly two selections (ordered):
     # {"op": "diff", "value": [a, b]} -> value(a) - value(b)
@@ -63,15 +66,18 @@ class AggregationSpec(BaseModel):
     # the resolved content passes exactly the same shape checks as an inline
     # value would.
     ref: Optional[str] = None
-    group_def: Optional[str] = None
-    inner_op: Optional[Literal["mean", "sum", "min", "max"]] = None
-    outer_op: Optional[Literal["mean", "sum", "min", "max"]] = None
     expr: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
     def _normalize_legacy_spellings(cls, data):
         if isinstance(data, dict):
+            if data.get("op") == "group_reduce":
+                raise ValueError(
+                    "op 'group_reduce' has been removed; define the group in groupDefs and "
+                    "put its name (e.g. 'WLgroup') in `order` as a derived axis instead "
+                    "(inner op on the source axis, outer op on the group axis)"
+                )
             if data.get("op") in _SUBSET_ALIASES:
                 data = {**data, "op": _SUBSET_ALIASES[data["op"]]}
             if data.get("values") is not None:
@@ -88,7 +94,7 @@ class AggregationSpec(BaseModel):
         if self.ref is not None:
             if v is not None:
                 raise ValueError("give either 'value' or 'ref' (a named selection set), not both")
-            if op in ("add", "expr", "group_reduce"):
+            if op in ("add", "expr"):
                 raise ValueError(f"op '{op}' takes no selections, so 'ref' is not applicable")
             # value-shape checks run again after the ref is resolved
             return self
@@ -130,11 +136,6 @@ class AggregationSpec(BaseModel):
                 raise ValueError("op 'expr' requires 'expr'")
             if v is not None:
                 raise ValueError("op 'expr' takes no 'value'; select inside the expression via by[...]")
-        elif op == "group_reduce":
-            if not self.group_def:
-                raise ValueError("op 'group_reduce' requires 'group_def'")
-            if v is not None:
-                raise ValueError("op 'group_reduce' takes no 'value'")
         return self
 
 
@@ -185,6 +186,24 @@ class ScorePart(BaseModel):
     relative: Optional[RelativeConfig] = None
     order: List[str] = Field(default_factory=list)
     aggregations: Dict[str, AggregationSpec] = Field(default_factory=dict)
+    # type="custom" only: the function in custom_parts.py to call (defaults
+    # to the part name) and the params dict handed to it
+    function: Optional[str] = None
+    params: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def _check_custom_fields(self):
+        if self.type == CUSTOM_TYPE:
+            if self.order or self.aggregations or self.relative:
+                raise ValueError(
+                    f"custom part '{self.name}' takes no order/aggregations/relative — "
+                    "its function computes the value directly"
+                )
+        elif self.function is not None or self.params:
+            raise ValueError(
+                f"'function'/'params' are only valid on type='{CUSTOM_TYPE}' (part '{self.name}')"
+            )
+        return self
 
     @model_validator(mode="after")
     def _check_combined_axis_selections(self):
@@ -250,6 +269,18 @@ class ScorePart(BaseModel):
         return ScorePart.model_validate(data)
 
 
+class GroupDef(BaseModel):
+    """A derived axis: rows get a group label from integer ranges over a
+    source axis (e.g. WLgroup: WL 0-3 -> "WLgroup01"). The group column is
+    created at data-load time, so the definition's name can be placed in a
+    part's `order` and aggregated at any position like a real axis (e.g.
+    WL mean -> Board max -> WLgroup max). The name must differ from the
+    source axis."""
+
+    axis: str
+    groups: Dict[str, Tuple[int, int]] = Field(default_factory=dict)
+
+
 class ConstraintThresholdEntry(BaseModel):
     value: float
     active: Optional[str] = None
@@ -268,8 +299,9 @@ class ScoreFile(BaseModel):
     expression: str = ""
     constraintThreshold: Dict[str, ConstraintThresholdEntry] = Field(default_factory=dict)
     # bundled so an exported score file stays self-contained when its parts
-    # use `ref`
+    # use `ref` or derived group axes
     selectionSets: Dict[str, List[Any]] = Field(default_factory=dict)
+    groupDefs: Dict[str, GroupDef] = Field(default_factory=dict)
 
 
 class OptimizationConfig(BaseModel):
@@ -277,6 +309,7 @@ class OptimizationConfig(BaseModel):
     constraintThreshold: Dict[str, ConstraintThresholdEntry] = Field(default_factory=dict)
     WLgroup: Dict[str, Tuple[int, int]] = Field(default_factory=dict)
     selectionSets: Dict[str, List[Any]] = Field(default_factory=dict)
+    groupDefs: Dict[str, GroupDef] = Field(default_factory=dict)
     score_parts: List[ScorePart] = Field(default_factory=list)
     expression: str = ""
 
@@ -293,10 +326,17 @@ class RunConfig(BaseModel):
             expression=self.optimization.expression,
             constraintThreshold=self.optimization.constraintThreshold,
             selectionSets=self.optimization.selectionSets,
+            groupDefs=self.optimization.groupDefs,
         )
 
-    def group_defs(self) -> Dict[str, Dict[str, Tuple[int, int]]]:
-        return {"WLgroup": self.optimization.WLgroup}
+    def group_defs(self) -> Dict[str, GroupDef]:
+        """All group definitions: the legacy optimization.WLgroup (implicitly
+        a definition over WL) plus groupDefs, which wins on a name clash."""
+        defs: Dict[str, GroupDef] = {}
+        if self.optimization.WLgroup:
+            defs["WLgroup"] = GroupDef(axis="WL", groups=self.optimization.WLgroup)
+        defs.update(self.optimization.groupDefs)
+        return defs
 
 
 class DvtBudgetCoefEntry(BaseModel):

@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import ValidationError
 
+from scorelib import custom as scorelib_custom
 from scorelib import introspect, io_jsonc, jsonc
 from scorelib.expression import evaluate_expression
 from scorelib.models import COMBINED_SEP, ScoreFile
@@ -40,15 +41,30 @@ _LAST_AXES = ["Board", "Chip", "Block"]
 # ---------------------------------------------------------------- score file
 
 def empty_score_file() -> Dict[str, Any]:
-    return {"score_parts": [], "expression": "", "constraintThreshold": {}, "selectionSets": {}}
+    return {
+        "score_parts": [],
+        "expression": "",
+        "constraintThreshold": {},
+        "selectionSets": {},
+        "groupDefs": {},
+    }
 
 
 def ensure_uids(score_file: Dict[str, Any]) -> None:
     """Give each part a stable internal id used for widget keys (index-based
     keys would leak state across parts after a delete). pydantic ignores the
-    extra field, so validation and export are unaffected."""
+    extra field, so validation and export are unaffected.
+
+    Duplicate ids are regenerated: two parts sharing an id would share every
+    widget (name field, relative checkbox, ...), so editing one would silently
+    rewrite the other. Also repairs drafts saved while that bug existed."""
+    seen: set = set()
     for p in score_file["score_parts"]:
-        p.setdefault("_uid", uuid.uuid4().hex[:8])
+        uid = p.get("_uid")
+        if not uid or uid in seen:
+            uid = uuid.uuid4().hex[:8]
+            p["_uid"] = uid
+        seen.add(uid)
 
 
 def part_names(score_file: Dict[str, Any]) -> List[str]:
@@ -109,6 +125,35 @@ def part_skeleton(name: str, type_: str, catalog: Dict[str, Optional[list]]) -> 
     return part
 
 
+def custom_part_skeleton(name: str, functions: List[str]) -> Dict[str, Any]:
+    """A new type="custom" part: no pipeline fields, just the function to
+    call (first available one) and an empty params dict."""
+    return {
+        "name": name,
+        "type": "custom",
+        "function": functions[0] if functions else name,
+        "params": {},
+    }
+
+
+def switch_part_type(part: Dict[str, Any], new_type: str) -> Optional[str]:
+    """Adjust a part's fields for its new type; returns a user notice or
+    None. custom parts must not carry pipeline fields (and vice versa) —
+    the engine rejects the mix, so the UI strips it at the switch."""
+    part["type"] = new_type
+    if new_type == "custom":
+        dropped = [part.pop(k, None) for k in ("relative", "order", "aggregations")]
+        part.setdefault("function", part.get("name"))
+        part.setdefault("params", {})
+        return "集計設定を外しました（custom パーツは関数が値を返します）" if any(dropped) else None
+    part.pop("function", None)
+    part.pop("params", None)
+    part.setdefault("order", [])
+    part.setdefault("aggregations", {})
+    removed = drop_stale_virtual_steps(part)
+    return f"{removed} を order から外しました（type が dVtBudget ではないため）" if removed else None
+
+
 def _axes_in_order(part: Dict[str, Any]) -> set:
     used: set = set()
     for e in part.get("order", []):
@@ -146,12 +191,28 @@ def enable_relative(part: Dict[str, Any], catalog: Dict[str, Optional[list]]) ->
 
 def disable_relative(part: Dict[str, Any], catalog: Dict[str, Optional[list]]) -> Optional[str]:
     """Turn relative off; returns the split axis if it was restored into
-    `order` (so the UI can tell the user)."""
+    `order` (so the UI can tell the user). An explicitly placed __relative__
+    step is removed too — without a relative config it would be a validation
+    error."""
     rel = part.pop("relative", None)
     if not rel:
         return None
+    if "__relative__" in part.get("order", []):
+        part["order"].remove("__relative__")
+        part["aggregations"].pop("__relative__", None)
     axis = rel.get("split_axis")
     return axis if _restore_axis_to_order(part, axis, catalog) else None
+
+
+def drop_stale_virtual_steps(part: Dict[str, Any]) -> Optional[str]:
+    """After a type change away from dVtBudget, an explicitly placed
+    __dvtbudget__ step would be a validation error; remove it. Returns the
+    removed step name (for a UI notice) or None."""
+    if part.get("type") != "dVtBudget" and "__dvtbudget__" in part.get("order", []):
+        part["order"].remove("__dvtbudget__")
+        part["aggregations"].pop("__dvtbudget__", None)
+        return "__dvtbudget__"
+    return None
 
 
 def change_split_axis(part: Dict[str, Any], new_axis: str, catalog: Dict[str, Optional[list]]) -> None:
@@ -167,6 +228,9 @@ def change_split_axis(part: Dict[str, Any], new_axis: str, catalog: Dict[str, Op
 def duplicate_part(score_file: Dict[str, Any], index: int) -> int:
     src = score_file["score_parts"][index]
     copy = json.loads(json.dumps(src))
+    # the copy must get its own widget-key id: sharing one would make both
+    # parts share every widget's remembered state
+    copy.pop("_uid", None)
     copy["name"] = unique_part_name(score_file, base=src.get("name", "part"))
     score_file["score_parts"].append(copy)
     return len(score_file["score_parts"]) - 1
@@ -179,6 +243,60 @@ def move_entry(lst: list, index: int, delta: int) -> int:
         lst[index], lst[j] = lst[j], lst[index]
         return j
     return index
+
+
+# ---------------------------------------------------------------- group defs
+
+def import_config_group_defs(score_file: Dict[str, Any], wlgroup: Optional[Dict[str, Any]]) -> bool:
+    """Bring the config jsonc's WLgroup in as an editable definition. The
+    score file is self-contained (its groupDefs are what the engine uses);
+    the config's WLgroup is only the initial template. Returns True when the
+    definition was added."""
+    defs = score_file.setdefault("groupDefs", {})
+    if not wlgroup or "WLgroup" in defs:
+        return False
+    defs["WLgroup"] = {"axis": "WL", "groups": {k: list(v) for k, v in wlgroup.items()}}
+    return True
+
+
+def _part_axis_names(part: Dict[str, Any]) -> set:
+    """Every axis-like name a part mentions (order entries incl. combined
+    components, relative split axis, denominator pre-aggregation axes)."""
+    axes = set(_axes_in_order(part))
+    rel = part.get("relative") or {}
+    if rel.get("split_axis"):
+        axes.add(rel["split_axis"])
+    axes.update(s.get("axis") for s in rel.get("denominator_pre_aggregation", []) if s.get("axis"))
+    return axes
+
+
+def parts_referencing_group_def(score_file: Dict[str, Any], name: str) -> List[str]:
+    return [
+        p.get("name", "?")
+        for p in score_file["score_parts"]
+        if name in _part_axis_names(p)
+    ]
+
+
+def add_group_def(score_file: Dict[str, Any], name: str, axis: str, axis_names: set) -> None:
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("グループ定義名を入力してください")
+    if COMBINED_SEP in name or name.startswith("__"):
+        raise ValueError(f"グループ定義名に '{COMBINED_SEP}' や先頭の '__' は使えません")
+    defs = score_file.setdefault("groupDefs", {})
+    if name in defs:
+        raise ValueError(f"グループ定義 '{name}' は既に存在します")
+    if name in axis_names:
+        raise ValueError(f"'{name}' は軸名と衝突しています（別の名前にしてください）")
+    defs[name] = {"axis": axis, "groups": {}}
+
+
+def delete_group_def(score_file: Dict[str, Any], name: str) -> None:
+    users = parts_referencing_group_def(score_file, name)
+    if users:
+        raise ValueError(f"グループ定義 '{name}' はパーツ {users} から参照されているため削除できません")
+    score_file.get("groupDefs", {}).pop(name, None)
 
 
 # ------------------------------------------------------------- selection sets
@@ -214,12 +332,31 @@ def save_set_as(score_file: Dict[str, Any], src_name: str, new_name: str) -> Non
 
 # ------------------------------------------------------------------ validation
 
-def _format_pydantic_error(err: ValidationError) -> List[str]:
+def _format_pydantic_error(err: ValidationError, data: Optional[Dict[str, Any]] = None) -> List[str]:
+    """Readable messages. With the raw `data`, a location like
+    'score_parts.12.aggregations.WL' becomes パーツ '<name>' の aggregations.WL
+    (an index tells the user nothing about which part is broken)."""
     msgs = []
     for e in err.errors():
-        loc = ".".join(str(x) for x in e["loc"] if x != "__root__")
+        loc = [x for x in e["loc"] if x != "__root__"]
         msg = e["msg"].removeprefix("Value error, ")
-        msgs.append(f"{loc}: {msg}" if loc else msg)
+        name = None
+        rest = ""
+        if data is not None and "score_parts" in loc:
+            k = loc.index("score_parts")
+            try:
+                container: Any = data
+                for seg in loc[:k]:
+                    container = container[seg]
+                name = container["score_parts"][loc[k + 1]].get("name")
+                rest = ".".join(str(x) for x in loc[k + 2:])
+            except Exception:
+                name = None
+        if name:
+            msgs.append(f"パーツ '{name}'" + (f" の {rest}" if rest else "") + f": {msg}")
+        else:
+            joined = ".".join(str(x) for x in loc)
+            msgs.append(f"{joined}: {msg}" if joined else msg)
     return msgs
 
 
@@ -230,7 +367,7 @@ def validate_score_file(data: Dict[str, Any]) -> List[str]:
     try:
         sf = ScoreFile.model_validate(data)
     except ValidationError as err:
-        return _format_pydantic_error(err)
+        return _format_pydantic_error(err, data)
 
     problems: List[str] = []
     names = [p.name for p in sf.score_parts]
@@ -274,20 +411,29 @@ def validate_part(part: Dict[str, Any], selection_sets: Optional[Dict[str, list]
 def _resolve_optional_file(explicit: Optional[str], discover, label: str):
     """An optional companion file: an explicitly given path wins (and must
     exist); otherwise fall back to discovery inside the data directory.
-    Returns (path or None, '指定' | '自動検出' | None)."""
+    `discover` returns a candidate LIST — more than one match is an error
+    (silently taking the alphabetically first would design against the
+    wrong file). Returns (path or None, '指定' | '自動検出' | None)."""
     if explicit and str(explicit).strip():
         p = Path(str(explicit).strip()).resolve()
         if not p.is_file():
             raise ValueError(f"{label} が見つかりません: {p}")
         return p, "指定"
-    found = discover()
-    return (found, "自動検出") if found else (None, None)
+    found = list(discover())
+    if len(found) > 1:
+        raise ValueError(
+            f"{label} の候補が複数見つかりました（自動検出できません。パスを明示指定してください）: "
+            + ", ".join(str(p) for p in found)
+        )
+    return (found[0], "自動検出") if found else (None, None)
 
 
 def build_context(
     data_dir: str,
     config_path: Optional[str] = None,
     coef_path: Optional[str] = None,
+    geninfo_path: Optional[str] = None,
+    custom_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Everything screen 1 derives from the measurement-output directory
     (a past run of the same experiment family -- design doc section 5.1).
@@ -305,7 +451,7 @@ def build_context(
     types = introspect.detect_types(d)
 
     coef_file, coef_source = _resolve_optional_file(
-        coef_path, lambda: introspect.find_dvtbudget_coef(d), "dVtBudget係数jsonc"
+        coef_path, lambda: introspect.find_dvtbudget_coefs(d), "dVtBudget係数jsonc"
     )
     if coef_file is not None:
         try:
@@ -314,7 +460,7 @@ def build_context(
             raise ValueError(f"dVtBudget係数jsoncを読み込めません ({coef_file}): {err}")
 
     config_file, config_source = _resolve_optional_file(
-        config_path, lambda: introspect.find_run_config(d), "optimization設定jsonc"
+        config_path, lambda: introspect.find_run_configs(d), "optimization設定jsonc"
     )
 
     part_types = list(types)
@@ -335,10 +481,23 @@ def build_context(
         "generation": None,
         "wlgroup": {},
         "existing_score_file": None,
+        "geninfo": None,
+        "geninfo_path": None,
+        "geninfo_source": None,
+        "custom_path": None,
+        "custom_source": None,
+        "custom_functions": [],
     }
     if config_file:
         try:
             run_config = io_jsonc.load_run_config(config_file)
+        except ValidationError as err:
+            try:
+                raw = jsonc.loads(Path(config_file).read_text(encoding="utf-8"))
+            except Exception:
+                raw = None
+            details = "; ".join(_format_pydantic_error(err, raw if isinstance(raw, dict) else None))
+            raise ValueError(f"optimization設定jsoncを読み込めません ({config_file}): {details}")
         except Exception as err:
             raise ValueError(f"optimization設定jsoncを読み込めません ({config_file}): {err}")
         ctx["generation"] = run_config.Generation
@@ -346,12 +505,247 @@ def build_context(
         existing = run_config.to_score_file()
         if existing.score_parts or existing.selectionSets or existing.expression:
             ctx["existing_score_file"] = existing.model_dump(exclude_none=True)
+
+    geninfo_file, geninfo_source = _resolve_optional_file(
+        geninfo_path,
+        lambda: [p for p in [introspect.find_generation_info(d, ctx["generation"])] if p],
+        "世代情報json",
+    )
+    if geninfo_file is not None:
+        try:
+            geninfo = jsonc.loads(Path(geninfo_file).read_text(encoding="utf-8"))
+            if not isinstance(geninfo, dict):
+                raise ValueError("トップレベルがオブジェクトではありません")
+        except Exception as err:
+            raise ValueError(f"世代情報jsonを読み込めません ({geninfo_file}): {err}")
+        ctx["geninfo"] = geninfo
+        ctx["geninfo_path"] = str(geninfo_file)
+        ctx["geninfo_source"] = geninfo_source
+
+    # custom_parts.py: SVN-versioned user functions (scorelib/custom.py).
+    # Loading = importing = executing its top-level code; acceptable because
+    # the file comes from the reviewed repository, not from arbitrary users.
+    custom_file, custom_source = _resolve_optional_file(
+        custom_path,
+        lambda: [p for p in [d / scorelib_custom.DEFAULT_FILENAME] if p.is_file()],
+        "自作関数ファイル",
+    )
+    if custom_file is not None:
+        try:
+            module = scorelib_custom.load_custom_module(custom_file)
+            functions = scorelib_custom.list_custom_functions(module)
+        except Exception as err:
+            raise ValueError(f"自作関数ファイルを読み込めません ({custom_file}): {err}")
+        ctx["custom_path"] = str(custom_file)
+        ctx["custom_source"] = custom_source
+        ctx["custom_functions"] = functions
+        # after `catalogs`: the custom pseudo-type has no axis catalog
+        ctx["part_types"] = ctx["part_types"] + ["custom"]
     return ctx
+
+
+def extract_bundle_zip(data: bytes) -> str:
+    """Extract an uploaded 一式zip (result_tmp files + config jsonc + coef
+    jsonc + generation info json + custom_parts.py) into a temp directory and
+    return the directory to hand to build_context — every companion file is
+    then picked up by the normal in-directory auto-detection. Descends into a
+    single top-level folder (zips made from a folder usually have one)."""
+    import io
+    import tempfile
+    import zipfile
+
+    target = Path(tempfile.mkdtemp(prefix="scorelib_bundle_"))
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        for m in z.infolist():
+            parts = Path(m.filename).parts
+            if not parts or m.filename.startswith(("/", "\\")) or ".." in parts:
+                continue  # zip-slip guard
+            z.extract(m, target)
+    entries = list(target.iterdir())
+    if len(entries) == 1 and entries[0].is_dir():
+        return str(entries[0])
+    return str(target)
+
+
+def _walk_dirs(root: Path, max_depth: int = 4) -> List[Path]:
+    out = [root]
+    if max_depth <= 0:
+        return out
+    for child in sorted(p for p in root.iterdir() if p.is_dir()):
+        out += _walk_dirs(child, max_depth - 1)
+    return out
+
+
+def locate_bundle_inputs(extracted_dir: str) -> Dict[str, Optional[str]]:
+    """Locate the measurement directory and companion files anywhere inside
+    an extracted 一式zip (depth-limited walk), using the same CONTENT-based
+    identification as the in-directory auto-detection: measurement dir = a
+    directory where types are detectable (parameterLabel_*/dataName_*/
+    Measure-column csvs), config = jsonc with an optimization{} block,
+    coef = jsonc validating as the 3-level {a, b} table, generation info =
+    {Generation}.json (Generation read from the config), custom =
+    custom_parts.py. Ambiguity (two candidates for one role) is an error —
+    silently picking one would design against the wrong file."""
+    root = Path(extracted_dir)
+    dirs = _walk_dirs(root)
+
+    def _at_most_one(paths: List[Path], label: str) -> Optional[str]:
+        if len(paths) > 1:
+            raise ValueError(
+                f"zip内に{label}の候補が複数あります（どれを使うか判断できません）: "
+                + ", ".join(str(p) for p in paths)
+            )
+        return str(paths[0]) if paths else None
+
+    data_dirs = [d for d in dirs if introspect.detect_types(d)]
+    if not data_dirs:
+        raise ValueError(
+            f"zip内に測定結果（parameterLabel_*/dataName_* 等のあるディレクトリ）が見つかりません: {root}"
+        )
+    data_dir = _at_most_one(data_dirs, "測定結果ディレクトリ")
+
+    config_path = _at_most_one(
+        [p for d in dirs for p in introspect.find_run_configs(d)], "optimization設定jsonc"
+    )
+    coef_path = _at_most_one(
+        [p for d in dirs for p in introspect.find_dvtbudget_coefs(d)], "dVtBudget係数jsonc"
+    )
+    custom_path = _at_most_one(
+        [p for d in dirs for p in [d / scorelib_custom.DEFAULT_FILENAME] if p.is_file()],
+        "自作関数ファイル",
+    )
+
+    generation = None
+    if config_path:
+        try:
+            raw = jsonc.loads(Path(config_path).read_text(encoding="utf-8"))
+            generation = raw.get("Generation") if isinstance(raw, dict) else None
+        except Exception:
+            generation = None
+    geninfo_path = _at_most_one(
+        [p for d in dirs for p in [introspect.find_generation_info(d, generation)] if p],
+        "世代情報json",
+    )
+
+    return {
+        "data_dir": data_dir,
+        "config_path": config_path,
+        "coef_path": coef_path,
+        "geninfo_path": geninfo_path,
+        "custom_path": custom_path,
+    }
+
+
+def axis_counts(geninfo: Optional[Dict[str, Any]]) -> Dict[str, int]:
+    """Axis -> number of values, from the per-generation chip info json
+    (B9LS.json shape). Only the axes the file describes."""
+    counts: Dict[str, int] = {}
+    if isinstance(geninfo, dict):
+        if isinstance(geninfo.get("numWLs"), int):
+            counts["WL"] = geninfo["numWLs"]
+        if isinstance(geninfo.get("numStrings"), int):
+            counts["STR"] = geninfo["numStrings"]
+    return counts
+
+
+def _format_value_runs(values: List[int]) -> str:
+    """[0,1,2,5] -> '0–2, 5' (compact display for uncovered-value lists)."""
+    runs: List[str] = []
+    start = prev = values[0]
+    for v in values[1:] + [None]:  # type: ignore[list-item]
+        if v is not None and v == prev + 1:
+            prev = v
+            continue
+        runs.append(str(start) if start == prev else f"{start}–{prev}")
+        if v is not None:
+            start = prev = v
+    return ", ".join(runs)
+
+
+def group_def_warnings(score_file: Dict[str, Any], geninfo: Optional[Dict[str, Any]]) -> List[str]:
+    """Mismatches between group definitions and the generation's axis counts
+    (numWLs / numStrings). Warnings, not errors: the score still computes,
+    but a range disagreeing with the chip's WL/STR count is almost always a
+    config mistake (joint WLs are NOT normally excluded from groups, per
+    担当者確認)."""
+    counts = axis_counts(geninfo)
+    warnings: List[str] = []
+    for name, gd in (score_file.get("groupDefs") or {}).items():
+        n = counts.get(gd.get("axis"))
+        groups = gd.get("groups") or {}
+        if not n or not groups:
+            continue
+        axis = gd["axis"]
+        covered: set = set()
+        out_of_range = []
+        for label, rng in groups.items():
+            lo, hi = int(rng[0]), int(rng[1])
+            covered.update(range(max(lo, 0), min(hi, n - 1) + 1))
+            if lo < 0 or hi > n - 1:
+                out_of_range.append(f"{label}({lo}–{hi})")
+        if out_of_range:
+            warnings.append(
+                f"グループ定義 '{name}': {axis} は {n} 本（0–{n - 1}）ですが、"
+                f"範囲外を含むグループがあります: {', '.join(out_of_range)}"
+            )
+        missing = [v for v in range(n) if v not in covered]
+        if missing:
+            warnings.append(
+                f"グループ定義 '{name}': {axis} の {_format_value_runs(missing)} が"
+                f"どのグループにも入りません"
+            )
+    return warnings
+
+
+def part_list_labels(
+    score_file: Dict[str, Any],
+    selected_uid: Optional[str],
+    invalid_uids: set,
+) -> List[str]:
+    """Labels for the always-draggable parts list: ⠿ drag handle, ⚠ on parts
+    failing validation, ← 編集中 on the selected part. Pure on purpose: the
+    D&D component's rendering is invisible to AppTest, so the marker logic
+    must be verifiable here."""
+    labels = []
+    for i, (row, p) in enumerate(zip(part_summary_rows(score_file), score_file["score_parts"])):
+        labels.append(
+            "⠿ "
+            + ("⚠ " if p.get("_uid") in invalid_uids else "")
+            + f"{i + 1}. {row['名前']}（{row['type']}, 相対化{row['相対化']}）"
+            + (" ← 編集中" if p.get("_uid") == selected_uid else "")
+        )
+    return labels
+
+
+def part_select_labels(score_file: Dict[str, Any], invalid_uids: set) -> Dict[str, str]:
+    """uid -> display label for the part-selection pulldown. Numbered so the
+    labels stay unique even when two parts (temporarily) share a name:
+    Streamlit's selectbox frontend matches items by their displayed label,
+    and duplicate labels make clicks resolve to the wrong part or not
+    register at all. The numbering also matches the ⠿ list."""
+    return {
+        p.get("_uid"): (
+            f"{i + 1}. "
+            + ("⚠ " if p.get("_uid") in invalid_uids else "")
+            + p.get("name", "")
+        )
+        for i, p in enumerate(score_file["score_parts"])
+    }
 
 
 def part_summary_rows(score_file: Dict[str, Any]) -> List[Dict[str, str]]:
     rows = []
     for p in score_file["score_parts"]:
+        if p.get("type") == "custom":
+            rows.append(
+                {
+                    "名前": p.get("name", ""),
+                    "type": "custom",
+                    "相対化": "—",
+                    "軸": f"関数 {p.get('function') or p.get('name', '')}",
+                }
+            )
+            continue
         axes = [e for e in p.get("order", []) if not e.startswith("__")]
         rows.append(
             {
@@ -413,17 +807,20 @@ def _part_refs(part: Dict[str, Any]) -> List[str]:
 
 def export_part(score_file: Dict[str, Any], index: int) -> str:
     """A single part as a self-contained score.jsonc (referenced selection
-    sets bundled) so it can be re-imported elsewhere."""
+    sets and group definitions bundled) so it can be re-imported elsewhere."""
     part = score_file["score_parts"][index]
     refs = _part_refs(part)
     missing = [r for r in refs if r not in score_file["selectionSets"]]
     if missing:
         raise ValueError(f"パーツ '{part.get('name')}' が参照する選択セットが未定義です: {missing}")
+    all_defs = score_file.get("groupDefs", {})
+    used_defs = sorted(_part_axis_names(part) & set(all_defs))
     bundle = {
         "score_parts": [part],
         "expression": part.get("name", ""),
         "constraintThreshold": {},
         "selectionSets": {r: score_file["selectionSets"][r] for r in refs},
+        "groupDefs": {n: all_defs[n] for n in used_defs},
     }
     return score_file_to_jsonc(bundle)
 
@@ -434,6 +831,7 @@ def run_test_compute(
     generation: Optional[str] = None,
     wlgroup: Optional[Dict[str, Any]] = None,
     coef_path: Optional[str] = None,
+    custom_path: Optional[str] = None,
 ) -> Dict[str, float]:
     """Screen 5: run the engine on real data. The coefficient file is taken
     from `coef_path` when given (it normally lives outside result_tmp);
@@ -447,25 +845,28 @@ def run_test_compute(
     if not d.is_dir():
         raise ValueError(f"ディレクトリが見つかりません: {d}")
     sf = ScoreFile.model_validate(score_file)
+    dump = sf.model_dump(exclude_none=True)
     run_config = RunConfig.model_validate(
         {
             "Generation": generation or "",
             "optimization": {
-                "score_parts": sf.model_dump(exclude_none=True)["score_parts"],
+                "score_parts": dump["score_parts"],
                 "expression": sf.expression,
                 "constraintThreshold": {},  # thresholds do not change part values
                 "selectionSets": sf.selectionSets,
+                # the score file's own definitions win over the config WLgroup
                 "WLgroup": wlgroup or {},
+                "groupDefs": dump.get("groupDefs", {}),
             },
         }
     )
     coef_file, _ = _resolve_optional_file(
-        coef_path, lambda: introspect.find_dvtbudget_coef(d), "dVtBudget係数jsonc"
+        coef_path, lambda: introspect.find_dvtbudget_coefs(d), "dVtBudget係数jsonc"
     )
     coef = io_jsonc.load_dvtbudget_coef(coef_file) if coef_file else None
     temp_csv = d / "initial_temperature.csv"
     temps = load_board_temperatures(temp_csv) if temp_csv.exists() else None
-    return compute_score_file(d, run_config, coef, temps)
+    return compute_score_file(d, run_config, coef, temps, custom_parts_path=custom_path)
 
 
 def import_score_file(text: str) -> Dict[str, Any]:
@@ -474,10 +875,13 @@ def import_score_file(text: str) -> Dict[str, Any]:
     data = jsonc.loads(text)
     if not isinstance(data, dict):
         raise ValueError("jsoncのトップレベルがオブジェクトではありません")
-    if "optimization" in data:
-        from scorelib.models import RunConfig
+    try:
+        if "optimization" in data:
+            from scorelib.models import RunConfig
 
-        sf = RunConfig.model_validate(data).to_score_file()
-    else:
-        sf = ScoreFile.model_validate(data)
+            sf = RunConfig.model_validate(data).to_score_file()
+        else:
+            sf = ScoreFile.model_validate(data)
+    except ValidationError as err:
+        raise ValueError("\n".join(_format_pydantic_error(err, data)))
     return sf.model_dump(exclude_none=True)

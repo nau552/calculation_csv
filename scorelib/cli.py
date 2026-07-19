@@ -19,11 +19,11 @@ from typing import Dict, Optional, Set
 
 import polars as pl
 
-from . import axis_resolve, io_jsonc
-from .aggregate import GroupDefs, apply_aggregations, apply_transform, collapse_to_scalar
+from . import axis_resolve, custom, io_jsonc
+from .aggregate import apply_aggregations, apply_transform, collapse_to_scalar, group_column_expr
 from .dvtbudget import apply_dvtbudget, load_board_temperatures
 from .expression import evaluate_expression
-from .models import COMBINED_SEP, DvtBudgetCoefFile, RunConfig, ScorePart
+from .models import COMBINED_SEP, CUSTOM_TYPE, DvtBudgetCoefFile, GroupDef, RunConfig, ScorePart
 from .relative import apply_relative
 
 # Virtual entries usable in `order` alongside axis names (score_gui_design.md
@@ -53,7 +53,10 @@ def _step_axes(step: str) -> list[str]:
     return step.split(COMBINED_SEP)
 
 
-def _required_axes(score_part: ScorePart) -> Set[str]:
+def _named_axes(score_part: ScorePart) -> Set[str]:
+    """Every axis-like name the part itself mentions (order entries incl.
+    combined components, the relative split axis, denominator pre-aggregation
+    axes). May contain derived group-axis names."""
     axes: Set[str] = set()
     for entry in score_part.order:
         if not _is_virtual(entry):
@@ -62,9 +65,66 @@ def _required_axes(score_part: ScorePart) -> Set[str]:
         axes.add(score_part.relative.split_axis)
         for step in score_part.relative.denominator_pre_aggregation:
             axes.add(step.axis)
+    return axes
+
+
+def _referenced_group_defs(
+    score_part: ScorePart, group_defs: Optional[Dict[str, GroupDef]]
+) -> Dict[str, GroupDef]:
+    """The group definitions this part actually uses as derived axes."""
+    if not group_defs:
+        return {}
+    used = {n: group_defs[n] for n in _named_axes(score_part) if n in group_defs}
+    for name, gd in used.items():
+        if gd.axis == name:
+            raise ValueError(
+                f"group def '{name}' must not have the same name as its source axis"
+            )
+    return used
+
+
+def _required_axes(
+    score_part: ScorePart, group_defs: Optional[Dict[str, GroupDef]] = None
+) -> Set[str]:
+    """Real csv/map axes to load: derived group-axis names are replaced by
+    their source axis (the group column is built from it after loading)."""
+    named = _named_axes(score_part)
+    derived = _referenced_group_defs(score_part, group_defs)
+    axes = {a for a in named if a not in derived} | {gd.axis for gd in derived.values()}
     if score_part.type == "dVtBudget":
         axes.update({"Board", "State"})
     return axes
+
+
+def _with_group_columns(
+    lf, score_part: ScorePart, group_defs: Optional[Dict[str, GroupDef]]
+):
+    """Create the derived group columns this part references; afterwards they
+    aggregate like real axes. A source axis loaded only for the derivation is
+    dropped again: axes absent from the part's own entries are implicitly
+    mixed by design, and a leftover column would instead fail the final
+    collapse."""
+    derived = _referenced_group_defs(score_part, group_defs)
+    if not derived:
+        return lf
+    lf = lf.with_columns(
+        [group_column_expr(gd.axis, gd.groups).alias(name) for name, gd in derived.items()]
+    )
+    # rows outside every range would form a silent null-label group — that is
+    # almost always a stale definition, so fail with the offending values
+    for name, gd in derived.items():
+        uncovered = lf.filter(pl.col(name).is_null()).select(pl.col(gd.axis).unique()).collect()
+        if uncovered.height:
+            vals = sorted(uncovered[gd.axis].to_list())
+            raise ValueError(
+                f"values of axis '{gd.axis}' not covered by any group of '{name}': {vals} "
+                f"(extend the group ranges or filter those values out first)"
+            )
+    keep = {a for a in _named_axes(score_part) if a not in derived}
+    if score_part.type == "dVtBudget":
+        keep.update({"Board", "State"})
+    drop = {gd.axis for gd in derived.values() if gd.axis not in keep}
+    return lf.drop(drop) if drop else lf
 
 
 def _combined_key(v) -> str:
@@ -119,12 +179,19 @@ class SharedComputeContext:
     epochs, so there is no staleness to manage.
     """
 
-    def __init__(self, data_dir: str | Path, score_parts: list[ScorePart]):
+    def __init__(
+        self,
+        data_dir: str | Path,
+        score_parts: list[ScorePart],
+        group_defs: Optional[Dict[str, GroupDef]] = None,
+    ):
         self.data_dir = data_dir
         self._union_axes: Dict[str, Set[str]] = {}
         for part in score_parts:
+            if part.type == CUSTOM_TYPE:
+                continue  # custom parts read data themselves
             st = _source_type(part)
-            self._union_axes.setdefault(st, set()).update(_required_axes(part))
+            self._union_axes.setdefault(st, set()).update(_required_axes(part, group_defs))
         self._resolved: Dict[str, "object"] = {}
         self.prefix_cache: Dict[tuple, "object"] = {}
 
@@ -136,13 +203,13 @@ class SharedComputeContext:
         return self._resolved[source_type]
 
 
-def _apply_axis_step(lf, value_col: str, step: str, score_part: ScorePart, group_defs) :
+def _apply_axis_step(lf, value_col: str, step: str, score_part: ScorePart):
     """Apply one non-virtual order entry: a plain axis, or a combined axis
     ("A&B") whose component columns are fused into one temporary key column
     so the existing per-axis ops work on value tuples."""
     axes = _step_axes(step)
     if len(axes) == 1:
-        return apply_aggregations(lf, value_col, [step], score_part.aggregations, group_defs)
+        return apply_aggregations(lf, value_col, [step], score_part.aggregations)
 
     spec = score_part.aggregations.get(step)
     if spec is None:
@@ -157,7 +224,7 @@ def _apply_axis_step(lf, value_col: str, step: str, score_part: ScorePart, group
     else:
         combined = None
     spec = spec.model_copy(update={"value": combined})
-    return apply_aggregations(lf, value_col, [step], {step: spec}, group_defs)
+    return apply_aggregations(lf, value_col, [step], {step: spec})
 
 
 def _step_signature(score_part: ScorePart, step: str) -> tuple:
@@ -173,16 +240,34 @@ def _step_signature(score_part: ScorePart, step: str) -> tuple:
 def compute_score_part(
     data_dir: str | Path,
     score_part: ScorePart,
-    group_defs: Optional[GroupDefs] = None,
+    group_defs: Optional[Dict[str, GroupDef]] = None,
     generation: Optional[str] = None,
     dvtbudget_coef: Optional[DvtBudgetCoefFile] = None,
     board_temperatures: Optional[Dict[int, float]] = None,
     shared_ctx: Optional[SharedComputeContext] = None,
     selection_sets: Optional[Dict[str, list]] = None,
+    custom_module=None,
 ) -> float:
+    if score_part.type == CUSTOM_TYPE:
+        if custom_module is None:
+            raise ValueError(
+                f"score part '{score_part.name}' has type='{CUSTOM_TYPE}' but no custom "
+                f"parts file was loaded (expected {custom.default_custom_parts_path()})"
+            )
+        return custom.compute_custom_part(
+            score_part,
+            custom_module,
+            custom.CustomContext(
+                data_dir=Path(data_dir),
+                generation=generation,
+                group_defs=group_defs or {},
+                params=score_part.params or {},
+            ),
+        )
+
     score_part = score_part.resolve_selection_refs(selection_sets or {})
     source_type = _source_type(score_part)
-    required_axes = _required_axes(score_part)
+    required_axes = _required_axes(score_part, group_defs)
 
     if shared_ctx is not None:
         base = shared_ctx.resolved(source_type)
@@ -194,14 +279,23 @@ def compute_score_part(
     else:
         lf = axis_resolve.resolve_axes(data_dir, source_type, required_axes)
 
+    lf = _with_group_columns(lf, score_part, group_defs)
+
     steps = _effective_order(score_part)
     sigs = [_step_signature(score_part, s) for s in steps]
 
     # Cache points sit right after each __relative__/__dvtbudget__ step; the
-    # key covers everything that influenced the frame up to that point.
+    # key covers everything that influenced the frame up to that point
+    # (including the content of any derived group axes).
     cache_keys: Dict[int, tuple] = {}
     if shared_ctx is not None:
-        base_sig = (source_type, tuple(sorted(required_axes)))
+        defs_sig = tuple(
+            sorted(
+                (name, gd.axis, tuple(sorted(gd.groups.items())))
+                for name, gd in _referenced_group_defs(score_part, group_defs).items()
+            )
+        )
+        base_sig = (source_type, tuple(sorted(required_axes)), defs_sig)
         cache_keys = {
             i: (base_sig, tuple(sigs[: i + 1]))
             for i, s in enumerate(steps)
@@ -219,7 +313,7 @@ def compute_score_part(
     for j in range(start, len(steps)):
         step = steps[j]
         if step == RELATIVE_STEP:
-            lf = apply_relative(lf, source_type, score_part.relative, group_defs)
+            lf = apply_relative(lf, source_type, score_part.relative)
         elif step == DVTBUDGET_STEP:
             if generation is None or dvtbudget_coef is None or board_temperatures is None:
                 raise ValueError(
@@ -232,7 +326,7 @@ def compute_score_part(
                 raise ValueError(f"virtual step '{step}' has no entry in aggregations for '{score_part.name}'")
             lf = apply_transform(lf, source_type, spec)
         else:
-            lf = _apply_axis_step(lf, source_type, step, score_part, group_defs)
+            lf = _apply_axis_step(lf, source_type, step, score_part)
 
         if j in cache_keys:
             df = lf.collect()
@@ -247,9 +341,23 @@ def compute_score_file(
     run_config: RunConfig,
     dvtbudget_coef: Optional[DvtBudgetCoefFile] = None,
     board_temperatures: Optional[Dict[int, float]] = None,
+    custom_parts_path: Optional[str | Path] = None,
 ) -> Dict[str, float]:
     score_file = run_config.to_score_file()
     group_defs = run_config.group_defs()
+
+    # type="custom" parts call user functions from the SVN-versioned
+    # custom_parts.py at the repository root; the config never carries the
+    # path (a config-supplied path would mean arbitrary code execution from
+    # experiment input). `custom_parts_path` exists for tests/the design UI.
+    custom_module = None
+    if any(p.type == CUSTOM_TYPE for p in score_file.score_parts):
+        path = Path(custom_parts_path) if custom_parts_path else custom.default_custom_parts_path()
+        if not path.is_file():
+            raise ValueError(
+                f"score parts with type='{CUSTOM_TYPE}' need the custom parts file: {path}"
+            )
+        custom_module = custom.load_custom_module(path)
 
     part_names = {p.name for p in score_file.score_parts}
     for key in score_file.constraintThreshold:
@@ -260,7 +368,7 @@ def compute_score_file(
                 file=sys.stderr,
             )
 
-    shared_ctx = SharedComputeContext(data_dir, score_file.score_parts)
+    shared_ctx = SharedComputeContext(data_dir, score_file.score_parts, group_defs)
     values: Dict[str, float] = {}
     for score_part in score_file.score_parts:
         values[score_part.name] = compute_score_part(
@@ -272,6 +380,7 @@ def compute_score_file(
             board_temperatures=board_temperatures,
             shared_ctx=shared_ctx,
             selection_sets=score_file.selectionSets,
+            custom_module=custom_module,
         )
 
     score = evaluate_expression(score_file.expression, values) if score_file.expression else None
@@ -284,13 +393,17 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument("--data-dir", required=True, help="directory containing {type}.csv etc. for this epoch")
     parser.add_argument("--dvtbudget-coef", help="dVtBudget coefficient jsonc (required if any score part uses type=dVtBudget)")
     parser.add_argument("--initial-temperature", help="initial_temperature.csv (Board,Temperature; required for dVtBudget)")
+    parser.add_argument("--custom-parts", help="custom_parts.py override (default: repository root)")
     args = parser.parse_args(argv)
 
     run_config = io_jsonc.load_run_config(args.config)
     dvtbudget_coef = io_jsonc.load_dvtbudget_coef(args.dvtbudget_coef) if args.dvtbudget_coef else None
     board_temperatures = load_board_temperatures(args.initial_temperature) if args.initial_temperature else None
 
-    result = compute_score_file(args.data_dir, run_config, dvtbudget_coef, board_temperatures)
+    result = compute_score_file(
+        args.data_dir, run_config, dvtbudget_coef, board_temperatures,
+        custom_parts_path=args.custom_parts,
+    )
     print(json.dumps(result))
 
 

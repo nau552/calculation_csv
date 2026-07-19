@@ -18,10 +18,11 @@ from .models import AggregationSpec
 _SIMPLE_OPS = {"mean", "sum", "min", "max"}
 TRANSFORM_OPS = {"add"}
 
-GroupDefs = Mapping[str, Mapping[str, Tuple[int, int]]]
 
-
-def _group_col_expr(axis: str, ranges: Mapping[str, Tuple[int, int]]) -> pl.Expr:
+def group_column_expr(axis: str, ranges: Mapping[str, Tuple[int, int]]) -> pl.Expr:
+    """Label expression for a derived group axis (models.GroupDef): rows get
+    the name of the range containing their source-axis value. Used at
+    data-load time; afterwards the group column aggregates like a real axis."""
     expr = pl.lit(None, dtype=pl.Utf8)
     for name, (lo, hi) in ranges.items():
         expr = pl.when((pl.col(axis) >= lo) & (pl.col(axis) <= hi)).then(pl.lit(name)).otherwise(expr)
@@ -53,7 +54,6 @@ def apply_axis_op(
     axis: str,
     spec: AggregationSpec,
     group_keys: Sequence[str],
-    group_defs: GroupDefs | None = None,
 ) -> pl.LazyFrame:
     """Apply a single axis's aggregation instruction, collapsing `axis` away
     (the resulting frame no longer has an `axis` column, only `group_keys` +
@@ -74,16 +74,6 @@ def apply_axis_op(
         keys = list(group_keys)
         joined = a.join(b, on=keys, how="left") if keys else a.join(b, how="cross")
         return joined.with_columns((pl.col(value_col) - pl.col("__b__")).alias(value_col)).drop("__b__")
-
-    if spec.op == "group_reduce":
-        if not group_defs or spec.group_def not in group_defs:
-            raise ValueError(f"unknown group_def '{spec.group_def}' for axis '{axis}'")
-        ranges = group_defs[spec.group_def]
-        group_col = f"__grp_{axis}__"
-        lf = lf.with_columns(_group_col_expr(axis, ranges).alias(group_col)).drop(axis)
-        inner_keys = list(group_keys) + [group_col]
-        lf = _reduce(lf, value_col, inner_keys, spec.inner_op or "mean")
-        return _reduce(lf, value_col, list(group_keys), spec.outer_op or "mean")
 
     if spec.op == "expr":
         if not spec.expr:
@@ -119,7 +109,6 @@ def apply_aggregations(
     value_col: str,
     order: Sequence[str],
     aggregations: Dict[str, AggregationSpec],
-    group_defs: GroupDefs | None = None,
 ) -> pl.LazyFrame:
     """Apply the aggregation instructions for each axis in `order`, collapsing
     those axes away one by one. Does not require the result to be a scalar --
@@ -134,7 +123,7 @@ def apply_aggregations(
         if axis not in schema_cols:
             raise ValueError(f"axis '{axis}' not present (already aggregated away?): columns = {schema_cols}")
         group_keys = [c for c in schema_cols if c not in (value_col, axis)]
-        lf = apply_axis_op(lf, value_col, axis, spec, group_keys, group_defs)
+        lf = apply_axis_op(lf, value_col, axis, spec, group_keys)
     return lf
 
 
@@ -176,10 +165,9 @@ def aggregate_score_part(
     value_col: str,
     order: Sequence[str],
     aggregations: Dict[str, AggregationSpec],
-    group_defs: GroupDefs | None = None,
 ) -> float:
     """Run the full per-axis aggregation pipeline for a ScorePart, returning
     the resulting scalar value.
     """
-    lf = apply_aggregations(lf, value_col, order, aggregations, group_defs)
+    lf = apply_aggregations(lf, value_col, order, aggregations)
     return collapse_to_scalar(lf, value_col)

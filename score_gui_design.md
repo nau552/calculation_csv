@@ -153,6 +153,13 @@ v1では `DataName` の文字列prefix(`reference_`/`evaluation_`)で判定す�
 Streamlit UIはこの設定ファイル全体をアップロードしてもらい、`Generation` と
 `WLgroup` をそこから読み取る（`WLgroup`単体を別ファイルとして扱う設計は撤回）。
 
+追記（グループ定義の一般化）: 設定jsonc の `WLgroup` は読み込み時に score file 側の
+`groupDefs`（4.2節）へ**編集可能なテンプレートとして取り込む**位置づけになった。
+スコア計算が実際に使うのは score file の `groupDefs`（自己完結・エクスポートにも同梱）。
+WL 以外の軸（STR 等）のグループ定義も UI から追加できる。実験のパラメータ割り当てと
+スコア集計の分割が食い違う懸念はユーザーに確認済み（実験スクリプトも同じ合成後 config を
+読むため齟齬は生じない、編集自由で良い）。
+
 ### 3.5 dVtBudget（大幅訂正）
 
 **世代(Generation)は計算時にoptimization設定ファイルから取得**するため、
@@ -263,15 +270,57 @@ v1のサンプルで type="FBC" なのに `dvtbudget` フィールドが存在�
 | `filter` | 指定した値のみ残す |
 | `mean` / `sum` / `min` / `max` | 単純集計 |
 | `mean` / `sum` / `min` / `max` + `values` | `values` 指定で値集合に限定してから集計（旧 `*_subset` は読み込み時に自動変換） |
-| `group_reduce` | グループ定義(WLgroup等)でグルーピングし、`inner_op`でグループ内集計→`outer_op`でグループ間集計 |
 | `expr` | 自由記述式 |
 
-`group_reduce` の例（WLgroupごとにmin、グループ間でmax = 「一番厳しいグループの中の最良値」等、
-ユーザが min/max を明示するのでworstという概念なしで表現できる）:
+**グループ集計は派生軸（groupDefs）で表現する**（`group_reduce` op は廃止。読み込み時に
+移行案内つきエラーになる）。グループ定義は「名前 + 対象軸 + 範囲一覧」で、
+score file の `groupDefs`（設定jsonc の `optimization.WLgroup` は WL に対する定義として
+互換読み込みされ、`groupDefs` 側が優先）:
 
 ```jsonc
-"WL": {"op": "group_reduce", "group_def": "WLgroup", "inner_op": "min", "outer_op": "max"}
+"groupDefs": {
+    "WLgroup":  { "axis": "WL",  "groups": { "WLgroup01": [0, 3], "WLgroup02": [4, 8] } },
+    "STRgroup": { "axis": "STR", "groups": { "even": [0, 1], "odd": [2, 3] } }
+}
 ```
+
+パーツが定義名を order/aggregations/relative で参照すると、データ読み込み直後に
+グループ列が生成され、以降は**普通の軸**として任意の位置で集計できる:
+
+```jsonc
+// WLgroupごとにWLをmin、他の軸を畳んだ後、最後にグループ間でmax
+"order": ["WL", "STR", "Board", "WLgroup"],
+"aggregations": { "WL": {"op": "min"}, ..., "WLgroup": {"op": "max"} }
+```
+
+旧 `group_reduce`(inner/outer) は「WLの直後にグループ軸を置く」ことで等価に書ける。
+集計タイミングをずらせる（グループ間集計を Board 集約の後に回す等）のが廃止の動機。
+注意: グループ列は読み込み時から存在するため、そのパーツ内では relative の分母事前集計等でも
+グループをまたいで混ざらない（グループ横断で集計したい場合はそのステップにグループ軸自体を足す）。
+定義名が order に無いのに対象軸だけ参照した場合は従来どおりの暗黙集約。
+定義名と対象軸名の同名は禁止（エンジンがエラーにする）。
+
+### 4.2b 自作Python関数パーツ（type="custom"）
+
+集計パイプラインで書けない計算（複数csvの突き合わせ等）向けに、Pythonが書ける
+ユーザが関数を1つ書いてスコアパーツとして呼べる:
+
+```jsonc
+{"name": "my_score", "type": "custom"}   // name と同名関数。function/params で明示・引数渡しも可
+```
+
+- 関数は **リポジトリ直下の `custom_parts.py`（SVN管理）** に置く。エンジンは常に
+  そこを読み、**configにパスは持たせない**（実験入力から任意コード実行が可能に
+  なってしまうため。関数の追加・変更は SVN コミット=レビューを経由させるのが意図）
+- 関数契約: `def f(ctx) -> float`。ctx は data_dir / generation / group_defs / params。
+  戻り値は有限な1スカラー（エンジンが検証）。custom パーツは order/aggregations/relative
+  を持たない（混在はエラー）。expression・constraintThreshold からは通常パーツと同一に参照
+- 設計UIは、GUIからダウンロードする**一式zipに同梱された custom_parts.py**（または
+  パス指定/データディレクトリ内自動検出）から関数一覧を読み込む。実行側はリポジトリ内の
+  ファイルを読むため、リビジョン一致なら設計時と同じ関数が走る。不一致で関数が無い場合は
+  関数名つきの明確なエラー
+- 実装: `scorelib/custom.py`（ロード・一覧・戻り値検証）、cli の type=custom 分岐、
+  `--custom-parts`（テスト用上書き）。type単位の共有キャッシュは custom には適用しない
 
 ### 4.3 自由記述式（expr）— 実装方針決定
 
@@ -346,7 +395,7 @@ scorelib/
   models.py        # ScorePart / Relative / Aggregation / ScoreFile(score_parts+expression+constraintThreshold)
   io_jsonc.py       # jsonc <-> モデルの読み書き
   axis_resolve.py   # {type}.csv に対し、要求された軸だけを遅延join/filterするresolver
-  aggregate.py      # order/aggregationsの逐次実行（polars, group_reduce含む）
+  aggregate.py      # order/aggregationsの逐次実行（polars, グループ派生列の式含む）
   relative.py       # split_axisベースの相対値計算 + denominator_offset
   dvtbudget.py      # Generation(config) + Board別温度(initial_temperature.csv)
                      # + 係数ファイルから -log10(rel)/b*1000 を計算

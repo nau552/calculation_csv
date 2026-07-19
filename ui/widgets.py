@@ -23,8 +23,24 @@ try:
 except Exception:  # ImportError or a broken component install
     HAS_SORTABLES = False
 
-AXIS_OPS = ["filter", "mean", "sum", "min", "max", "diff", "group_reduce", "expr"]
+AXIS_OPS = ["filter", "mean", "sum", "min", "max", "diff", "expr"]
 _MULTI_OPS = ("mean", "sum", "min", "max")
+
+# The component's default item style is the theme primary color (bright red on
+# the default theme, user feedback: 目が痛い) with centered text (the ⠿ handles
+# did not line up). Restyle: left-aligned, and a translucent gray one shade
+# apart from the surrounding frames so the items read as separate objects in
+# both light and dark themes.
+_SORTABLE_STYLE = """
+.sortable-item, .sortable-item:hover {
+    background-color: rgba(128, 128, 128, 0.2);
+    color: var(--text-color);
+    border: 1px solid rgba(128, 128, 128, 0.45);
+    border-radius: 4px;
+    padding-left: 8px;
+    text-align: left;
+}
+"""
 
 
 def sortable_list(items: List[str], key: str) -> Optional[List[str]]:
@@ -39,6 +55,7 @@ def sortable_list(items: List[str], key: str) -> Optional[List[str]]:
         return None
     try:
         result = _sort_items(list(items), direction="vertical",
+                             custom_style=_SORTABLE_STYLE,
                              key=f"{key}_{abs(hash(tuple(items)))}")
     except Exception:
         return None
@@ -128,7 +145,6 @@ def agg_editor(
     spec: Dict[str, Any],
     catalog: Dict[str, Optional[list]],
     set_names: List[str],
-    group_def_names: List[str],
     key: str,
 ) -> None:
     """The per-order-entry aggregation instruction editor (design doc screen 2).
@@ -197,23 +213,6 @@ def agg_editor(
             spec["value"] = selection_list_widget(axes, catalog, spec["value"], f"{key}_mv")
         return
 
-    if op == "group_reduce":
-        if not group_def_names:
-            st.warning("WLgroup 定義が読み込まれていません（画面1で設定jsoncを含むディレクトリを読み込むと使えます）")
-        gd = spec.get("group_def")
-        options = group_def_names or ([gd] if gd else [])
-        if options:
-            spec["group_def"] = st.selectbox(
-                "group_def", options, index=options.index(gd) if gd in options else 0, key=f"{key}_gd"
-            )
-        io_ops = ["mean", "sum", "min", "max"]
-        c1, c2 = st.columns(2)
-        spec["inner_op"] = c1.selectbox("グループ内 (inner_op)", io_ops,
-                                        index=io_ops.index(spec.get("inner_op") or "mean"), key=f"{key}_io")
-        spec["outer_op"] = c2.selectbox("グループ間 (outer_op)", io_ops,
-                                        index=io_ops.index(spec.get("outer_op") or "mean"), key=f"{key}_oo")
-        return
-
     if op == "expr":
         spec["expr"] = st.text_input(
             "式", value=spec.get("expr") or "", key=f"{key}_expr",
@@ -226,7 +225,6 @@ def relative_editor(
     part: Dict[str, Any],
     catalog: Dict[str, Optional[list]],
     set_names: List[str],
-    group_def_names: List[str],
     key: str,
 ) -> None:
     """The relative-ization block editor. Presence of part['relative'] means
@@ -287,7 +285,7 @@ def relative_editor(
             if c_del.button("✕", key=f"{key}_pre{i}_del", help="この事前集計を削除"):
                 steps.pop(i)
                 st.rerun()
-            agg_editor(step["axis"], step, catalog, set_names, group_def_names, key=f"{key}_pre{i}")
+            agg_editor(step["axis"], step, catalog, set_names, key=f"{key}_pre{i}")
             st.divider()
         if st.button("＋ 事前集計を追加", key=f"{key}_pre_add"):
             steps.append({"axis": sorted(catalog)[0], "op": "mean"})

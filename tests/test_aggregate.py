@@ -1,7 +1,7 @@
 import polars as pl
 import pytest
 
-from scorelib.aggregate import aggregate_score_part
+from scorelib.aggregate import aggregate_score_part, group_column_expr
 from scorelib.models import AggregationSpec
 
 
@@ -61,15 +61,24 @@ def test_filter_accepts_single_element_list():
     assert spec.value == "A2B"
 
 
-def test_group_reduce():
-    lf = pl.LazyFrame({"WL": [0, 1, 2, 3], "value": [10, 5, 8, 20]})
-    order = ["WL"]
-    aggregations = {
-        "WL": AggregationSpec(op="group_reduce", group_def="g", inner_op="min", outer_op="max"),
-    }
-    group_defs = {"g": {"g1": (0, 1), "g2": (2, 3)}}
-    # g1 min(10,5)=5, g2 min(8,20)=8, outer max(5,8)=8
-    assert aggregate_score_part(lf, "value", order, aggregations, group_defs) == pytest.approx(8.0)
+def test_group_reduce_removed_with_guidance():
+    """The op was replaced by derived group axes (groupDefs + the name in
+    `order`); old configs must fail with a pointer to the new spelling."""
+    with pytest.raises(Exception, match="removed.*groupDefs"):
+        AggregationSpec.model_validate(
+            {"op": "group_reduce", "group_def": "g", "inner_op": "min", "outer_op": "max"}
+        )
+
+
+def test_derived_group_axis_aggregates_like_a_real_axis():
+    """A pre-built group column (as _with_group_columns creates at load time)
+    can be reduced at any position: WL min first, group max later."""
+    lf = pl.LazyFrame({"WL": [0, 1, 2, 3], "value": [10.0, 5.0, 8.0, 20.0]})
+    lf = lf.with_columns(group_column_expr("WL", {"g1": (0, 1), "g2": (2, 3)}).alias("g")).drop("WL")
+    aggregations = {"g": AggregationSpec(op="max")}
+    # per-group means survive until g is reduced: g1 mean(10,5)=7.5, g2 mean(8,20)=14
+    lf = lf.group_by("g").agg(pl.col("value").mean())
+    assert aggregate_score_part(lf, "value", ["g"], aggregations) == pytest.approx(14.0)
 
 
 def test_expr_op():

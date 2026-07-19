@@ -111,9 +111,21 @@ python scripts/convert_dvtbudget_coef.py sample.py dvtbudget_coef.jsonc
 
 1. **データ読み込み** — **同系統の過去実験の測定結果ディレクトリ**（result_tmp相当）を
    指定して読み込み、type一覧・軸一覧・値候補を導出する。optimization設定jsonc
-   （Generation / WLgroup / 既存スコア設定）と dVtBudget係数jsonc は通常 result_tmp に
-   含まれないため別の任意入力欄でパス指定する（ディレクトリ内にあれば自動検出）。
-   値候補は map の全語彙ではなく**実データに存在する値だけ**（map順）に絞られる
+   （Generation / WLgroup / 既存スコア設定）・dVtBudget係数jsonc・世代情報json
+   （`B9LS.json` 等: numWLs / numStrings）・自作関数ファイル（custom_parts.py）は
+   通常 result_tmp に含まれないため別の任意入力欄でパス指定する（ディレクトリ内に
+   あれば自動検出。世代情報は `{Generation}.json` を探す）。
+   **一式zipのアップロード**にも対応: GUI からダウンロードした zip（測定結果+上記の
+   同梱ファイル）を展開し、**サブディレクトリも探索して**読み込む（UIがユーザのマシン
+   以外で動く場合の入力手段。result_tmp がフォルダのまま入っていてもよい）。
+   自動検出は**ファイル名ではなく中身の形**で判別する: 設定jsonc = `optimization{}`
+   キーを持つ jsonc、係数jsonc = 「世代→温度→State→{a,b}」の3段ネストとして検証が
+   通る jsonc（両者は形が排他的）、世代情報のみファイル名（設定jsoncの Generation から
+   `{Generation}.json`）、custom_parts.py は固定名。**同じ役割の候補が複数あると
+   エラー**になる（黙って1つ選ばない。明示パス指定で解決）。
+   値候補は map の全語彙ではなく**実データに存在する値だけ**（map順）に
+   絞られる。世代情報があると、グループ定義が WL/STR の本数と合っているかを
+   読み込み直後に警告チェックする
 2. **スコアパーツ編集** — 「追加」で**そのまま計算が通る雛形**（全軸をデフォルト順に並べ、
    カテゴリ軸は先頭候補のfilter・数値軸はmean・相対化ON）を生成し、差分編集していく。
    order は要約行リスト（✎で選択・上下ボタン・削除）＋選択エントリの常時表示エディタ。
@@ -121,21 +133,26 @@ python scripts/convert_dvtbudget_coef.py sample.py dvtbudget_coef.jsonc
    出す集計エディタ。相対化のON/OFF・split_axis変更時は order との整合を自動で取る
    （OFFにすると split_axis が filter False で order に復帰する）。
    分母の事前集計にも同じ集計エディタをフルで使える。
-   編集のたびにエンジンと同一の検証を実行
-3. **選択セット管理** — ref で使い回す選択リストの作成・編集・**別名で保存**・削除
-   （参照中のセットは削除不可）
+   編集のたびにエンジンと同一の検証を実行（エラーには**パーツ名**が入り、
+   検証NGのパーツは一覧・プルダウンに ⚠ が付く）。
+   custom_parts.py を読み込んでいる場合は type に **custom** が並び、
+   関数プルダウン+params 行エディタでPython関数パーツを設計できる
+3. **選択セット・グループ定義** — ref で使い回す選択リストの作成・編集・**別名で保存**・
+   削除（参照中のセットは削除不可）。グループ定義（WLgroup 等の派生軸）の作成・範囲編集も
+   ここで行う（設定jsoncの WLgroup は読み込み時に編集可能な定義として自動取り込み）
 4. **スコア合成・制約** — expression の編集（パーツ名クリック挿入・式の即時検証）と
    constraintThreshold の行エディタ（動的制約 active/type/coef 対応）
 5. **テスト実行・エクスポート** — 実データディレクトリを指定して `compute_score_file` を
    直接呼び、Score+全パーツ値を表示。`score.jsonc`（selectionSets同梱）や
    パーツ単体（参照セット同梱）のダウンロード、既存jsoncのインポート
 
-編集内容は**操作のたび**に `~/.scorelib_draft.jsonc` へ自動保存され、次回起動時に復元を提案する。
+編集内容は**操作のたび**に `~/.scorelib_draft.jsonc` へ自動保存され、次回起動時に復元を提案する
+（復元するとデータ読み込みと画面1の入力欄も前回の状態に戻る）。
 サイドバーの「↩ 元に戻す」で直近20操作までアンドゥできる。
 
 **ドラッグ&ドロップ並べ替え**: `streamlit-sortables` が入っていると（`pip install -e ".[ui]"` で入る）、
 パーツ一覧と order の一覧が**常時ドラッグ可能なリスト**になる（モード切替なし。
-編集対象の選択はプルダウン）。コミュニティ製コンポーネントのため soft dependency とし、
+編集対象の選択はプルダウンで、リスト上では ⠿ 付きの行のうち「← 編集中」の行が編集対象）。コミュニティ製コンポーネントのため soft dependency とし、
 未インストール・故障時は自動的に ✎/上下ボタンの行リスト表示になる（アプリ本体は影響を受けない）。
 
 ## config.jsonc の書き方
@@ -178,12 +195,12 @@ python scripts/convert_dvtbudget_coef.py sample.py dvtbudget_coef.jsonc
             {"axis": "STR", "op": "mean"}
         ]
     },
-    "order": ["Read_Label", "State", "WL", "STR", "Board", "Chip", "Block"],
+    "order": ["Read_Label", "State", "WL", "WLgroup", "STR", "Board", "Chip", "Block"],
     "aggregations": {
         "Read_Label": {"op": "filter", "value": "read_level_upper1"},
         "State":      {"op": "filter", "value": "A2B"},
-        "WL":         {"op": "group_reduce", "group_def": "WLgroup",
-                       "inner_op": "mean", "outer_op": "max"},
+        "WL":         {"op": "mean"},   // WLgroup列があるのでグループ内平均になる
+        "WLgroup":    {"op": "max"},    // グループ間はmax（派生軸。下記グループ定義参照）
         "STR":        {"op": "mean", "value": [0, 1]},
         "Board":      {"op": "mean"},
         "Chip":       {"op": "mean"},
@@ -195,6 +212,62 @@ python scripts/convert_dvtbudget_coef.py sample.py dvtbudget_coef.jsonc
 - `order` に列挙した軸を**この順番で**1つずつ集計して潰していき、全軸を潰し切ると
   パーツの値が1スカラーに定まる。潰し残しがあるとエラーになる（テスト機能を兼ねる）。
 - InBatchEpochは実質未使用（常に0）のため通常orderに含めなくてよい。
+
+#### グループ定義（groupDefs）— 軸のグループ分割派生軸
+
+`groupDefs` に「名前 + 対象軸 + グループ名→[min, max] 範囲」を定義すると、
+その名前を order に**普通の軸として**置ける（値候補はグループ名）。グループ列は
+データ読み込み直後に作られるため、集計のタイミングを自由に選べる — 例えば
+「WLgroup分割 → WL,STR平均 → Board max → **最後に** WLgroup max」が書ける:
+
+```jsonc
+"groupDefs": {
+    "WLgroup":  { "axis": "WL",  "groups": { "WLgroup01": [0, 3], "WLgroup02": [4, 8] } },
+    "STRgroup": { "axis": "STR", "groups": { "even": [0, 1], "odd": [2, 3] } }
+}
+```
+
+- 従来の `optimization.WLgroup` は「WL に対する WLgroup 定義」として互換読み込みされる
+  （`groupDefs` に同名があればそちらが優先）。
+- 定義名は対象軸名と同名にできない。定義名を order に置いていないパーツでは列は作られず、
+  対象軸は通常どおり扱われる。
+- パーツが定義名を参照していると、そのパーツ内ではグループ列が最初から存在する扱いになる
+  （relative の分母事前集計などでもグループをまたいで混ざらない。またぎたい場合は
+  そのステップにグループ軸自体を追加する）。
+- 旧 `group_reduce` op は廃止（読み込み時に移行案内つきエラー）。inner/outer は
+  「対象軸の集計の直後にグループ軸を置く」ことで等価に書ける。
+- **範囲チェック**: どの範囲にも入らない値の行がデータにあると、値の一覧つきで
+  計算エラーになる（名無しグループとして静かに混ざることはない）。逆に、データに
+  該当値が無いグループは「存在しない軸の値」と同じ扱いで、単に現れないだけ。
+  さらに UI では世代情報json（numWLs / numStrings）と照合し、定義の範囲が本数を
+  超えていたり、0〜本数-1 に未カバーの値があると事前に警告する。
+
+#### 自作Python関数パーツ（type="custom"）
+
+集計パイプラインで表現できない複雑な計算（複数csvの突き合わせ等）は、
+**リポジトリ直下の `custom_parts.py`** に関数を書いて type="custom" のパーツとして呼べる:
+
+```jsonc
+{"name": "my_score", "type": "custom"}                        // name と同名の関数を呼ぶ
+{"name": "s2", "type": "custom", "function": "my_score",
+ "params": {"threshold": 3}}                                  // 関数名を明示・params も渡せる
+```
+
+```python
+# custom_parts.py（リポジトリ直下、SVN管理）
+def my_score(ctx):
+    df = pl.read_csv(ctx.data_dir / "FBC.csv")   # ctx: data_dir / generation / group_defs / params
+    return float(df["FBC"].mean())               # 1つの有限な数値を返す（エンジンが検証）
+```
+
+- 関数ファイルの場所は**固定**（`--custom-parts` はテスト用の上書き）。config にパスを
+  書く形にはしない — 実験入力から任意コードを実行できてしまうため、関数の追加・変更は
+  SVN コミット（レビュー）を通す設計
+- custom パーツは order / aggregations / relative を持たない（混在は読み込みエラー）。
+  expression や constraintThreshold からは通常パーツと同じに参照できる
+- 設計UI用には、GUI からダウンロードする一式zipに custom_parts.py を同梱する
+  （UIは同じ内容のファイルから関数一覧を出す。実行側はリポジトリ内のファイルを読むため、
+  リビジョンが一致していれば設計時と同じ関数が走る）
 
 #### relative の各フィールド
 
@@ -290,8 +363,9 @@ diffに1個しか書かなければ「2個必要」とエラー）。
 | `filter` | 指定値の行だけ残す | 選択1個 |
 | `mean` / `sum` / `min` / `max` | 集計。`value` を付けると対象をその選択集合に限定 | なし or 選択のリスト |
 | `diff` | 2つの選択の差で潰す: a − b | 選択ちょうど2個のリスト |
-| `group_reduce` | グループ定義で分割→グループ内集計→グループ間集計 | なし（`group_def`, `inner_op`, `outer_op`） |
 | `expr` | 自由記述式。全値のリスト `values` と、軸の値ごとの辞書 `by` が使える | なし（`expr`） |
+
+グループ分割集計は op ではなく **groupDefs の派生軸**で表現する（前節）。
 
 軸の値同士を組み合わせる例（Stateの集計指示として）:
 
@@ -343,8 +417,7 @@ read_level_lower1 で見て、それらを合成したい」のように、**複
 #### 選択セット（selectionSets）— 選択リストの名前付き再利用
 
 同じ選択リスト（上下方向の組など）を複数のパーツで使い回す場合は、
-コピペせず **`optimization.selectionSets` に名前付きで定義して `ref` で参照**する
-（WLgroupを `group_def` で参照するのと同じパターン）:
+コピペせず **`optimization.selectionSets` に名前付きで定義して `ref` で参照**する:
 
 ```jsonc
 "optimization": {
@@ -418,7 +491,7 @@ Board/Stateを相対化より後に集計すること。
   `gomi/FBC_expanded.csv` と**全行一致**することを確認。展開せず遅延joinする新方式が
   現行の展開方式と同じ結果を返すことの保証。
 - **各集計opの単体テスト** (`test_aggregate.py`): 手計算で答えの分かる小さなデータで
-  filter/mean/subset/group_reduce/exprを検証。orderが全軸を潰し切らない場合の
+  filter/mean/subset/expr/グループ派生軸を検証。orderが全軸を潰し切らない場合の
   エラーも確認。
 - **相対値** (`test_relative.py`): 分母の事前集計（WL→STRの順のmean）とoffsetが
   設計通りに効くことを手計算値と照合。

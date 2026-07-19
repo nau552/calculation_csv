@@ -22,7 +22,7 @@ from ui import state, widgets  # noqa: E402
 SCREENS = [
     "1. データ読み込み",
     "2. スコアパーツ編集",
-    "3. 選択セット管理",
+    "3. 選択セット・グループ定義",
     "4. スコア合成・制約",
     "5. テスト実行・エクスポート",
 ]
@@ -98,11 +98,22 @@ def _offer_draft_restore() -> None:
     if c1.button("復元する", key="restore_btn"):
         ss.score_file = draft["score_file"]
         state.ensure_uids(ss.score_file)
+        # pre-fill the screen-1 inputs too (they are not instantiated yet in
+        # this run, so writing their widget state is safe): otherwise the
+        # jsonc fields show empty and a re-click of 読み込み would silently
+        # drop the restored config/coef paths
+        ss["data_dir_input"] = ci.get("data_dir") or ""
+        ss["config_path_input"] = ci.get("config_path") or ""
+        ss["coef_path_input"] = ci.get("coef_path") or ""
+        ss["geninfo_path_input"] = ci.get("geninfo_path") or ""
+        ss["custom_path_input"] = ci.get("custom_path") or ""
         if ci.get("data_dir"):
             try:
                 ss.context = state.build_context(
-                    ci["data_dir"], ci.get("config_path"), ci.get("coef_path")
+                    ci["data_dir"], ci.get("config_path"), ci.get("coef_path"),
+                    ci.get("geninfo_path"), ci.get("custom_path"),
                 )
+                state.import_config_group_defs(ss.score_file, ss.context["wlgroup"])
             except Exception as err:
                 ss.restore_warning = (
                     f"編集内容は復元しましたが、データの再読み込みに失敗しました。"
@@ -125,6 +136,8 @@ def _autosave() -> None:
             "data_dir": ctx.get("data_dir"),
             "config_path": ctx.get("config_path"),
             "coef_path": ctx.get("coef_path"),
+            "geninfo_path": ctx.get("geninfo_path"),
+            "custom_path": ctx.get("custom_path"),
         }
         try:
             state.save_draft(sf, context_inputs)
@@ -144,6 +157,16 @@ def _catalog_for_part(ctx, part) -> dict:
     return ctx["catalogs"].get(part.get("type"), _merged_catalog(ctx))
 
 
+def _with_group_axes(catalog: dict, sf: dict) -> dict:
+    """Editor catalog: the real axes plus the derived group axes (their value
+    candidates are the group names). Skeleton generation keeps using the raw
+    catalog, so group axes never enter a part uninvited."""
+    merged = dict(catalog)
+    for name, gd in sf.get("groupDefs", {}).items():
+        merged.setdefault(name, list(gd.get("groups", {})))
+    return merged
+
+
 # ------------------------------------------------------------ 画面1: 読み込み
 
 def screen_data() -> None:
@@ -153,6 +176,36 @@ def screen_data() -> None:
         "**同系統の過去実験の測定結果ディレクトリ**（result_tmp 相当）を指定してください。"
         "測定前の実験には定義ファイルが存在しないため、前回出力から type・軸・値候補を読み取ります。"
     )
+    with st.expander("📦 一式zipから読み込む（アップロード）"):
+        st.caption(
+            "GUIからダウンロードした一式zip（測定結果 + 設定jsonc + 係数jsonc + 世代情報json + "
+            "custom_parts.py）を展開して読み込みます。zip内のサブディレクトリも探索し、"
+            "見つかった各ファイルのパスは下の入力欄に自動で入ります（候補が複数あると"
+            "エラーになるので、その場合は該当欄にパスを明示指定してください）。"
+        )
+        up_zip = st.file_uploader("一式zip", type=["zip"], key="bundle_zip")
+        if up_zip is not None and st.button("展開して読み込み", type="primary", key="bundle_btn"):
+            try:
+                extracted = state.extract_bundle_zip(up_zip.getvalue())
+                found = state.locate_bundle_inputs(extracted)
+                # the path inputs render below this expander, so their widget
+                # state can still be written in this run
+                ss["data_dir_input"] = found["data_dir"]
+                ss["config_path_input"] = found.get("config_path") or ""
+                ss["coef_path_input"] = found.get("coef_path") or ""
+                ss["geninfo_path_input"] = found.get("geninfo_path") or ""
+                ss["custom_path_input"] = found.get("custom_path") or ""
+                ss.context = state.build_context(
+                    found["data_dir"], found.get("config_path"), found.get("coef_path"),
+                    found.get("geninfo_path"), found.get("custom_path"),
+                )
+                if state.import_config_group_defs(ss.score_file, ss.context["wlgroup"]):
+                    st.toast("設定jsoncの WLgroup をグループ定義として取り込みました")
+                st.toast("zipを展開して読み込みました")
+                st.rerun()
+            except Exception as err:
+                st.error(str(err))
+
     default = ss.context["data_dir"] if ss.context else ""
     path = st.text_input("測定結果ディレクトリのパス（必須）", value=default, key="data_dir_input")
     st.caption(
@@ -169,9 +222,24 @@ def screen_data() -> None:
         "dVtBudget係数jsonc のパス（任意）", key="coef_path_input",
         help="未指定の場合は dVtBudget タイプが選択肢に出ません",
     )
+    c3, c4 = st.columns(2)
+    geninfo_in = c3.text_input(
+        "世代情報 json のパス（任意）", key="geninfo_path_input",
+        help="numWLs / numStrings 等が入った世代ごとのファイル（B9LS.json 等）。"
+             "WL・STR のグループ定義が本数と合っているかの事前チェックに使います。"
+             "ディレクトリ内に {Generation}.json があれば自動検出",
+    )
+    custom_in = c4.text_input(
+        "自作関数ファイル custom_parts.py のパス（任意）", key="custom_path_input",
+        help="Python関数をスコアパーツ（type=custom）として使う場合のみ。"
+             "SVNリポジトリ直下の custom_parts.py と同じ内容を指定してください"
+             "（実行側ではリポジトリ内のファイルが使われます）。ディレクトリ内にあれば自動検出",
+    )
     if st.button("読み込み", type="primary", key="load_btn"):
         try:
-            ss.context = state.build_context(path, config_in, coef_in)
+            ss.context = state.build_context(path, config_in, coef_in, geninfo_in, custom_in)
+            if state.import_config_group_defs(ss.score_file, ss.context["wlgroup"]):
+                st.toast("設定jsoncの WLgroup をグループ定義として取り込みました（画面3で編集できます）")
             st.toast("読み込みました")
         except Exception as err:
             st.error(str(err))
@@ -195,11 +263,28 @@ def screen_data() -> None:
         st.success("initial_temperature.csv")
     else:
         st.warning("initial_temperature.csv: なし（dVtBudget のテスト計算に必要）")
+    if ctx["geninfo_path"]:
+        counts = state.axis_counts(ctx["geninfo"])
+        detail = " / ".join(f"{a}: {n}本" for a, n in counts.items()) or "本数情報なし"
+        st.success(f"世代情報json（{ctx['geninfo_source']}）: {ctx['geninfo_path']}（{detail}）")
+    else:
+        st.info("世代情報json: なし — グループ定義と WL/STR 本数の整合チェックはスキップされます")
+    if ctx["custom_path"]:
+        st.success(
+            f"自作関数ファイル（{ctx['custom_source']}）: {ctx['custom_path']}"
+            f"（関数: {', '.join(ctx['custom_functions']) or 'なし'}）"
+        )
+    else:
+        st.info("自作関数ファイル: なし — type=custom（Python関数パーツ）は選択肢に出ません")
     if ctx["generation"]:
         st.info(f"Generation: {ctx['generation']} / WLgroup: {list(ctx['wlgroup']) or 'なし'}")
+    for w in state.group_def_warnings(ss.score_file, ctx["geninfo"]):
+        st.warning(w)
 
     st.subheader(f"検出された type: {', '.join(ctx['part_types'])}")
     for t in ctx["part_types"]:
+        if t not in ctx["catalogs"]:
+            continue  # "custom" has no axis catalog
         with st.expander(f"type: {t} の軸と値候補"):
             rows = []
             for axis, cands in ctx["catalogs"][t].items():
@@ -215,6 +300,7 @@ def screen_data() -> None:
         if st.button("設定jsonc内の既存スコア設定を読み込んで編集を始める"):
             ss.score_file = ctx["existing_score_file"]
             state.ensure_uids(ss.score_file)
+            state.import_config_group_defs(ss.score_file, ctx["wlgroup"])
             st.rerun()
 
 
@@ -286,7 +372,7 @@ def _add_entry_controls(part: dict, catalog: dict, uid: str) -> None:
             st.rerun()
 
 
-def _order_editor(part: dict, catalog: dict, sets: dict, wlgroup: dict, uid: str) -> None:
+def _order_editor(part: dict, catalog: dict, sets: dict, uid: str) -> None:
     """Order list: summary rows with reorder/delete, plus one always-open
     editor for the selected entry (an expander would collapse whenever its
     label changed, making value editing painful)."""
@@ -297,8 +383,13 @@ def _order_editor(part: dict, catalog: dict, sets: dict, wlgroup: dict, uid: str
 
     # One always-draggable list (案A): reordering needs no mode switch. The
     # community D&D component can only render plain string lists, so entry
-    # selection lives in a selectbox and deletion in the editor below.
-    labels = [_order_entry_label(e, part) for e in order]
+    # selection lives in a selectbox and deletion in the editor below. The
+    # ⠿ glyph signals draggability; ← 編集中 ties the list to the editor.
+    sel = st.session_state.get(sel_key)
+    labels = [
+        "⠿ " + _order_entry_label(e, part) + (" ← 編集中" if e == sel else "")
+        for e in order
+    ]
     used_dnd = False
     if widgets.HAS_SORTABLES and order and len(set(labels)) == len(labels):
         st.markdown("**order（上から順に実行）** — リストをドラッグすると並べ替えられます")
@@ -349,9 +440,61 @@ def _order_editor(part: dict, catalog: dict, sets: dict, wlgroup: dict, uid: str
                 widgets.agg_editor(
                     entry, spec, catalog,
                     set_names=sorted(sets),
-                    group_def_names=["WLgroup"] if wlgroup else [],
                     key=f"{uid}_{entry}",
                 )
+
+
+def _custom_part_editor(part: dict, ctx, uid: str) -> None:
+    st.markdown("**自作関数パーツ**")
+    st.caption(
+        "custom_parts.py の関数を1つ呼び、その戻り値（1スカラー）がこのパーツの値になります。"
+        "実行側では SVN リポジトリ直下の custom_parts.py が使われるため、"
+        "設計時と同じリビジョンのファイルを読み込んでください。"
+    )
+    funcs = ctx.get("custom_functions") or []
+    cur = part.get("function") or part.get("name")
+    if not funcs:
+        st.error("custom_parts.py が読み込まれていません（画面1でパス指定するか、一式zipに同梱してください）")
+    options = funcs + ([cur] if cur not in funcs else [])
+    part["function"] = st.selectbox(
+        "関数", options, index=options.index(cur) if cur in options else 0, key=f"{uid}_func"
+    )
+    if funcs and part["function"] not in funcs:
+        st.error(f"関数 '{part['function']}' は読み込んだ custom_parts.py にありません")
+
+    st.markdown("**params（ctx.params として関数に渡す追加パラメータ）**")
+    params = part.setdefault("params", {})
+
+    def _reset_param_widgets() -> None:
+        for k in list(st.session_state):
+            if str(k).startswith(f"{uid}_prm"):
+                del st.session_state[k]
+
+    new_items = []
+    for i, (pk, pv) in enumerate(list(params.items())):
+        c_k, c_v, c_rm = st.columns([3, 4, 1])
+        nk = c_k.text_input("名前", value=pk, key=f"{uid}_prm{i}_k")
+        nv = c_v.text_input("値", value=str(pv), key=f"{uid}_prm{i}_v",
+                            help="true/false・数値は型付きで渡されます（それ以外は文字列）")
+        if c_rm.button("✕", key=f"{uid}_prm{i}_rm", help="このパラメータを削除"):
+            params.pop(pk, None)
+            _reset_param_widgets()
+            st.rerun()
+        new_items.append(((nk or "").strip() or pk, widgets.parse_scalar(nv)))
+    keys = [k for k, _ in new_items]
+    if len(set(keys)) != len(keys):
+        st.error("パラメータ名が重複しています")
+    else:
+        part["params"] = dict(new_items)
+        params = part["params"]
+    if st.button("＋ パラメータを追加", key=f"{uid}_prm_add"):
+        n = len(params) + 1
+        pk = f"param{n}"
+        while pk in params:
+            n += 1
+            pk = f"param{n}"
+        params[pk] = 0
+        st.rerun()
 
 
 def screen_parts() -> None:
@@ -364,23 +507,40 @@ def screen_parts() -> None:
     sf = ss.score_file
     state.ensure_uids(sf)
 
+    # Selection is held as a part _uid in KEYED widget state ("part_sel"), so
+    # the new selection is already known at the START of the rerun the
+    # pulldown triggers — the list above it would otherwise render one action
+    # behind. Programmatic selection (add/duplicate) goes through
+    # part_sel_pending because keyed state must not be written after the
+    # widget was instantiated in the same run. Reordering needs no handling:
+    # the uid does not change, so the selection follows automatically.
+    uids = [p["_uid"] for p in sf["score_parts"]]
+    pending = ss.pop("part_sel_pending", None)
+    if pending in uids:
+        ss["part_sel"] = pending
+    if ss.get("part_sel") not in uids:
+        ss["part_sel"] = uids[min(ss.selected_part, len(uids) - 1)] if uids else None
+    sel_uid = ss.get("part_sel")
+    ss.selected_part = uids.index(sel_uid) if sel_uid in uids else 0
+
     rows = state.part_summary_rows(sf)
+    # validation marker: the D&D component renders plain strings only, so a
+    # per-item color is impossible — a ⚠ prefix is the visible alternative
+    invalid = {
+        p["_uid"] for p in sf["score_parts"] if state.validate_part(p, sf["selectionSets"])
+    }
+    for r, p in zip(rows, sf["score_parts"]):
+        r["検証"] = "⚠ NG" if p["_uid"] in invalid else "OK"
     parts_dnd = False
     if widgets.HAS_SORTABLES and len(sf["score_parts"]) > 1:
-        labels = [
-            f"{i + 1}. {r['名前']}（{r['type']}, 相対化{r['相対化']}）" for i, r in enumerate(rows)
-        ]
+        labels = state.part_list_labels(sf, sel_uid, invalid)
         new_labels = widgets.sortable_list(labels, key="parts_dnd")
         if new_labels is not None:
             parts_dnd = True
             st.caption("パーツ一覧はドラッグで並べ替えられます")
             if new_labels != labels:
-                sel_uid = sf["score_parts"][min(ss.selected_part, len(labels) - 1)]["_uid"]
                 by_label = dict(zip(labels, sf["score_parts"]))
                 sf["score_parts"] = [by_label[lbl] for lbl in new_labels]
-                ss.selected_part = next(
-                    i for i, p in enumerate(sf["score_parts"]) if p["_uid"] == sel_uid
-                )
                 st.rerun()
     if rows and not parts_dnd:
         st.dataframe(rows, use_container_width=True, hide_index=True)
@@ -389,10 +549,13 @@ def screen_parts() -> None:
     new_type = c1.selectbox("新規パーツの type", ctx["part_types"], key="new_part_type")
     if c2.button("追加（雛形を生成）", type="primary", key="add_part_btn"):
         name = state.unique_part_name(sf)
-        part = state.part_skeleton(name, new_type, ctx["catalogs"][new_type])
+        if new_type == "custom":
+            part = state.custom_part_skeleton(name, ctx["custom_functions"])
+        else:
+            part = state.part_skeleton(name, new_type, ctx["catalogs"][new_type])
         sf["score_parts"].append(part)
         state.ensure_uids(sf)
-        ss.selected_part = len(sf["score_parts"]) - 1
+        ss["part_sel_pending"] = sf["score_parts"][-1]["_uid"]
         st.rerun()
     with c3.popover("単体インポート"):
         up = st.file_uploader("エクスポートしたパーツjsonc", type=["jsonc", "json"], key="part_import")
@@ -414,59 +577,70 @@ def screen_parts() -> None:
     st.divider()
 
     names = state.part_names(sf)
-    idx = min(ss.selected_part, len(names) - 1)
-    idx = st.selectbox("編集するパーツ", range(len(names)), index=idx, format_func=lambda i: names[i])
-    ss.selected_part = idx
+    select_labels = state.part_select_labels(sf, invalid)
+    st.selectbox(
+        "編集するパーツ", uids, key="part_sel",
+        format_func=lambda u: select_labels.get(u, "?"),
+    )
+    idx = ss.selected_part  # derived from part_sel at the top of the screen
     part = sf["score_parts"][idx]
     uid = part["_uid"]
-    catalog = _catalog_for_part(ctx, part)
-    before = _snapshot(part)
+    catalog = _with_group_axes(_catalog_for_part(ctx, part), sf)
 
     cup, cdn, cdup, cdel = st.columns(4)
     if cup.button("▲ 上へ", disabled=idx == 0, help="このパーツを一覧の1つ上へ"):
-        ss.selected_part = state.move_entry(sf["score_parts"], idx, -1)
+        state.move_entry(sf["score_parts"], idx, -1)
         st.rerun()
     if cdn.button("▼ 下へ", disabled=idx == len(names) - 1, help="このパーツを一覧の1つ下へ"):
-        ss.selected_part = state.move_entry(sf["score_parts"], idx, +1)
+        state.move_entry(sf["score_parts"], idx, +1)
         st.rerun()
     if cdup.button("このパーツを複製"):
-        ss.selected_part = state.duplicate_part(sf, idx)
+        new_idx = state.duplicate_part(sf, idx)
         state.ensure_uids(sf)
+        ss["part_sel_pending"] = sf["score_parts"][new_idx]["_uid"]
         st.rerun()
     if cdel.button("このパーツを削除"):
         sf["score_parts"].pop(idx)
-        ss.selected_part = 0
+        ss.selected_part = max(0, min(idx, len(sf["score_parts"]) - 1))
         st.rerun()
 
     part["name"] = st.text_input("name", value=part.get("name", ""), key=f"{uid}_name")
-    types = ctx["part_types"]
     cur_type = part.get("type")
+    # keep the current type selectable even when its prerequisites are not
+    # loaded (custom file / coef jsonc absent) — otherwise the selectbox
+    # would silently rewrite the part to another type
+    types = ctx["part_types"] + ([cur_type] if cur_type not in ctx["part_types"] else [])
     tsel, tregen = st.columns([3, 1])
-    part["type"] = tsel.selectbox(
+    new_type = tsel.selectbox(
         "type", types, index=types.index(cur_type) if cur_type in types else 0, key=f"{uid}_type"
     )
-    if part["type"] != cur_type:
-        st.warning("type を変更しました。軸構成が異なる type の場合は雛形の再生成を推奨します")
-    if tregen.button("雛形を再生成", key=f"{uid}_regen", help="現在の type の全軸でパーツを作り直します（編集内容は失われます）"):
-        fresh = state.part_skeleton(part["name"], part["type"], ctx["catalogs"][part["type"]])
+    if new_type != cur_type:
+        notice = state.switch_part_type(part, new_type)
+        if notice:
+            st.toast(notice)
+        if new_type != "custom":
+            st.warning("type を変更しました。軸構成が異なる type の場合は雛形の再生成を推奨します")
+    if tregen.button("雛形を再生成", key=f"{uid}_regen", help="現在の type に合わせてパーツを作り直します（編集内容は失われます）"):
+        if part["type"] == "custom":
+            fresh = state.custom_part_skeleton(part["name"], ctx["custom_functions"])
+        else:
+            fresh = state.part_skeleton(part["name"], part["type"], ctx["catalogs"][part["type"]])
         fresh["_uid"] = uid
         sf["score_parts"][idx] = fresh
         st.rerun()
 
     st.divider()
-    widgets.relative_editor(
-        part, catalog,
-        set_names=sorted(sf["selectionSets"]),
-        group_def_names=["WLgroup"] if ctx["wlgroup"] else [],
-        key=f"{uid}_rel",
-    )
-    st.divider()
-    _order_editor(part, catalog, sf["selectionSets"], ctx["wlgroup"], uid)
-    _add_entry_controls(part, catalog, uid)
-    if _snapshot(part) != before:
-        # a widget changed the part this run: rerun immediately so the
-        # summary rows / labels above reflect it without a second click
-        st.rerun()
+    if part.get("type") == "custom":
+        _custom_part_editor(part, ctx, uid)
+    else:
+        widgets.relative_editor(
+            part, catalog,
+            set_names=sorted(sf["selectionSets"]),
+            key=f"{uid}_rel",
+        )
+        st.divider()
+        _order_editor(part, catalog, sf["selectionSets"], uid)
+        _add_entry_controls(part, catalog, uid)
 
     problems = state.validate_part(part, sf["selectionSets"])
     for p in problems:
@@ -475,14 +649,21 @@ def screen_parts() -> None:
         st.success("このパーツの検証: OK")
 
 
-# ------------------------------------------------------ 画面3: 選択セット管理
+# ---------------------------------------- 画面3: 選択セット・グループ定義
 
 def screen_sets() -> None:
     ss = st.session_state
     ctx = ss.context
-    st.header("選択セット管理")
-    st.caption("複数パーツで使い回す値の組（例: State と Read_Label の対応リスト）に名前を付けて管理します。パーツ側からは ref で参照します。")
     sf = ss.score_file
+    st.header("選択セット・グループ定義")
+    _selection_sets_section(sf, ctx)
+    st.divider()
+    _group_defs_section(sf, ctx)
+
+
+def _selection_sets_section(sf: dict, ctx) -> None:
+    st.subheader("選択セット")
+    st.caption("複数パーツで使い回す値の組（例: State と Read_Label の対応リスト）に名前を付けて管理します。パーツ側からは ref で参照します。")
     sets = sf["selectionSets"]
 
     if sets:
@@ -546,6 +727,106 @@ def screen_sets() -> None:
     if c5.button("このセットを削除", key=f"set_{name}_del"):
         try:
             state.delete_selection_set(sf, name)
+            st.rerun()
+        except ValueError as err:
+            st.error(str(err))
+
+
+def _group_defs_section(sf: dict, ctx) -> None:
+    st.subheader("グループ定義（軸のグループ分割）")
+    st.caption(
+        "数値軸を範囲でまとめた派生軸を定義します。パーツの order に定義名を軸として置くと、"
+        "好きな位置で集計できます（例: WLを平均 → Board を max → 最後に WLgroup を max）。"
+        "定義はスコアと一緒に保存・エクスポートされます。"
+    )
+    defs = sf.setdefault("groupDefs", {})
+    catalog = _merged_catalog(ctx) if ctx else {}
+    numeric_axes = [
+        a for a, c in catalog.items()
+        if a != "InBatchEpoch" and not (c and isinstance(c[0], (str, bool)))
+    ]
+
+    geninfo = ctx["geninfo"] if ctx else None
+    if geninfo is None:
+        st.caption("世代情報json（numWLs / numStrings）が未読み込みのため、本数との整合チェックはスキップされます（画面1で指定できます）")
+    for w in state.group_def_warnings(sf, geninfo):
+        st.warning(w)
+
+    if defs:
+        st.dataframe(
+            [
+                {
+                    "名前": n,
+                    "対象軸": d.get("axis", "?"),
+                    "グループ数": len(d.get("groups", {})),
+                    "参照しているパーツ": ", ".join(state.parts_referencing_group_def(sf, n)) or "（なし）",
+                }
+                for n, d in defs.items()
+            ],
+            use_container_width=True, hide_index=True,
+        )
+
+    c1, c2, c3 = st.columns([2, 2, 1])
+    gname = c1.text_input("新規定義名", key="new_gdef_name")
+    gaxis = c2.selectbox("対象軸", numeric_axes or ["WL"], key="new_gdef_axis")
+    if c3.button("作成", key="new_gdef_btn"):
+        try:
+            state.add_group_def(sf, gname, gaxis, set(catalog))
+            st.rerun()
+        except ValueError as err:
+            st.error(str(err))
+
+    if not defs:
+        return
+    name = st.selectbox("編集する定義", sorted(defs), key="edit_gdef_name")
+    gd = defs[name]
+    axis_opts = numeric_axes or [gd.get("axis", "WL")]
+    cur_axis = gd.get("axis")
+    gd["axis"] = st.selectbox(
+        "対象軸", axis_opts,
+        index=axis_opts.index(cur_axis) if cur_axis in axis_opts else 0,
+        key=f"gdef_{name}_axis",
+    )
+
+    def _reset_row_widgets() -> None:
+        # row widgets are keyed by index; after a structural change the
+        # remembered widget state would show the wrong row's values
+        for k in list(st.session_state):
+            if str(k).startswith(f"gdef_{name}_"):
+                del st.session_state[k]
+
+    groups = gd.setdefault("groups", {})
+    new_items = []
+    for i, (label, rng) in enumerate(list(groups.items())):
+        c_l, c_lo, c_hi, c_rm = st.columns([3, 2, 2, 1])
+        lbl = c_l.text_input("グループ名", value=label, key=f"gdef_{name}_{i}_lbl")
+        lo = c_lo.number_input("開始", value=int(rng[0]), step=1, key=f"gdef_{name}_{i}_lo")
+        hi = c_hi.number_input("終了", value=int(rng[1]), step=1, key=f"gdef_{name}_{i}_hi")
+        if c_rm.button("✕", key=f"gdef_{name}_{i}_rm", help="このグループを削除"):
+            groups.pop(label, None)
+            _reset_row_widgets()
+            st.rerun()
+        new_items.append(((lbl or "").strip() or label, [int(lo), int(hi)]))
+    labels = [l for l, _ in new_items]
+    if len(set(labels)) != len(labels):
+        st.error("グループ名が重複しています")
+    else:
+        gd["groups"] = dict(new_items)
+        groups = gd["groups"]
+
+    c4, c5 = st.columns(2)
+    if c4.button("＋ グループを追加", key=f"gdef_{name}_add"):
+        n = len(groups) + 1
+        label = f"g{n}"
+        while label in groups:
+            n += 1
+            label = f"g{n}"
+        groups[label] = [0, 0]
+        st.rerun()
+    if c5.button("この定義を削除", key=f"gdef_{name}_del"):
+        try:
+            state.delete_group_def(sf, name)
+            _reset_row_widgets()
             st.rerun()
         except ValueError as err:
             st.error(str(err))
@@ -650,6 +931,7 @@ def screen_test_export() -> None:
                             sf, test_dir, generation=generation or None,
                             wlgroup=ctx["wlgroup"] if ctx else None,
                             coef_path=test_coef or None,
+                            custom_path=ctx["custom_path"] if ctx else None,
                         )
                     st.dataframe(
                         [{"項目": k, "値": v} for k, v in result.items()],
@@ -664,6 +946,11 @@ def screen_test_export() -> None:
     if problems:
         st.warning("検証エラーがあるためエクスポートできません: " + " / ".join(problems))
     else:
+        if any(p.get("type") == "custom" for p in sf["score_parts"]):
+            st.caption(
+                "⚠ type=custom のパーツを含みます。関数本体は score.jsonc には入らないため、"
+                "実行側の SVN リポジトリ直下に同じ custom_parts.py が必要です。"
+            )
         st.download_button(
             "score.jsonc をダウンロード（selectionSets 同梱）",
             data=state.score_file_to_jsonc(sf), file_name="score.jsonc", mime="application/json",
@@ -716,6 +1003,12 @@ def main() -> None:
     if warning:
         st.warning(warning)
 
+    # Change detection for ALL screens: when widgets mutated the score file
+    # during this run, rerun immediately so every summary row / warning /
+    # label reflects the change without a second click. Done here (not per
+    # screen) so a newly added screen cannot forget it — screen 3's group-def
+    # warnings lagged one action behind for exactly that reason.
+    before = _snapshot(st.session_state.score_file)
     if screen == SCREENS[0]:
         screen_data()
     elif screen == SCREENS[1]:
@@ -726,6 +1019,8 @@ def main() -> None:
         screen_compose()
     else:
         screen_test_export()
+    if _snapshot(st.session_state.score_file) != before:
+        st.rerun()
 
     _track_history()
     _autosave()
