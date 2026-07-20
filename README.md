@@ -59,6 +59,62 @@ python -m venv .venv
 ※ 設計上はPython 3.13を想定。この開発機には3.11しかなかったため3.11で構築したが、
 コードは3.13でそのまま動作する（3.10+対応）。
 
+## バージョンの上げ方
+
+変更するのは **`scorelib_param/__init__.py` の `__version__` の1行だけ**。
+
+- pyproject.toml は `dynamic = ["version"]` でこの値を参照する（二重管理しない）
+- UIサイドバー・CLI（`--version` / stderr のログ）もこの値を表示する
+- 上げるタイミング: **SVN のスクリプト領域へ scorelib_param/ を同期するたび**
+  （SVN側エンジンとUI同梱エンジンの版ズレ確認が目的のため）
+- 目安: 互換性に影響する変更（パッケージ名・出力契約・configの意味変更）で
+  真ん中の数字、それ以外の機能追加・修正は最後の数字を上げる
+
+## 配置まとめ（どこに何を置くか）
+
+3つの設置先で必要なものは異なる。コードの正は git（本リポジトリ）で、
+そこから必要な部分だけを各所へ配る。
+
+| 設置先 | 置くもの | インストールするもの |
+|---|---|---|
+| **開発PC**（コードの正） | リポジトリ全体（git clone） | `pip install -e ".[dev]"`（venv） |
+| **UIサーバ / UI起動PC** | リポジトリ全体（clone か zip 展開。最低限は `scorelib_param/` + `ui/` + `custom_parts.py` + `pyproject.toml`） | `pip install -e ".[ui]"` → `streamlit run ui/app.py` |
+| **最適化サーバ（SVN kicOpt）** | `scorelib_param/`（パッケージ丸ごと）→ **kicOpt/scorelib_param/**、`custom_parts.py` → **kicOpt/custom_parts.py**、ブリッジ関数 → **kicOpt/optlib/turbo.py** に貼る | エンジン用 python 環境に `polars` `pydantic` `simpleeval` の3つだけ（下記）。**scorelib_param 自体は pip install しない**（ブリッジが PYTHONPATH で解決） |
+
+補足:
+
+- **パッケージは分割しない**: `introspect.py` は「UIの情報源」だが streamlit
+  非依存の純粋関数なので意図的にエンジン側に同梱している（本ファイル冒頭の
+  ディレクトリ構成の注記参照）。最適化サーバでは使われないだけで、置いて
+  あっても害はない。**scorelib_param/ の中から一部ファイルを抜く運用はしない**
+  （版ズレ・欠落事故のもと）。
+- **SVN に入れないもの**: tests/ docs/ ui/ scripts/ result_tmp 等は git のみ。
+  SVN へは scorelib_param/ + custom_parts.py だけを同期し、同期のたびに
+  `__version__` を上げる（「バージョンの上げ方」参照）。
+  `scripts/benchmark_batch.py` だけは実測に使うなら置いてもよい（任意）。
+- `custom_parts.py` の探索位置は「scorelib_param/ の親」= kicOpt/ 直下
+  （コードの固定規約。custom パーツ未使用なら無くても動く）。
+
+### 最適化サーバのエンジン用 python 環境（miniforge）
+
+最適化スクリプト用の既存環境（例: nb37 / python3.7）は**そのまま**にし、
+エンジン用の環境を別に作る。subprocess は環境の python バイナリを
+**フルパスで直接起動**するため、`conda activate` は不要:
+
+```bash
+conda create -n score313 python=3.13 -y
+~/miniforge3/envs/score313/bin/python -m pip install "polars>=1.0" "pydantic>=2.0" "simpleeval>=1.0"
+
+# 動作確認（kicOpt に scorelib_param を同期済みの前提）
+PYTHONPATH=/path/to/kicOpt ~/miniforge3/envs/score313/bin/python -m scorelib_param.cli --version
+```
+
+turbo.py 側はブリッジの `engine_python` にこのフルパスを渡すだけ:
+
+```python
+ENGINE_PYTHON = os.path.expanduser("~/miniforge3/envs/score313/bin/python")
+```
+
 ## 使い方
 
 ### CLI（本番の最適化ループから呼ばれる形）

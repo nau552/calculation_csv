@@ -6,4 +6,6 @@ __version__ はエンジンのリリース版数。scorelib_param/ を SVN の�
 設計UIのサイドバーと CLI（stderr / --version）に表示され、UIに同梱された
 エンジンと SVN 側エンジンの版ズレに気づくための目印になる。
 """
+# 版上げは【この1行だけ】変えればよい。pyproject.toml は dynamic 設定で
+# ここを参照しており、UIサイドバー・CLI（--version / stderr）もここを表示する
 __version__ = "0.3.0"

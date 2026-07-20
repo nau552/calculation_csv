@@ -1,6 +1,9 @@
 [project]
 name = "scorelib_param"
-version = "0.3.0"
+# 版数はここには書かない: scorelib_param/__init__.py の __version__ が唯一の
+# 正で、下の [tool.setuptools.dynamic] がそれを参照する。
+# 版上げの手順は README「バージョンの上げ方」を参照
+dynamic = ["version"]
 description = "Score / score-part definition, aggregation engine, and CLI for score_gui Phase1"
 requires-python = ">=3.10"
 dependencies = [
@@ -20,8 +23,12 @@ dev = ["pytest>=8.0", "streamlit>=1.50", "streamlit-sortables>=0.3"]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["scorelib_param"]
+[tool.setuptools.dynamic]
+version = {attr = "scorelib_param.__version__"}
+
+[tool.setuptools.packages.find]
+# scorelib_param.batch などのサブパッケージも含める（固定リストだと追加を忘れる）
+include = ["scorelib_param*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

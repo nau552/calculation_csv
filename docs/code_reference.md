@@ -37,6 +37,8 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 
 ### `scorelib_param/__init__.py`
 - `__version__` — エンジンの版。SVNへ同期するたびに上げる（UIサイドバー・CLIに表示）。
+  **版上げはこの1行だけ**: pyproject.toml は dynamic 設定でこの値を参照する
+  （手順は README「バージョンの上げ方」）。
 
 ### `scorelib_param/jsonc.py` — コメント付きJSONの読み書き
 | 関数 | 内容 |
