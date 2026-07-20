@@ -240,6 +240,70 @@ ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算
 
 ---
 
+## scorelib/batch/（過去実験データのバッチスコア計算）
+
+設計は `docs/batch_design.md`。複数の result_history（過去実験の epoch 群）を
+受け取り、識別列 `Epoch` を通してバッチ単位に一括計算する。単一 epoch 計算と
+数値等価（tests/test_batch.py で保証）。CLI: `python -m scorelib.batch`。
+
+### `scorelib/batch/history.py` — result_history の列挙と Epoch ID
+| 名前 | 内容 |
+|---|---|
+| `EpochRef` | 1 epoch への参照（label / epoch_no / source_dir）。`epoch_id` = `"{label}#{NNNN}"` |
+| `derive_label(path)` | `<実験ログ>/Step{N}/Loop{NN}/result_history` から親3段でラベル導出（構造が違えば警告） |
+| `enumerate_epochs(histories)` | パスのリスト or {ラベル: パス} → 全 EpochRef。ラベル重複・空 history はエラー、`result.NNNN` 以外は警告して無視 |
+
+### `scorelib/batch/staging.py` — アーカイブ展開・検証・削除
+| 名前 | 内容 |
+|---|---|
+| `StagedEpoch` | 計算可能になった 1 epoch（data_dir / created_dir=削除対象 / error=skip理由） |
+| `stage_epoch(ref, staging_root)` | tar.gz/zip があればビューdir（展開+リンク）を作成。csv/csv.gz のみなら元dirをそのまま使う。例外は error に落とす |
+| `validate_epoch(staged, types, needs_dvt)` | config が参照する type のファイル存在チェック（固定リストではなく config 駆動） |
+| `cleanup_epoch(staged)` | 自分が作ったビューdirだけ削除（入力元は絶対に触らない） |
+
+安全対策: アーカイブ内の絶対パス・`..` エントリは拒否。ディレクトリごと固めた
+tar は展開後に1段持ち上げる（flatten）。symlink 不可の環境はコピーで代替。
+
+### `scorelib/batch/compute.py` — バッチ計算層（純粋・polars）
+| 名前 | 内容 |
+|---|---|
+| `EPOCH_COL` | 識別軸の予約名 `"Epoch"`。設計内の軸・グループ定義と衝突したらエラー |
+| `BatchComputeContext` | SharedComputeContext のバッチ版: type ごとに全 epoch を resolve → `Epoch` 列付与 → lazy concat → streaming collect。prefix_cache は親のまま共有 |
+| `compute_score_batch(epochs, config, coef)` | 1バッチ一括計算 → `BatchResult`。パーツごとに `compute_score_part(..., identity_axes=("Epoch",))`、custom は epoch ループ、expression は epoch ごとに評価 |
+| `BatchResult` | scores（Epoch/History/EpochNo/Score/全パーツの DataFrame）+ failed（{Epoch: 理由}） |
+
+エラー処理: バッチ一括計算が失敗したら epoch 逐次計算（compute_score_file）に
+自動フォールバックして原因 epoch を特定・除外し、正常 epoch の値を救う。
+filter 空振りで行ごと消えた epoch は「パーツごとに全 epoch が揃っているか」の
+検証で捕まえる。
+
+### `scorelib/batch/runner.py` — パイプライン実行
+| 名前 | 内容 |
+|---|---|
+| `Fetcher` | `(EpochRef, staging_root) -> Path`。デフォルト `passthrough_fetcher`（ローカル/マウント済みをそのまま）。scp 等はこの実装を足すだけ |
+| `BatchRunner` | バッチ分割 → 先行取得（最大 max_prefetch、ThreadPoolExecutor）→ 計算 → ステージング削除。`run()`（全結合）/ `run_iter()`（バッチごと） |
+| `available_memory_bytes()` | /proc/meminfo（Linux、追加依存なし）→ psutil → None |
+| `estimate_epoch_bytes()` / `_advise_batch_size()` | 最初の epoch を実測して batch_size auto / 過大・過小の助言（stderr。実行はブロックしない） |
+| `StrictBatchError` | strict モードで不良 epoch を検出したときの例外 |
+
+### `scorelib/batch/__main__.py` — CLI
+`python -m scorelib.batch --config ... --history ... --out scores.csv`。
+`--history` は繰り返し可・`label=path` 形式可。除外 epoch は stderr と
+`<out>.failed.csv` に理由つきで出力。`--max-threads N` で計算スレッド数を
+制限できる（POLARS_MAX_THREADS を polars の初回 import **前**に設定する
+必要があるため、`batch/__init__.py` は PEP 562 の遅延インポートにし、
+`__main__` は引数処理後に runner を import する構造。バッチサイズが
+決めるのはメモリで、CPU はスレッド数で制御する）。
+
+### エンジン本体への変更（すべて後方互換・オプショナル）
+| 箇所 | 内容 |
+|---|---|
+| `axis_resolve.data_file()` | `{name}.csv` が無ければ `{name}.csv.gz` を解決（polars が scan_csv で直読みできるため解凍不要） |
+| `dvtbudget.apply_dvtbudget(..., epoch_col=None)` | epoch_col 指定時は温度を `{epoch: {Board: 温度}}` で受け、係数 b を (Epoch, Board, State) で join（温度=係数が epoch で変わりうるため） |
+| `cli.compute_score_part(..., identity_axes=())` | 識別列を潰さず残し、識別値ごとに1行の DataFrame を返す（空=従来どおり float） |
+
+---
+
 ## ルート・その他
 
 | ファイル | 内容 |
@@ -247,6 +311,7 @@ ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算
 | `custom_parts.py` | 自作関数の登録テンプレート（SVN登録用。書き方の説明コメント入り） |
 | `config_mini.jsonc` | UI動作確認用のサンプルスコア設定（tests/data/result_tmp_mini と組で使う） |
 | `scripts/convert_dvtbudget_coef.py` | 現行の係数Pythonファイル（`dVtBudget_coef = {...}`）を ast で安全に読み jsonc へ変換 |
+| `scripts/benchmark_batch.py` | 実運用マシンでバッチサイズごとの所要時間・ピークメモリを実測する（計測1回=子プロセス1つ。`--batch-sizes auto,10,25,50` / `--max-threads` / `--repeat`） |
 | `tests/data/result_tmp_mini/` | テスト・動作確認用の小さな測定データ一式（git登録済み。実データ result_tmp/ は登録しない） |
 | `tests/` | テスト（解説は `testing_guide.md`） |
 | `reference_scripts/` | 現行スクリプトの参照用コピー（エンジン検証の正解データ生成に使用。expand_FBC_measure.py はテストが実行する） |

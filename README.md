@@ -18,6 +18,12 @@ scorelib/                   # 本体パッケージ
   cli.py                    # サブプロセス起動用エントリポイント
   introspect.py             # 過去実験の出力からtype一覧・軸一覧・値候補を導出（UIの情報源。
                             #   streamlit非依存の純粋関数なのでscorelib側に置く）
+  batch/                    # 過去実験データのバッチスコア計算（docs/batch_design.md）
+    history.py              # result_history の列挙・Step/Loopラベル・Epoch ID
+    staging.py              # tar.gz展開ビュー・事前検証・削除（csv.gz単体は直読み）
+    compute.py              # Epoch列を通したバッチ一括計算（単一epoch計算と数値等価）
+    runner.py               # 取得→計算→削除パイプライン（先行取得・メモリadvisory）
+    __main__.py             # python -m scorelib.batch
 ui/                         # Streamlitスコア設計UI（エンジンとはディレクトリを分離）
   app.py                    # エントリポイント。サイドバーで5画面を切替
   state.py                  # 編集状態の純粋ロジック（雛形生成・検証・下書き保存等。pytest対象）
@@ -490,7 +496,7 @@ Board/Stateを相対化より後に集計すること。
 ## テスト
 
 ```bash
-.venv/Scripts/python -m pytest tests/ -q     # 26件、全パス
+.venv/Scripts/python -m pytest tests/ -q     # 163件、全パス
 ```
 
 ### 何をどう検証しているか
@@ -541,9 +547,72 @@ Board/Stateを相対化より後に集計すること。
 キャッシュの寿命は1回の計算実行内のみで、epoch間で持ち越さない。
 `compute_score_part` を単体で呼んだ場合（shared_ctx未指定）は従来通り毎回読み込む。
 
-将来の過去データ活用（複数epochバッチ計算）に備え、集計の最終収束は
-「識別軸（例: Epoch）を残して潰す」形に一般化済み（`aggregate.collapse`）。
-現在は識別軸なし＝1スカラーで従来と同じ動作。
+集計の最終収束は「識別軸（例: Epoch）を残して潰す」形に一般化されており
+（`aggregate.collapse`）、これを使った**複数epochバッチ計算**が
+`scorelib.batch` として実装済み（次節）。通常の単一epoch計算は
+識別軸なし＝1スカラーで従来と同じ動作。
+
+## 過去実験データのバッチスコア計算（scorelib.batch）
+
+ベイズ最適化の初期モデル構築用に、過去実験の result_history 群
+（`<実験ログ>/Step{N}/Loop{NN}/result_history/result.{NNNN}/` = 1 epoch）を
+バッチ単位でまとめてスコア計算する。設計は `docs/batch_design.md`。
+
+```bash
+python -m scorelib.batch \
+    --config config.jsonc \
+    --history /data/expA/Step1/Loop01/result_history \
+    --history expB=/data/expB/Step2/Loop03/result_history \   # label=path でラベル明示も可
+    --dvtbudget-coef dvtbudget_coef.jsonc \                   # dVtBudgetパーツがある場合のみ
+    --out scores.csv \
+    [--batch-size 50 | --batch-size auto] [--max-prefetch 2] \
+    [--staging-dir DIR] [--strict] [--keep-staging] [--max-threads N]
+```
+
+出力 CSV は 1 epoch = 1 行:
+`Epoch`（一意ID: `expA/Step1/Loop01#0001`）, `History`, `EpochNo`, `Score`, 全パーツ値。
+除外 epoch は stderr と `<out>.failed.csv` に理由つきで報告される
+（既定は skip-and-report。`--strict` で最初の不良で停止）。
+
+Python から:
+
+```python
+from scorelib.batch import BatchRunner
+runner = BatchRunner([hist_path1, hist_path2], run_config, dvtbudget_coef=coef)
+result = runner.run()        # result.scores: DataFrame / result.failed: {Epoch: 理由}
+for batch in runner.run_iter():  # バッチごとに逐次受け取る場合
+    ...
+```
+
+ポイント:
+
+- **単一epoch計算と数値等価**（`tests/test_batch.py` の等価性テストで保証）。
+  仕組みは「Epoch 列を1本通すだけ」— エンジンの「グループキー＝残っている
+  全列」の性質により、全集計・相対化ペア照合・グループ派生軸が自動的に
+  epoch 単位に分かれる。dVtBudget の係数は epoch ごとの
+  `initial_temperature.csv` から epoch 別に解決される。
+- `--initial-temperature` 指定は不要（各 result.NNNN 内のものを読む）。
+- **圧縮対応**: csv.gz 単体は polars が直読み（解凍なし）。tar.gz / zip
+  アーカイブのみステージング領域に展開し、計算後に削除する。入力元は
+  一切変更・削除しない。
+- **パイプライン**: 計算中に次の最大 `--max-prefetch` バッチを裏で取得。
+  ディスク使用は「(1+prefetch)×1バッチ分」が上限。データ取得手段
+  （scp 等）は `Fetcher` callable の差し替えで追加できる（当面はローカル/
+  共有マウントの pass-through）。
+- **メモリ**: `--batch-size auto` で利用可能メモリ（Linux は /proc/meminfo）
+  と最初の epoch の実測から自動選択。数値指定時も過大/過小の助言を stderr
+  に出す（実行はブロックしない）。バッチサイズは主に**ピークメモリ**を
+  決め、所要時間はほぼ変わらない（実測: 129万行/epoch × 50 epoch × 15
+  パーツで、batch_size 50/25/10 いずれも 10.5s。ピークは 15 / 8.1 / 3.7 GiB）。
+- **CPU**: 計算中は polars が全コアを使う（CPU 100% は正常動作）。マシンを
+  他の作業と共有する場合は `--max-threads N` で計算スレッド数を制限できる
+  （メモリと違い、CPU はバッチサイズでは制御しない）。
+- **実測ツール**: `python scripts/benchmark_batch.py --config ... --history ...
+  --batch-sizes auto,10,25,50` で、実運用マシンでのバッチサイズごとの
+  所要時間・ピークメモリの表を出せる（計測ごとに別プロセスで実行）。
+- custom パーツはバッチ化されず epoch ごとに関数が呼ばれる（結果は同じ。
+  遅くなるのは custom パーツのみ）。
+- 予約名: 識別軸 `Epoch`。同名の軸・グループ定義があるとエラー。
 
 ## 現行スクリプトとの数値比較手順（tests/data/result_tmp_mini）
 

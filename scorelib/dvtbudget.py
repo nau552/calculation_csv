@@ -35,10 +35,20 @@ def apply_dvtbudget(
     value_col: str,
     generation: str,
     coef: DvtBudgetCoefFile,
-    board_temperatures: Mapping[int, float],
+    board_temperatures: Mapping,
+    epoch_col: str | None = None,
 ) -> pl.LazyFrame:
+    """通常（単一epoch）は `board_temperatures = {Board: 温度}`。
+
+    バッチ計算（scorelib.batch）では温度が epoch ごとの
+    initial_temperature.csv から来て係数 `b` が epoch で変わりうるため、
+    `epoch_col`（識別軸名。例: "Epoch"）を指定し
+    `board_temperatures = {epoch値: {Board: 温度}}` の2段ネストで渡すと、
+    係数対応表を (epoch, Board, State) キーで引く。
+    """
     schema_cols = lf.collect_schema().names()
-    missing = {"Board", "State"} - set(schema_cols)
+    needed = {"Board", "State"} | ({epoch_col} if epoch_col else set())
+    missing = needed - set(schema_cols)
     if missing:
         raise ValueError(
             f"dVtBudget conversion needs columns {sorted(missing)} still present; "
@@ -48,15 +58,22 @@ def apply_dvtbudget(
     gen_coefs = coef.root[generation]
     temp_keys = list(gen_coefs.keys())
 
-    # (Board, State) → b の小さな対応表を作って結合する
+    # (Board, State)（epoch別温度なら (epoch, Board, State)）→ b の
+    # 小さな対応表を作って結合する
+    per_epoch = {None: board_temperatures} if epoch_col is None else board_temperatures
     rows = []
-    for board, temp in board_temperatures.items():
-        nearest = _nearest_temp_key(temp_keys, temp)
-        for state, entry in gen_coefs[nearest].items():
-            rows.append({"Board": board, "State": state, "__b__": entry.b})
+    for epoch_value, temps in per_epoch.items():
+        for board, temp in temps.items():
+            nearest = _nearest_temp_key(temp_keys, temp)
+            for state, entry in gen_coefs[nearest].items():
+                row = {"Board": board, "State": state, "__b__": entry.b}
+                if epoch_col is not None:
+                    row[epoch_col] = epoch_value
+                rows.append(row)
 
+    join_keys = (([epoch_col] if epoch_col else []) + ["Board", "State"])
     coef_lf = pl.DataFrame(rows).lazy()
-    lf = lf.join(coef_lf, on=["Board", "State"], how="left")
+    lf = lf.join(coef_lf, on=join_keys, how="left")
     lf = lf.with_columns(
         (-(pl.col(value_col).log10()) / pl.col("__b__") * 1000).alias(value_col)
     ).drop("__b__")

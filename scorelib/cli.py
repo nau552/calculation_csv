@@ -19,7 +19,13 @@ from typing import Dict, Optional, Set
 import polars as pl
 
 from . import axis_resolve, custom, io_jsonc
-from .aggregate import apply_aggregations, apply_transform, collapse_to_scalar, group_column_expr
+from .aggregate import (
+    apply_aggregations,
+    apply_transform,
+    collapse,
+    collapse_to_scalar,
+    group_column_expr,
+)
 from .dvtbudget import apply_dvtbudget, load_board_temperatures
 from .expression import evaluate_expression
 from .models import COMBINED_SEP, CUSTOM_TYPE, DvtBudgetCoefFile, GroupDef, RunConfig, ScorePart
@@ -244,9 +250,27 @@ def compute_score_part(
     shared_ctx: Optional[SharedComputeContext] = None,
     selection_sets: Optional[Dict[str, list]] = None,
     custom_module=None,
-) -> float:
+    identity_axes: tuple[str, ...] = (),
+):
     """スコアパーツ1つの値を計算する。type="custom" は関数呼び出しへ分岐し、
-    それ以外は resolve → グループ派生列 → order の逐次適用、で1スカラーに畳む。"""
+    それ以外は resolve → グループ派生列 → order の逐次適用、で1スカラーに畳む。
+
+    `identity_axes` はバッチ計算（scorelib.batch）用: shared_ctx が供給する
+    フレームに識別列（例: "Epoch"）が含まれる前提で、その列を潰さずに残し、
+    識別値ごとに1行の DataFrame を返す（空タプル=従来どおり float を返す）。
+    識別列は order に置かないため「残っている全列がグループキー」の仕組みに
+    より、全集計・相対化ペア照合が自動的に識別値ごとに分かれて実行される。
+    """
+    if identity_axes:
+        if shared_ctx is None:
+            raise ValueError(
+                "identity_axes requires a shared context that provides the identity columns"
+            )
+        if score_part.type == CUSTOM_TYPE:
+            raise ValueError(
+                f"custom part '{score_part.name}' cannot be batched with identity_axes; "
+                "compute it once per epoch instead (scorelib.batch does this automatically)"
+            )
     if score_part.type == CUSTOM_TYPE:
         if custom_module is None:
             raise ValueError(
@@ -273,7 +297,7 @@ def compute_score_part(
         # 単独 resolve が返すのと厳密に同じ列へ射影し直す: 和集合の余分な列が
         # 残ると相対化のペアリングキーや集計のグループキーが変わってしまうため、
         # この射影は結果の正しさを支えている（消してはいけない）
-        cols = [source_type] + sorted(required_axes)
+        cols = [source_type] + sorted(required_axes) + list(identity_axes)
         lf = base.lazy().select(cols)
     else:
         lf = axis_resolve.resolve_axes(data_dir, source_type, required_axes)
@@ -293,7 +317,7 @@ def compute_score_part(
                 for name, gd in _referenced_group_defs(score_part, group_defs).items()
             )
         )
-        base_sig = (source_type, tuple(sorted(required_axes)), defs_sig)
+        base_sig = (source_type, tuple(sorted(required_axes)), defs_sig, tuple(identity_axes))
         cache_keys = {
             i: (base_sig, tuple(sigs[: i + 1]))
             for i, s in enumerate(steps)
@@ -318,7 +342,15 @@ def compute_score_part(
                 raise ValueError(
                     "dVtBudget score parts require generation, dvtbudget_coef, and board_temperatures"
                 )
-            lf = apply_dvtbudget(lf, source_type, generation, dvtbudget_coef, board_temperatures)
+            # バッチ計算では温度（→係数b）が epoch ごとに違いうるため、
+            # 識別軸を係数対応表のキーに含める（dvtbudget.apply_dvtbudget 参照）
+            epoch_col = identity_axes[0] if identity_axes else None
+            if len(identity_axes) > 1:
+                raise ValueError("dVtBudget parts support at most one identity axis")
+            lf = apply_dvtbudget(
+                lf, source_type, generation, dvtbudget_coef, board_temperatures,
+                epoch_col=epoch_col,
+            )
         elif _is_virtual(step):
             spec = score_part.aggregations.get(step)
             if spec is None:
@@ -332,6 +364,8 @@ def compute_score_part(
             shared_ctx.prefix_cache[cache_keys[j]] = df
             lf = df.lazy()
 
+    if identity_axes:
+        return collapse(lf, source_type, identity_axes)
     return collapse_to_scalar(lf, source_type)
 
 

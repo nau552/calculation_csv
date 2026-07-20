@@ -6,4 +6,4 @@ __version__ はエンジンのリリース版数。scorelib/ を SVN のスク�
 設計UIのサイドバーと CLI（stderr / --version）に表示され、UIに同梱された
 エンジンと SVN 側エンジンの版ズレに気づくための目印になる。
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"

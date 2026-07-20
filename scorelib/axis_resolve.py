@@ -30,6 +30,19 @@ JOIN_KEYS = ["InBatchEpoch", "Board", "Chip", "Block", "Measure"]
 OVERRIDE_SUFFIX = "_Override"
 
 
+def data_file(data_dir: Path, filename: str) -> Path:
+    """`filename`（例: "FBC.csv"）の実体パス。非圧縮が無ければ gzip 単体圧縮版
+    （`filename + ".gz"`）を探す。polars は scan_csv で .csv.gz を直接読めるため
+    解凍は不要（複数ファイルを固めた tar.gz は batch/staging.py が事前に展開し、
+    ここには常に csv / csv.gz として見える）。どちらも無ければ非圧縮のパスを
+    返す（呼び出し元が exists 判定やエラー文言に使う）。"""
+    plain = data_dir / filename
+    if plain.exists():
+        return plain
+    gz = data_dir / (filename + ".gz")
+    return gz if gz.exists() else plain
+
+
 def _map_file_for_axis(data_dir: Path, axis: str) -> Path | None:
     if axis.endswith("_Label"):
         name = "map_Label.csv"
@@ -39,7 +52,7 @@ def _map_file_for_axis(data_dir: Path, axis: str) -> Path | None:
         name = "map_dataName.csv"
     else:
         name = f"map_{axis}.csv"
-    path = data_dir / name
+    path = data_file(data_dir, name)
     return path if path.exists() else None
 
 
@@ -60,14 +73,14 @@ def resolve_axes(
     required_axes = set(required_axes)
     value_col = type_
 
-    lf = pl.scan_csv(data_dir / f"{type_}.csv")
+    lf = pl.scan_csv(data_file(data_dir, f"{type_}.csv"))
     base_cols = set(lf.collect_schema().names())
 
     # {type}.csv 自体に無い軸は parameterLabel_{type}.csv（Erase/Program/Read の
     # Label + Override）または dataName_{type}.csv（DataName）から来る。
     missing_axes = required_axes - base_cols
 
-    label_path = data_dir / f"parameterLabel_{type_}.csv"
+    label_path = data_file(data_dir, f"parameterLabel_{type_}.csv")
     if missing_axes - {"DataName"} and label_path.exists():
         label_lf = pl.scan_csv(label_path)
         label_cols = [c for c in label_lf.collect_schema().names() if c not in JOIN_KEYS]
@@ -76,7 +89,7 @@ def resolve_axes(
             lf = lf.join(label_lf.select(JOIN_KEYS + take), on=JOIN_KEYS, how="left")
 
     if "DataName" in missing_axes:
-        dn_lf = pl.scan_csv(data_dir / f"dataName_{type_}.csv")
+        dn_lf = pl.scan_csv(data_file(data_dir, f"dataName_{type_}.csv"))
         lf = lf.join(dn_lf.select(JOIN_KEYS + ["DataName"]), on=JOIN_KEYS, how="left")
 
     unresolvable = required_axes - set(lf.collect_schema().names())

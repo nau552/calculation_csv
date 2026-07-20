@@ -105,6 +105,7 @@ def test_filter_then_mean():
 | `test_pipeline_steps.py` | 仮想ステップの配置換え（`__offset__`→相対化、`__relative__` を後ろに置く等）が数学的に等価な別表現と一致 |
 | `test_shared_context.py` | 共有キャッシュあり/なしで**結果が完全一致**すること、csv読み込みが type ごとに1回だけになること、State 違いのパーツ間で相対化計算が再利用されること |
 | `test_cli.py` | 本丸。fixtures の config を実データで計算し、**テスト内に独立に書いた素朴な再計算と一致**することを照合（FBCパーツ）。遅延グループ集計のユーザシナリオ。範囲外WL値のエラー。custom パーツの計算・エラー・混在拒否。**サブプロセスとして CLI を起動する完全E2E**（最適化側から呼ばれる形そのもの） |
+| `test_batch.py` | バッチ計算（scorelib.batch）。**最重要は等価性**: 5 epoch（2実験、値・dVtBudget温度を全 epoch で変えた摂動データ）のバッチ一括計算が epoch ごとの `compute_score_file` と全パーツ一致 — epoch 混線（相対化ペア・集計・係数選択のまたがり）はどんな形でも不一致として現れる構成。ほか: Step/Loop ラベル導出、列挙（重複ラベル・空 history・junk 無視）、csv.gz 直読み、tar.gz 展開（フラット/ネスト flatten・ビュー削除・入力元無傷・不正パス拒否）、skip-and-report / strict / filter 空振り epoch の帰属 / 全滅エラー / 予約名 `Epoch` 衝突、batch-size advisory、CLI E2E |
 
 ### UIテスト
 | ファイル | 層 | 内容 |
