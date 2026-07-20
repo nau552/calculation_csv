@@ -1,4 +1,4 @@
-"""バッチスコア計算（scorelib.batch — docs/batch_design.md）のテスト。
+"""バッチスコア計算（scorelib_param.batch — docs/batch_design.md）のテスト。
 
 最重要は**等価性**: 複数 epoch をバッチ一括計算した結果が、epoch ごとに
 compute_score_file を呼んだ結果（現行の単一 epoch 計算）と全パーツ一致する
@@ -14,8 +14,8 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from scorelib import io_jsonc
-from scorelib.batch import (
+from scorelib_param import io_jsonc
+from scorelib_param.batch import (
     BatchRunner,
     StrictBatchError,
     compute_score_batch,
@@ -23,12 +23,12 @@ from scorelib.batch import (
     enumerate_epochs,
     stage_epoch,
 )
-from scorelib.batch.compute import EPOCH_COL
-from scorelib.batch.runner import _advise_batch_size
-from scorelib.batch import runner as runner_mod
-from scorelib.cli import compute_score_file
-from scorelib.dvtbudget import load_board_temperatures
-from scorelib.models import GroupDef
+from scorelib_param.batch.compute import EPOCH_COL
+from scorelib_param.batch.runner import _advise_batch_size
+from scorelib_param.batch import runner as runner_mod
+from scorelib_param.cli import compute_score_file
+from scorelib_param.dvtbudget import load_board_temperatures
+from scorelib_param.models import GroupDef
 
 MINI = Path(__file__).resolve().parent / "data" / "result_tmp_mini"
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -375,7 +375,7 @@ def test_advise_batch_size_auto_without_meminfo(monkeypatch):
 def test_cli_default_batch_size_matches_runner():
     """__main__ は polars 未import で argparse を組むため定数を持つ。
     runner 側とズレたら気づけるように一致を検証する。"""
-    from scorelib.batch import __main__ as cli_mod
+    from scorelib_param.batch import __main__ as cli_mod
 
     assert cli_mod.DEFAULT_BATCH_SIZE == runner_mod.DEFAULT_BATCH_SIZE
 
@@ -386,7 +386,7 @@ def test_cli_max_threads_sets_env(history_tree, config_and_coef, tmp_path, monke
     でしか出ないが、設定の伝播だけをここで確認する。"""
     import os
 
-    from scorelib.batch.__main__ import main
+    from scorelib_param.batch.__main__ import main
 
     monkeypatch.setenv("POLARS_MAX_THREADS", "sentinel")  # 終了時に復元される
     _, hist_a, _ = history_tree
@@ -429,8 +429,78 @@ def test_benchmark_script(history_tree, config_and_coef, tmp_path):
         assert cols[-2] == "3" and cols[-1] == "0", proc.stdout
 
 
+def test_bridge_example(history_tree, tmp_path):
+    """scripts/batch_bridge_example.py（最適化スクリプト側にコピーして使う
+    subprocess ブリッジ例）が実際に動くこと。エンジン python にはこの venv、
+    scorelib_parent にはリポジトリルートを渡す（SVN checkout と同じ配置）。"""
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location(
+        "batch_bridge_example", REPO_ROOT / "scripts" / "batch_bridge_example.py"
+    )
+    bridge = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bridge)
+
+    _, hist_a, _ = history_tree
+    out = tmp_path / "scores.csv"
+    scores, failed = bridge.compute_batch_scores(
+        engine_python=sys.executable,
+        config=str(REPO_ROOT / "config_mini.jsonc"),
+        histories=[str(hist_a)],
+        out_csv=str(out),
+        dvtbudget_coef=str(Path(__file__).resolve().parent / "fixtures" / "dvtbudget_coef.jsonc"),
+        batch_size=2,
+        max_threads=2,
+        scorelib_parent=str(REPO_ROOT),
+    )
+    assert failed == {}
+    assert len(scores) == 3
+    row = scores[0]
+    assert row["Epoch"].endswith("#0001") and row["EpochNo"] == 1
+    assert isinstance(row["Score"], float)
+    assert (tmp_path / "scores.csv.log").exists()  # エンジンのstderrログ
+
+
+def test_get_score_bridge_example(history_tree, config_and_coef):
+    """scripts/get_score_bridge_example.py（get_score() に差し込む通常スコア
+    計算のブリッジ例）が CLI subprocess 経由で正しい値を返すこと。"""
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location(
+        "get_score_bridge_example", REPO_ROOT / "scripts" / "get_score_bridge_example.py"
+    )
+    bridge = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bridge)
+
+    _, hist_a, _ = history_tree
+    epoch_dir = hist_a / "result.0001"
+    config, coef = config_and_coef
+    # 最適化スクリプトの実態に合わせ、config は「読み込み済みの dict」を渡す
+    # （ブリッジが一時ファイル化して CLI に渡す経路のテスト）
+    from scorelib_param import jsonc
+
+    config_dict = jsonc.load(REPO_ROOT / "config_mini.jsonc")
+    result = bridge.compute_epoch_score(
+        engine_python=sys.executable,
+        config=config_dict,
+        data_dir=str(epoch_dir),
+        dvtbudget_coef=str(Path(__file__).resolve().parent / "fixtures" / "dvtbudget_coef.jsonc"),
+        # initial_temperature 省略 → data_dir 内のものが自動で使われる
+        # scorelib_parent 省略 → 自動探索: scripts/ に scorelib_param/ は無く、
+        # 1階層上（リポジトリルート）で見つかる。turbo.py が kicOpt/optlib/
+        # にあり scorelib_param が kicOpt/scorelib_param にある実運用配置と同じ構図
+    )
+    temps = load_board_temperatures(epoch_dir / "initial_temperature.csv")
+    expected = compute_score_file(epoch_dir, config, coef, temps)
+    assert set(result) == set(expected)
+    for key, exp_val in expected.items():
+        assert result[key] == pytest.approx(exp_val, rel=1e-9)
+
+
 def test_batch_cli(history_tree, config_and_coef, tmp_path):
-    from scorelib.batch.__main__ import main
+    from scorelib_param.batch.__main__ import main
 
     _, hist_a, hist_b = history_tree
     out = tmp_path / "scores.csv"

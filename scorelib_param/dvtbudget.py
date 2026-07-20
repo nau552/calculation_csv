@@ -40,7 +40,7 @@ def apply_dvtbudget(
 ) -> pl.LazyFrame:
     """通常（単一epoch）は `board_temperatures = {Board: 温度}`。
 
-    バッチ計算（scorelib.batch）では温度が epoch ごとの
+    バッチ計算（scorelib_param.batch）では温度が epoch ごとの
     initial_temperature.csv から来て係数 `b` が epoch で変わりうるため、
     `epoch_col`（識別軸名。例: "Epoch"）を指定し
     `board_temperatures = {epoch値: {Board: 温度}}` の2段ネストで渡すと、

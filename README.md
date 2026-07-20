@@ -1,4 +1,4 @@
-﻿# scorelib — スコア計算エンジン (score_gui Phase1 バックエンド)
+﻿# scorelib_param — スコア計算エンジン (score_gui Phase1 バックエンド)
 
 `docs/score_gui.md` の仕様・`docs/score_gui_design.md` の設計に基づく、スコア／スコアパーツ計算エンジンの実装。
 `docs/score_gui_ui_design.md` に基づく Streamlit スコア設計UI（`ui/`）を同梱する。
@@ -6,7 +6,7 @@
 ## ディレクトリ構成
 
 ```
-scorelib/                   # 本体パッケージ
+scorelib_param/                   # 本体パッケージ
   models.py                 # 設定ファイルのデータモデル（pydantic）
   jsonc.py                  # jsonc（コメント・末尾カンマ付きJSON）の低レベル読み書き
   io_jsonc.py               # jsonc <-> pydanticモデルの変換
@@ -23,7 +23,7 @@ scorelib/                   # 本体パッケージ
     staging.py              # tar.gz展開ビュー・事前検証・削除（csv.gz単体は直読み）
     compute.py              # Epoch列を通したバッチ一括計算（単一epoch計算と数値等価）
     runner.py               # 取得→計算→削除パイプライン（先行取得・メモリadvisory）
-    __main__.py             # python -m scorelib.batch
+    __main__.py             # python -m scorelib_param.batch
 ui/                         # Streamlitスコア設計UI（エンジンとはディレクトリを分離）
   app.py                    # エントリポイント。サイドバーで5画面を切替
   state.py                  # 編集状態の純粋ロジック（雛形生成・検証・下書き保存等。pytest対象）
@@ -64,7 +64,7 @@ python -m venv .venv
 ### CLI（本番の最適化ループから呼ばれる形）
 
 ```bash
-python -m scorelib.cli \
+python -m scorelib_param.cli \
     --config <config.jsonc> \
     --data-dir <そのepochの測定結果ディレクトリ（result_tmp相当）> \
     --dvtbudget-coef <dVtBudget係数.jsonc> \        # dVtBudgetパーツがある場合のみ必須
@@ -82,14 +82,17 @@ python -m scorelib.cli \
 
 現行最適化スクリプト(python3.7)の `get_score()` からは、`score_function` に
 `"gui_score"` 等の予約名が指定された場合の分岐としてこのCLIをsubprocess起動し、
-標準出力をパースしてDataFrame化する想定（ブリッジは現行スクリプト側整備後に実装）。
+標準出力をパースしてDataFrame化する。**そのままコピーして使える Python 3.7
+互換のブリッジ実装例**が `scripts/get_score_bridge_example.py` にある
+（`compute_epoch_score()` を turbo.py へコピーし、get_score() に数行の分岐を
+足すだけ。テストで数値一致を保証済み）。
 
 ### Pythonから直接呼ぶ（Streamlit UIのテストボタン等）
 
 ```python
-from scorelib import io_jsonc
-from scorelib.cli import compute_score_file
-from scorelib.dvtbudget import load_board_temperatures
+from scorelib_param import io_jsonc
+from scorelib_param.cli import compute_score_file
+from scorelib_param.dvtbudget import load_board_temperatures
 
 config = io_jsonc.load_run_config("config.jsonc")
 coef = io_jsonc.load_dvtbudget_coef("dvtbudget_coef.jsonc")
@@ -114,11 +117,11 @@ python scripts/convert_dvtbudget_coef.py sample.py dvtbudget_coef.jsonc
 ```
 
 **配置方針**（詳細は `docs/score_gui_ui_design.md` 2.1節）: コードの正は git（本リポジトリ、
-UI+エンジン一体）。実験実行用に **SVN へは `scorelib/` + `custom_parts.py` のみを
+UI+エンジン一体）。実験実行用に **SVN へは `scorelib_param/` + `custom_parts.py` のみを
 リリース時に同期登録**する。一般ユーザ向けの正式な形は「サーバでUIを1つ立てて共用+
 一式zipアップロード」（ユーザの環境構築なし）で、個人でのUI起動は開発者向けモード。
 UIはエンジンに同梱依存する（検証・軸候補・テスト計算をエンジンのコードそのもので行う
-設計のため分割しない）。エンジン版は `scorelib.__version__` で管理し、UIサイドバーと
+設計のため分割しない）。エンジン版は `scorelib_param.__version__` で管理し、UIサイドバーと
 CLI（stderr / `--version`）に表示される — SVN側エンジンとの版ズレ確認用。
 
 サイドバーで切り替える5画面（詳細は `docs/score_gui_ui_design.md`）:
@@ -549,17 +552,17 @@ Board/Stateを相対化より後に集計すること。
 
 集計の最終収束は「識別軸（例: Epoch）を残して潰す」形に一般化されており
 （`aggregate.collapse`）、これを使った**複数epochバッチ計算**が
-`scorelib.batch` として実装済み（次節）。通常の単一epoch計算は
+`scorelib_param.batch` として実装済み（次節）。通常の単一epoch計算は
 識別軸なし＝1スカラーで従来と同じ動作。
 
-## 過去実験データのバッチスコア計算（scorelib.batch）
+## 過去実験データのバッチスコア計算（scorelib_param.batch）
 
 ベイズ最適化の初期モデル構築用に、過去実験の result_history 群
 （`<実験ログ>/Step{N}/Loop{NN}/result_history/result.{NNNN}/` = 1 epoch）を
 バッチ単位でまとめてスコア計算する。設計は `docs/batch_design.md`。
 
 ```bash
-python -m scorelib.batch \
+python -m scorelib_param.batch \
     --config config.jsonc \
     --history /data/expA/Step1/Loop01/result_history \
     --history expB=/data/expB/Step2/Loop03/result_history \   # label=path でラベル明示も可
@@ -577,7 +580,7 @@ python -m scorelib.batch \
 Python から:
 
 ```python
-from scorelib.batch import BatchRunner
+from scorelib_param.batch import BatchRunner
 runner = BatchRunner([hist_path1, hist_path2], run_config, dvtbudget_coef=coef)
 result = runner.run()        # result.scores: DataFrame / result.failed: {Epoch: 理由}
 for batch in runner.run_iter():  # バッチごとに逐次受け取る場合
@@ -610,6 +613,31 @@ for batch in runner.run_iter():  # バッチごとに逐次受け取る場合
 - **実測ツール**: `python scripts/benchmark_batch.py --config ... --history ...
   --batch-sizes auto,10,25,50` で、実運用マシンでのバッチサイズごとの
   所要時間・ピークメモリの表を出せる（計測ごとに別プロセスで実行）。
+
+### 最適化スクリプト（python3.7）からの呼び出し
+
+通常の gui_score CLI と同じく **subprocess 起動**方式。エンジンは
+Python 3.10+ で動くため、最適化スクリプト自身の python ではなく
+scorelib_param 用の python 実行ファイルを指定して起動し、`--out` の CSV を
+読み取る。**そのままコピーして使える Python 3.7 互換のブリッジ実装例**が
+`scripts/batch_bridge_example.py` にある（テストで動作保証):
+
+```python
+scores, failed = compute_batch_scores(
+    engine_python="/opt/py311/bin/python",  # scorelib_param が入っている python
+    config=self.config,                      # 読み込み済み dict でもパスでも可
+    histories=[".../Step1/Loop01/result_history", ...],
+    out_csv="/tmp/past_scores.csv",
+    dvtbudget_coef="dvtbudget_coef.jsonc",
+    # scorelib_parent は省略可: 関数を kicOpt/ 内のスクリプトに貼れば
+    # kicOpt/（scorelib_param/ が並ぶ場所）が自動で使われる
+)   # scores: epoch ごとの dict のリスト / failed: {Epoch: 除外理由}
+```
+
+エンジンの進捗・警告は `<out_csv>.log` に保存され、失敗時は log 末尾つきの
+RuntimeError になる。なお初期モデル構築は実験開始時の一度きりの前処理
+なので、自動連携せず **事前に CLI を手で実行して scores.csv だけ渡す**
+運用でもよい（どちらでも結果は同じ）。
 - custom パーツはバッチ化されず epoch ごとに関数が呼ばれる（結果は同じ。
   遅くなるのは custom パーツのみ）。
 - 予約名: 識別軸 `Epoch`。同名の軸・グループ定義があるとエラー。
@@ -624,7 +652,7 @@ FBCに無い軸でもエンジン側の変更なしで扱える）。
 そのまま実行できるスコア設計例として `config_mini.jsonc` をリポジトリ直下に用意した:
 
 ```bash
-.venv/Scripts/python -m scorelib.cli \
+.venv/Scripts/python -m scorelib_param.cli \
     --config config_mini.jsonc \
     --data-dir tests/data/result_tmp_mini \
     --dvtbudget-coef dvtbudget_coef.jsonc \
@@ -669,4 +697,6 @@ dVtBudget）を定義してあり、コメント付きなので、現行スク�
 - Streamlit UI（スコアパーツ編集・order指定・テスト実行・jsoncダウンロード）
 - 現行GUIからダウンロードする定義ファイル一式が整備され次第、
   ダミーデータ自動生成によるテスト機能
-- 現行最適化スクリプト側 `get_score()` への分岐（ブリッジ）追加
+- 現行最適化スクリプト側 `get_score()` への分岐追加
+  （ブリッジ実装例は `scripts/get_score_bridge_example.py` に用意済み。
+  残りは turbo.py への数行の組み込みのみ）

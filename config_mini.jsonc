@@ -2,7 +2,7 @@
     // result_tmp_mini 用のスコア設計例。
     // 現行スクリプトとの数値比較用に、各集計を素直な形にしてある。
     // 実行コマンド:
-    //   .venv/Scripts/python -m scorelib.cli --config config_mini.jsonc --data-dir result_tmp_mini \
+    //   .venv/Scripts/python -m scorelib_param.cli --config config_mini.jsonc --data-dir result_tmp_mini \
     //       --dvtbudget-coef dvtbudget_coef.jsonc --initial-temperature result_tmp_mini/initial_temperature.csv
     "Generation": "B9LS",
 

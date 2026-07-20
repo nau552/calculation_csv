@@ -2,7 +2,7 @@
 現行最適化スクリプト（python3.7）の `get_score()` からサブプロセスとして
 起動される想定（docs/score_gui_design.md 2節・7節）。
 
-    python -m scorelib.cli --config config.jsonc --data-dir <epoch_dir> \
+    python -m scorelib_param.cli --config config.jsonc --data-dir <epoch_dir> \
         [--dvtbudget-coef coef.jsonc] [--initial-temperature initial_temperature.csv]
 
 stdout に JSON オブジェクトを1つだけ出力する: {"Score": ..., "<パーツ名>": ..., ...}
@@ -255,7 +255,7 @@ def compute_score_part(
     """スコアパーツ1つの値を計算する。type="custom" は関数呼び出しへ分岐し、
     それ以外は resolve → グループ派生列 → order の逐次適用、で1スカラーに畳む。
 
-    `identity_axes` はバッチ計算（scorelib.batch）用: shared_ctx が供給する
+    `identity_axes` はバッチ計算（scorelib_param.batch）用: shared_ctx が供給する
     フレームに識別列（例: "Epoch"）が含まれる前提で、その列を潰さずに残し、
     識別値ごとに1行の DataFrame を返す（空タプル=従来どおり float を返す）。
     識別列は order に置かないため「残っている全列がグループキー」の仕組みに
@@ -269,7 +269,7 @@ def compute_score_part(
         if score_part.type == CUSTOM_TYPE:
             raise ValueError(
                 f"custom part '{score_part.name}' cannot be batched with identity_axes; "
-                "compute it once per epoch instead (scorelib.batch does this automatically)"
+                "compute it once per epoch instead (scorelib_param.batch does this automatically)"
             )
     if score_part.type == CUSTOM_TYPE:
         if custom_module is None:
@@ -425,7 +425,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     from . import __version__
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--version", action="version", version=f"scorelib {__version__}")
+    parser.add_argument("--version", action="version", version=f"scorelib_param {__version__}")
     parser.add_argument("--config", required=True, help="run config jsonc (Generation + optimization{...})")
     parser.add_argument("--data-dir", required=True, help="directory containing {type}.csv etc. for this epoch")
     parser.add_argument("--dvtbudget-coef", help="dVtBudget coefficient jsonc (required if any score part uses type=dVtBudget)")
@@ -443,7 +443,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     )
     # stdout には結果 JSON **だけ**を出す（最適化側がパースする）。
     # 版数の目印は実行ログ用に stderr へ
-    print(f"scorelib {__version__}", file=sys.stderr)
+    print(f"scorelib_param {__version__}", file=sys.stderr)
     print(json.dumps(result))
 
 

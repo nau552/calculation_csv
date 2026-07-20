@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
-from scorelib.models import COMBINED_SEP, MULTI_OPS
+from scorelib_param.models import COMBINED_SEP, MULTI_OPS
 
 # ドラッグ&ドロップ並べ替えはソフト依存: コミュニティ製カスタムコンポーネント
 # （streamlit-sortables）は Streamlit 本体のメジャー更新で壊れうる。

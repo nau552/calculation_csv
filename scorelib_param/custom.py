@@ -2,7 +2,7 @@
 
 Pythonが書けるユーザは custom_parts.py に関数を書き、1関数=1スコアパーツと
 して呼べる（戻り値は有限な1スカラー）。ファイルの場所は**固定**（リポジトリ
-直下、scorelib パッケージの隣。SVNで版管理）: config にパスを持たせると
+直下、scorelib_param パッケージの隣。SVNで版管理）: config にパスを持たせると
 実験入力から任意コードを実行できてしまうため、あえて固定にしている。
 関数の追加・変更は SVN コミット=レビューを通すのが意図したゲート。
 設計UIは同じファイル（GUIが配る一式zipに同梱）を読み込んで関数一覧と
@@ -41,7 +41,7 @@ class CustomContext:
 
 
 def default_custom_parts_path() -> Path:
-    """リポジトリ直下の custom_parts.py（scorelib パッケージの1つ上）。"""
+    """リポジトリ直下の custom_parts.py（scorelib_param パッケージの1つ上）。"""
     return Path(__file__).resolve().parent.parent / DEFAULT_FILENAME
 
 

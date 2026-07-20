@@ -1,8 +1,8 @@
 import polars as pl
 import pytest
 
-from scorelib.models import AxisAggregation, RelativeConfig
-from scorelib.relative import apply_relative
+from scorelib_param.models import AxisAggregation, RelativeConfig
+from scorelib_param.relative import apply_relative
 
 
 def test_relative_with_denominator_pre_aggregation_and_offset():

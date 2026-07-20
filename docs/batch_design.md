@@ -1,6 +1,6 @@
 # 過去実験データのバッチスコア計算 — 設計方針
 
-ステータス: **承認済み・実装完了**（2026-07-21）。実装は `scorelib/batch/`、
+ステータス: **承認済み・実装完了**（2026-07-21）。実装は `scorelib_param/batch/`、
 テストは `tests/test_batch.py`（等価性・圧縮・エラー系・advisory、18件）。
 （改訂1: type一般化の明記 / 圧縮の扱い / Step-Loop構造対応 / 配置 /
 ローカル・ダウンロード両対応 / バッチサイズ推奨 / 出力列の説明。
@@ -29,7 +29,7 @@ epoch ごとに現行 CLI を subprocess 起動する方式では、プロセス
   ただし判断漏れはあり得るため、エンジン側で検出できる不整合
   （ファイル欠落・軸値の不一致・グループ範囲外の値など）は
   **どの epoch が原因かを特定できる形で**報告する（§8）。
-- 現行エンジン（`scorelib/`）・現行 CLI・Streamlit UI・既存テストは
+- 現行エンジン（`scorelib_param/`）・現行 CLI・Streamlit UI・既存テストは
   **一切変更せずに動き続ける**。追加はすべてオプショナル引数・新規モジュール。
 - バッチ計算の結果は「バッチ化しない逐次計算と数値完全一致」を
   テストで保証する（§10）。
@@ -115,15 +115,15 @@ polars の対応状況（1.42 で実機確認済み）に合わせて扱いを�
 - Epoch の値は **`{ラベル}#{番号}`** の文字列
   （例: `expA/Step1/Loop01#0001`）。全 epoch を通して一意。
 
-## 4. 配置 — `scorelib/batch/` サブパッケージ
+## 4. 配置 — `scorelib_param/batch/` サブパッケージ
 
-バッチ関連は **`scorelib` パッケージ内のサブディレクトリ**に置く:
+バッチ関連は **`scorelib_param` パッケージ内のサブディレクトリ**に置く:
 
 ```
-scorelib/
+scorelib_param/
   batch/
     __init__.py      # 公開API: compute_score_batch, BatchRunner 等を再エクスポート
-    __main__.py      # python -m scorelib.batch で起動する CLI（§9）
+    __main__.py      # python -m scorelib_param.batch で起動する CLI（§9）
     history.py       # result_history の列挙・ラベル付け・Epoch ID 生成（§3）
     staging.py       # アーカイブ展開・ビューdir・検証・削除（§3.2, §6）
     compute.py       # 計算層: BatchComputeContext / バッチスコア計算（§5）
@@ -131,9 +131,9 @@ scorelib/
 ```
 
 理由:
-- SVN へのリリースは「`scorelib/` + `custom_parts.py` の同期」なので、
+- SVN へのリリースは「`scorelib_param/` + `custom_parts.py` の同期」なので、
   パッケージ内に置けば**リリース手順を変えずに**最適化サーバへ届く。
-- 既存のエンジン中核（フラットな `scorelib/*.py`）と新機能の境界が
+- 既存のエンジン中核（フラットな `scorelib_param/*.py`）と新機能の境界が
   ディレクトリで明確になり、既存ファイルが散らからない。
 - 既存モジュールへの変更は `cli.compute_score_part` へのオプショナル引数
   追加と `dvtbudget` の拡張のみ（§5.1）。
@@ -306,10 +306,10 @@ Python API・CLI とも、1 epoch = 1 行の表を返す:
 
 ## 9. CLI
 
-現行 CLI（`scorelib.cli`）の入出力契約は変更しない。新設:
+現行 CLI（`scorelib_param.cli`）の入出力契約は変更しない。新設:
 
 ```bash
-python -m scorelib.batch \
+python -m scorelib_param.batch \
     --config <config.jsonc> \
     --history <result_historyパス> [--history <パス2> ...] \  # label=path 形式でラベル明示も可
     --dvtbudget-coef <coef.jsonc> \      # dVtBudgetパーツがある場合のみ

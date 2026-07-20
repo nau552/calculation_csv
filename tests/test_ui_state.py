@@ -3,9 +3,9 @@ import shutil
 
 import pytest
 
-from scorelib.cli import compute_score_part
-from scorelib.introspect import axis_catalog
-from scorelib.models import ScorePart
+from scorelib_param.cli import compute_score_part
+from scorelib_param.introspect import axis_catalog
+from scorelib_param.models import ScorePart
 from ui import state
 
 

@@ -3,7 +3,7 @@
 起動: .venv/Scripts/streamlit run ui/app.py
 
 サイドバーで5画面を切り替える。判断ロジックはすべて ui/state.py と
-scorelib 側にあり、本ファイルはウィジェット配置と session_state の
+scorelib_param 側にあり、本ファイルはウィジェット配置と session_state の
 受け渡しのみを行う（score_gui_ui_design.md 参照）。
 """
 from __future__ import annotations
@@ -16,8 +16,8 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import scorelib  # noqa: E402
-from scorelib.models import COMBINED_SEP  # noqa: E402
+import scorelib_param  # noqa: E402
+from scorelib_param.models import COMBINED_SEP  # noqa: E402
 from ui import state, widgets  # noqa: E402
 
 SCREENS = [
@@ -1002,7 +1002,7 @@ def main() -> None:
             n = len(state.validate_score_file(sf))
             (st.success if n == 0 else st.error)("検証 OK" if n == 0 else f"検証エラー {n} 件")
         st.caption(
-            f"engine scorelib {scorelib.__version__}",
+            f"engine scorelib_param {scorelib_param.__version__}",
             help="このUIに同梱されたエンジンの版。実験実行側（SVNの scorelib）と一致しているかの確認用",
         )
 

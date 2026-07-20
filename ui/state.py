@@ -2,7 +2,7 @@
 
 ここにあるものはすべて streamlit 非依存で pytest 可能
 （docs/score_gui_ui_design.md 2節）。編集中の ScoreFile は素の dict
-（scorelib.models.ScoreFile の形）として保持し、pydantic は検証にのみ使う。
+（scorelib_param.models.ScoreFile の形）として保持し、pydantic は検証にのみ使う。
 これにより UI はエンジンが読み込み時に出すのと全く同じメッセージを表示する。
 """
 from __future__ import annotations
@@ -14,10 +14,10 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import ValidationError
 
-from scorelib import custom as scorelib_custom
-from scorelib import introspect, io_jsonc, jsonc
-from scorelib.expression import evaluate_expression
-from scorelib.models import COMBINED_SEP, ScoreFile
+from scorelib_param import custom as scorelib_custom
+from scorelib_param import introspect, io_jsonc, jsonc
+from scorelib_param.expression import evaluate_expression
+from scorelib_param.models import COMBINED_SEP, ScoreFile
 
 DRAFT_PATH = Path.home() / ".scorelib_draft.jsonc"
 
@@ -259,7 +259,7 @@ def _part_axis_names(part: Dict[str, Any]) -> set:
     """パーツが言及する軸的な名前すべて（order エントリ=複合軸の構成軸込み、
     相対化の split 軸、分母事前集計の軸）。
 
-    scorelib/cli.py の _named_axes は計算時に使う pydantic モデル版の対。
+    scorelib_param/cli.py の _named_axes は計算時に使う pydantic モデル版の対。
     こちらは編集途中の不完全な dict に耐える — 意図的な並行実装であり、
     統合を試みないこと。"""
     axes = set(_axes_in_order(part))
@@ -529,7 +529,7 @@ def build_context(
         ctx["geninfo_path"] = str(geninfo_file)
         ctx["geninfo_source"] = geninfo_source
 
-    # custom_parts.py: SVN 管理された自作関数（scorelib/custom.py）。
+    # custom_parts.py: SVN 管理された自作関数（scorelib_param/custom.py）。
     # 読み込み = import = トップレベルコードの実行になるが、レビュー済み
     # リポジトリ由来のファイルが前提（任意ユーザの入力ではない）ので許容
     custom_file, custom_source = _resolve_optional_file(
@@ -844,9 +844,9 @@ def run_test_compute(
     """画面5: 実データでエンジンを走らせる。係数ファイルは指定があれば
     `coef_path` から（通常 result_tmp の外にある）。initial_temperature.csv
     は測定出力なので常にデータディレクトリから読む。"""
-    from scorelib.cli import compute_score_file
-    from scorelib.dvtbudget import load_board_temperatures
-    from scorelib.models import RunConfig
+    from scorelib_param.cli import compute_score_file
+    from scorelib_param.dvtbudget import load_board_temperatures
+    from scorelib_param.models import RunConfig
 
     d = Path(data_dir)
     if not d.is_dir():
@@ -884,7 +884,7 @@ def import_score_file(text: str) -> Dict[str, Any]:
         raise ValueError("jsoncのトップレベルがオブジェクトではありません")
     try:
         if "optimization" in data:
-            from scorelib.models import RunConfig
+            from scorelib_param.models import RunConfig
 
             sf = RunConfig.model_validate(data).to_score_file()
         else:

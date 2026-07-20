@@ -1,6 +1,6 @@
 import pytest
 
-from scorelib.expression import evaluate_expression
+from scorelib_param.expression import evaluate_expression
 
 
 def test_basic_arithmetic():

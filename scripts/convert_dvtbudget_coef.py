@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scorelib import jsonc  # noqa: E402
+from scorelib_param import jsonc  # noqa: E402
 
 
 def convert(py_path: str, out_path: str) -> None:

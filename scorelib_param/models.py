@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, RootModel, model_validator
 COMBINED_SEP = "&"
 
 # 通常のパイプラインの代わりにユーザ定義のPython関数
-# （custom_parts.py — scorelib/custom.py 参照）を呼ぶ ScorePart.type の値
+# （custom_parts.py — scorelib_param/custom.py 参照）を呼ぶ ScorePart.type の値
 CUSTOM_TYPE = "custom"
 
 AggOp = Literal[

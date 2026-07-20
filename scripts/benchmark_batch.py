@@ -68,9 +68,9 @@ def _peak_memory_gib():
 
 def _run_one(args) -> None:
     """子プロセスモード: 1つのバッチサイズで計算して結果を1行出力する。"""
-    from scorelib import io_jsonc
-    from scorelib.batch import BatchRunner
-    from scorelib.batch.__main__ import _parse_histories
+    from scorelib_param import io_jsonc
+    from scorelib_param.batch import BatchRunner
+    from scorelib_param.batch.__main__ import _parse_histories
 
     config = io_jsonc.load_run_config(args.config)
     coef = io_jsonc.load_dvtbudget_coef(args.dvtbudget_coef) if args.dvtbudget_coef else None

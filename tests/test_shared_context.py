@@ -7,12 +7,12 @@
 import polars as pl
 import pytest
 
-import scorelib.cli as cli
-from scorelib import axis_resolve, io_jsonc
-from scorelib.aggregate import collapse
-from scorelib.cli import SharedComputeContext, compute_score_file, compute_score_part
-from scorelib.dvtbudget import load_board_temperatures
-from scorelib.models import ScorePart
+import scorelib_param.cli as cli
+from scorelib_param import axis_resolve, io_jsonc
+from scorelib_param.aggregate import collapse
+from scorelib_param.cli import SharedComputeContext, compute_score_file, compute_score_part
+from scorelib_param.dvtbudget import load_board_temperatures
+from scorelib_param.models import ScorePart
 
 
 @pytest.fixture

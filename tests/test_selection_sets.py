@@ -1,10 +1,10 @@
 """名前付き選択セット（optimization.selectionSets + `ref` 参照）のテスト。"""
 import pytest
 
-from scorelib import io_jsonc
-from scorelib.cli import compute_score_file, compute_score_part
-from scorelib.dvtbudget import load_board_temperatures
-from scorelib.models import AggregationSpec, RunConfig, ScorePart
+from scorelib_param import io_jsonc
+from scorelib_param.cli import compute_score_file, compute_score_part
+from scorelib_param.dvtbudget import load_board_temperatures
+from scorelib_param.models import AggregationSpec, RunConfig, ScorePart
 
 UPDOWN = [
     {"State": "R2A", "Read_Label": "read_level_upper1"},

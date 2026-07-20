@@ -46,7 +46,7 @@ v1では「Streamlit UIがengineを直接importし、jsoncへの変換もengine�
 [ユーザのローカルPC : Streamlit UI (python3.13 venv)]
     - 上記定義ファイルをアップロードし、type別の軸候補を画面に反映
     - スコアパーツ／スコアをGUI操作で組み立てる → 内部はただのdict構築（polars不要）
-    - [テスト]ボタン: 同venv内で scorelib engine (polars) を直接呼び出し、
+    - [テスト]ボタン: 同venv内で scorelib_param engine (polars) を直接呼び出し、
       あれば実データ(result_tmp相当)、なければダミーデータで動作確認
     - [完了]ボタン: score.jsonc としてローカル保存
      │
@@ -64,7 +64,7 @@ v1では「Streamlit UIがengineを直接importし、jsoncへの変換もengine�
       （既存のscore.py関数群とは独立に、こちらのCLIをsubprocess起動する薄い
       ブリッジをget_score()内に数行足すだけで良い、という認識で一致）。
     - subprocess呼び出し:
-      python(3.13 venv) -m scorelib.cli --config config.jsonc --data-dir <epoch出力ディレクトリ>
+      python(3.13 venv) -m scorelib_param.cli --config config.jsonc --data-dir <epoch出力ディレクトリ>
       （score.jsonc相当の内容は config の `optimization{}` 内にマージ済みの想定。6節参照）
     → engineがpolarsで {type}.csv 等を読み、指示通り計算し、
       「Score列 + 全ScorePart名の列」を1行のテーブルとして標準出力
@@ -319,7 +319,7 @@ score file の `groupDefs`（設定jsonc の `optimization.WLgroup` は WL に�
   パス指定/データディレクトリ内自動検出）から関数一覧を読み込む。実行側はリポジトリ内の
   ファイルを読むため、リビジョン一致なら設計時と同じ関数が走る。不一致で関数が無い場合は
   関数名つきの明確なエラー
-- 実装: `scorelib/custom.py`（ロード・一覧・戻り値検証）、cli の type=custom 分岐、
+- 実装: `scorelib_param/custom.py`（ロード・一覧・戻り値検証）、cli の type=custom 分岐、
   `--custom-parts`（テスト用上書き）。type単位の共有キャッシュは custom には適用しない
 
 ### 4.3 自由記述式（expr）— 実装方針決定
@@ -391,7 +391,7 @@ percentile計算や動的しきい値との比較・reject判定などの制約�
 - モジュール構成（v1から変更なし、dVtBudgetまわりのシグネチャのみ簡略化）:
 
 ```
-scorelib/
+scorelib_param/
   models.py        # ScorePart / Relative / Aggregation / ScoreFile(score_parts+expression+constraintThreshold)
   io_jsonc.py       # jsonc <-> モデルの読み書き
   axis_resolve.py   # {type}.csv に対し、要求された軸だけを遅延join/filterするresolver
@@ -400,7 +400,7 @@ scorelib/
   dvtbudget.py      # Generation(config) + Board別温度(initial_temperature.csv)
                      # + 係数ファイルから -log10(rel)/b*1000 を計算
   expression.py     # simpleevalベースの式評価（score_parts合成式で共用）
-  cli.py            # `python -m scorelib.cli --config config.jsonc --data-dir <result_tmp相当>`
+  cli.py            # `python -m scorelib_param.cli --config config.jsonc --data-dir <result_tmp相当>`
                      # config.jsonc の optimization{} 内に score_parts/expression/constraintThreshold が
                      # マージされている前提。標準出力に Score + 全ScorePart値を1行のテーブルとして返す
                      # (get_score()側でDataFrame化しやすいようCSV or JSON records形式)

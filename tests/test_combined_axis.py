@@ -2,10 +2,10 @@
 (State, Read_Label) の組に対して選択・集計する。"""
 import pytest
 
-from scorelib import io_jsonc
-from scorelib.cli import compute_score_part
-from scorelib.dvtbudget import load_board_temperatures
-from scorelib.models import ScorePart
+from scorelib_param import io_jsonc
+from scorelib_param.cli import compute_score_part
+from scorelib_param.dvtbudget import load_board_temperatures
+from scorelib_param.models import ScorePart
 
 
 @pytest.fixture

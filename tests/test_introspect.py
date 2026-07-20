@@ -1,10 +1,10 @@
-"""scorelib.introspect のテスト: 過去実験の出力ディレクトリからの
+"""scorelib_param.introspect のテスト: 過去実験の出力ディレクトリからの
 UI向けメタデータ（type・軸・値候補）の導出。"""
 import shutil
 
 import pytest
 
-from scorelib.introspect import (
+from scorelib_param.introspect import (
     axis_catalog,
     detect_types,
     find_dvtbudget_coefs,

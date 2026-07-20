@@ -1,8 +1,8 @@
 import polars as pl
 import pytest
 
-from scorelib.aggregate import aggregate_score_part, group_column_expr
-from scorelib.models import AggregationSpec
+from scorelib_param.aggregate import aggregate_score_part, group_column_expr
+from scorelib_param.models import AggregationSpec
 
 
 def test_filter_then_mean():

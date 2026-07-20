@@ -1,7 +1,7 @@
 import polars as pl
 import pytest
 
-from scorelib.axis_resolve import resolve_axes
+from scorelib_param.axis_resolve import resolve_axes
 
 REQUIRED_AXES = {
     "Erase_Label",

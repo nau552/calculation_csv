@@ -7,7 +7,7 @@
 NAND フラッシュ実験のベイズ最適化パラメータチューニングにおいて、
 最適化スコアを Python 手書きではなく **GUI で一般ユーザーが設計できる** ようにする。
 
-- エンジン部（`scorelib/`）: 完成。jsonc のスコア定義を polars で計算。
+- エンジン部（`scorelib_param/`）: 完成。jsonc のスコア定義を polars で計算。
   現行スクリプトとの数値一致をテストで担保済み。
 - UI 部（`ui/`）: 完成。Streamlit 製 5 画面。ユーザーのブラウザ確認と
   フィードバック → 修正を十数ラウンド実施済み。
@@ -27,7 +27,7 @@ NAND フラッシュ実験のベイズ最適化パラメータチューニング
 ## 3. ファイル構成と役割
 
 ```
-scorelib/              # 計算エンジン（Streamlit 非依存。SVNへはここ+custom_parts.pyのみ同期）
+scorelib_param/              # 計算エンジン（Streamlit 非依存。SVNへはここ+custom_parts.pyのみ同期）
   __init__.py          # __version__（SVN同期のたびに上げる。UI/CLIに表示）
   models.py            # 全データモデルと検証（UIも同じモデルで検証=二重実装しない）
   cli.py               # 計算の入口（最適化側からサブプロセス起動。type=custom分岐あり）
@@ -35,7 +35,7 @@ scorelib/              # 計算エンジン（Streamlit 非依存。SVNへはこ
   jsonc.py io_jsonc.py
   custom.py            # 自作Python関数パーツ（custom_parts.py のロード・実行・検証）
   introspect.py        # UI用メタデータ導出（type検出・軸カタログ・中身の形でのファイル判別）
-ui/                    # Streamlit UI（scorelib の薄いラッパ。gitのみ、SVNに入れない）
+ui/                    # Streamlit UI（scorelib_param の薄いラッパ。gitのみ、SVNに入れない）
   state.py             # 純ロジック層。判断ロジックは全部ここ（pytest 可能）
   widgets.py           # 再利用ウィジェット（agg_editor / relative_editor / sortable_list 等）
   app.py               # 5 画面本体 + undo/自動保存/下書き復元
@@ -68,7 +68,7 @@ docs/                  # 全ドキュメント（README.md が索引）
   入力欄まで戻る（旧形式も読める）。
 - **undo**: スナップショット履歴 20 件。復元時に非予約 widget state を全消し。
 - **即時表示更新**: main 共通の変更検知 → 差分があれば st.rerun()（全画面）。
-- **エンジン版表示**: サイドバーに `scorelib.__version__`（SVN側との版ズレ確認用）。
+- **エンジン版表示**: サイドバーに `scorelib_param.__version__`（SVN側との版ズレ確認用）。
 
 ## 4. 重要な技術知見（Streamlit のハマりどころ）
 
@@ -80,7 +80,7 @@ docs/                  # 全ドキュメント（README.md が索引）
 - エンジンは order に無い軸を**暗黙集約**する → relative OFF 時に split_axis が宙に浮くと
   True/False 行が混ざる → `disable_relative` が自動で order へ復帰 + `{"op":"filter","value":False}` 付与。
 - 軸の値候補は **データに実在する値**に絞る（map の語彙全体だと雛形 filter が 0 行になる）。
-  map 順維持、絞り込み結果が空なら全語彙フォールバック（`scorelib/introspect.py` `_candidates`）。
+  map 順維持、絞り込み結果が空なら全語彙フォールバック（`scorelib_param/introspect.py` `_candidates`）。
 - D&D: `streamlit-sortables` 0.3.1 をソフト依存（`pyproject.toml` の `ui` extra）。
   `ui/widgets.py` `sortable_list` は key に `hash(tuple(items))` を混ぜてラベル変更時に強制リマウント、
   失敗時は None → ✎/↑↓/✕ 行リストへ自動フォールバック。
@@ -154,7 +154,7 @@ docs/                  # 全ドキュメント（README.md が索引）
      実験実行→スコア計算もそこで走る。よって custom_parts.py は**リポジトリ直下の
      固定位置（SVN管理）**とし、config にパスは持たせない（実験入力からの任意コード
      実行を防ぐ。編集はSVNコミット=レビュー経由）。configは関数名+paramsのみ。
-   - エンジン: scorelib/custom.py（load/list/戻り値検証）、ScorePart.function/params
+   - エンジン: scorelib_param/custom.py（load/list/戻り値検証）、ScorePart.function/params
      （customのみ許可・混在拒否）、cli分岐+--custom-parts、共有キャッシュはcustom除外。
      リポジトリ直下に説明入りテンプレート custom_parts.py を配置。
    - UI: 画面1に custom_parts.py 入力+一式zipアップロード（展開→既存自動検出。
@@ -172,11 +172,11 @@ docs/                  # 全ドキュメント（README.md が索引）
      （従来はアルファベット先頭を無言採用。明示パス指定で解決可能）。
 15. **配置・デプロイ方針の確定+バージョン表示**（ユーザーと合意）:
    - 一般ユーザはSVNに触れない（GUI経由のみ）・UIはSVNに入れない（gitで管理、現行GUIと同様）。
-   - 方針: コードの正はgit（UI+エンジン一体）。SVNへは scorelib/+custom_parts.py のみ
+   - 方針: コードの正はgit（UI+エンジン一体）。SVNへは scorelib_param/+custom_parts.py のみ
      リリース時に一方向同期。一般ユーザ向けは「サーバでUI共用+一式zipアップロード」が正式形
      （ユーザ自身のstreamlit構築は開発者向けモードに格下げ）。UI/エンジン分割は却下
      （検証の二重実装になる。共通コア3分割案も版ズレを解決しないため見送り）。
-   - `scorelib.__version__` 新設（SVN同期時に更新する運用）。UIサイドバー+CLI
+   - `scorelib_param.__version__` 新設（SVN同期時に更新する運用）。UIサイドバー+CLI
      （stderr / --version）に表示。stdoutの結果JSONは汚さない。
    - ui設計書2.1節「配置・起動形態」+README に明記。
 16. **リファクタリング+コード/テスト解説ドキュメント**（ユーザーと合意の上で実施）:
@@ -198,7 +198,7 @@ docs/                  # 全ドキュメント（README.md が索引）
      （result_tmp/・ルートの csv・reference_scripts/*.csv）だけを除外する形に整理。
    - テストの実データ依存を解消（test_axis_resolve/test_dvtbudget が result_tmp を
      参照していた → mini とその場生成の csv に変更。data_dir fixture 削除）。
-   - **全コードのコメント・docstring を日本語化**（scorelib 全部・ui 全部・scripts・
+   - **全コードのコメント・docstring を日本語化**（scorelib_param 全部・ui 全部・scripts・
      conftest・全テストの説明文）。エンジンの**エラーメッセージは英語のまま**
      （pydantic 組み込みメッセージと混ざるため+テストが文字列照合しているため。対象外と合意）。
    - パスの追随: conftest（reference_scripts 実行、tests/data 参照）、README、docs 内相互参照。
@@ -213,7 +213,7 @@ docs/                  # 全ドキュメント（README.md が索引）
   ⚠マーク、D&D配色）の操作感をユーザーが未確認。`streamlit run ui/app.py`。
 
 **運用整備（合意済み・未実施）**
-- SVN への初回同期（scorelib/ + custom_parts.py。手順は ui設計書 2.1節の4ステップ。
+- SVN への初回同期（scorelib_param/ + custom_parts.py。手順は ui設計書 2.1節の4ステップ。
   同期時に `__version__` を上げる）。
 - 現行GUI側への依頼: 「スコア設計用一式を zip でダウンロード」ボタンの実装
   （result_tmp + 設定jsonc + 係数jsonc + {Generation}.json + custom_parts.py を同梱）。
@@ -224,7 +224,7 @@ docs/                  # 全ドキュメント（README.md が索引）
   の確定。担当者確認中）。
 - denominator_offset の運用ルール（値の決め方）未確定。
 - python3.7 最適化側の `get_score()` ブリッジ（score_function="gui_score" で
-  scorelib.cli をサブプロセス起動する分岐。現行スクリプト側の整備後に実装）。
+  scorelib_param.cli をサブプロセス起動する分岐。現行スクリプト側の整備後に実装）。
 - Phase2: 測定前に将来出力を記述するマニフェスト形式（introspect のデータソース
   差し替えで対応する設計にしてある）。
 - result_tmp データ不整合（Chip 0-7 vs parameterLabel 0-1）はユーザーへ報告済み・未対応
@@ -246,4 +246,4 @@ docs/                  # 全ドキュメント（README.md が索引）
 - UI の動作確認は `tests/data/result_tmp_mini` + `config_mini.jsonc` +
   `tests/fixtures/`（係数・B9LS.json・custom_parts.py）の組み合わせが便利。
 - 圧縮前の完全な会話ログ:
-  `C:\Users\naugh\.claude\projects\C--Users-naugh-Desktop-dev-scorelib\57035457-a4ad-442d-835a-d954accd1458.jsonl`
+  `C:\Users\naugh\.claude\projects\C--Users-naugh-Desktop-dev-scorelib_param\57035457-a4ad-442d-835a-d954accd1458.jsonl`

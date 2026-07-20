@@ -2,10 +2,10 @@
 __offset__ のようなユーザ命名の変換ステップ（cli.py 参照）。"""
 import pytest
 
-from scorelib import io_jsonc
-from scorelib.cli import compute_score_part
-from scorelib.dvtbudget import load_board_temperatures
-from scorelib.models import ScorePart
+from scorelib_param import io_jsonc
+from scorelib_param.cli import compute_score_part
+from scorelib_param.dvtbudget import load_board_temperatures
+from scorelib_param.models import ScorePart
 
 
 def _base_aggs():

@@ -1,5 +1,5 @@
-from scorelib import jsonc
-from scorelib.io_jsonc import load_run_config
+from scorelib_param import jsonc
+from scorelib_param.io_jsonc import load_run_config
 
 
 def test_strip_line_and_block_comments():
@@ -27,7 +27,7 @@ def test_load_sample_run_config(fixtures_dir):
 
 
 def test_score_file_roundtrip(fixtures_dir, tmp_path):
-    from scorelib.io_jsonc import load_score_file, save_score_file
+    from scorelib_param.io_jsonc import load_score_file, save_score_file
 
     config = load_run_config(fixtures_dir / "config.jsonc")
     score_file = config.to_score_file()

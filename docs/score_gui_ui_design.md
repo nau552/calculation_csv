@@ -1,6 +1,6 @@
 # score_gui Phase1 Streamlit UI 設計書 (v2)
 
-バックエンド（scorelib engine）は実装済み。本書はその上に載せる
+バックエンド（scorelib_param engine）は実装済み。本書はその上に載せる
 ローカル実行のスコア設計UI（Streamlit）の設計を記す。
 エンジン側仕様は `score_gui_design.md` / `README.md` を参照。
 
@@ -22,12 +22,12 @@ ui/
   app.py            # エントリポイント。サイドバーで画面切替する単一アプリ
   state.py          # ScoreFile編集状態の純粋ロジック（雛形生成・検証・下書き・エクスポート）
   widgets.py        # 集計指示エディタ等、複数画面で使う部品
-scorelib/
+scorelib_param/
   introspect.py     # 【追加】定義ファイル群から type一覧・軸一覧・軸の値候補を導出
                     # （UIから使うが純粋関数としてscorelib側に置き、pytest可能にする）
 ```
 
-**ファイル構成の方針（確認事項6への回答反映）**: `scorelib/` はエンジン専用に保ち、
+**ファイル構成の方針（確認事項6への回答反映）**: `scorelib_param/` はエンジン専用に保ち、
 Streamlit依存のコードは一切置かない。`introspect.py` はデータファイル解釈の純粋関数
 （将来サーバ側のマニフェスト生成にも使い回す）なのでエンジン側に置く。
 テストは慣習どおり `tests/` 直下にフラットに置き、モジュールと1:1対応の命名
@@ -37,7 +37,7 @@ UIテストが増えたら `tests/ui/` へのサブディレクトリ分割を�
 起動: `.venv/Scripts/streamlit run ui/app.py`（依存に `streamlit` を追加）
 
 設計原則: **UIはエンジンの薄いラッパー**とする。判断ロジック（軸候補の導出、
-検証、jsonc入出力、計算）はすべて scorelib 側の関数として実装し、
+検証、jsonc入出力、計算）はすべて scorelib_param 側の関数として実装し、
 app.py/widgets.py はウィジェット配置とsession_stateの受け渡しだけを行う。
 これによりUIロジックの大部分をpytestで検証できる。
 
@@ -47,15 +47,15 @@ app.py/widgets.py はウィジェット配置とsession_stateの受け渡しだ�
 SVN上の実験スクリプトを操作し、SVNに直接触れることはできない。実験（最適化）は
 GUIサーバ上のSVNチェックアウトで実行される。
 
-- **コードの正は git**（本リポジトリ: scorelib + ui + tests + custom_parts.py テンプレート）。
+- **コードの正は git**（本リポジトリ: scorelib_param + ui + tests + custom_parts.py テンプレート）。
   UI を SVN には登録しない（現行GUIと同じ管理形態）
 - **SVN にはエンジンのみの実行用スナップショットを同期登録**する。リリース手順:
-  1. `scorelib/__init__.py` の `__version__` を上げて git にコミット（例: 0.1.0 → 0.2.0）
+  1. `scorelib_param/__init__.py` の `__version__` を上げて git にコミット（例: 0.1.0 → 0.2.0）
   2. `git tag v0.2.0` を打つ（タグ=特定コミットに付ける動かない名前。後日 SVN 側の
      エンジンにバグが出たとき `git checkout v0.2.0` で「コピーした瞬間のコード」を
      正確に再現するための保険。1コマンドなので推奨だが、忘れても運用は壊れない）
-  3. **手動で** `scorelib/` フォルダと `custom_parts.py` を SVN の作業コピーへ上書きコピー
-  4. `svn commit -m "scorelib 0.2.0"`
+  3. **手動で** `scorelib_param/` フォルダと `custom_parts.py` を SVN の作業コピーへ上書きコピー
+  4. `svn commit -m "scorelib_param 0.2.0"`
 
   本質的な決まりは2つ: **コピー前に必ず `__version__` を上げる**（UIサイドバー・
   CLI表示・SVN側が同じ版名を指すように）、**SVN 側を直接編集しない**
@@ -65,12 +65,12 @@ GUIサーバ上のSVNチェックアウトで実行される。
   エンジンの版ズレ管理もサーバ1箇所に集約される
 - 個人でのUI起動（配布物=git一式のアーカイブを展開 → `pip install -e ".[ui]"` →
   `streamlit run ui/app.py`）は**開発者・パワーユーザ向けモード**。配布物には
-  scorelib が同梱されるため、エンジンを別途入手・配置する必要はない
+  scorelib_param が同梱されるため、エンジンを別途入手・配置する必要はない
 - **UIとエンジンは分割しない**（検討の上で却下）: UIの検証・軸候補・雛形保証は
   エンジンのコードそのものを使うことで「実行時と同一」を担保しており、分割すると
   検証ルールの二重実装（確実に食い違う）になる。models/introspect を共通コアに
   切り出す3分割案も、版ズレ問題を解決せずパッケージ管理の手間だけ増えるため見送り
-- **版ズレの検知**: `scorelib.__version__` を SVN 同期のたびに更新し、
+- **版ズレの検知**: `scorelib_param.__version__` を SVN 同期のたびに更新し、
   UIサイドバーと CLI（stderr / `--version`）に表示する。設計に使ったUIの
   エンジン版と実験実行側のエンジン版の不一致に気づくための保険
   （stdout は最適化側がパースする結果JSONのみを保つ）
@@ -98,7 +98,7 @@ GUIサーバ上のSVNチェックアウトで実行される。
   **エラー**にする（名無しグループとして静かに混ざる事故の防止）
 - 空パスは拒否する（Pythonでは `Path("")` がカレントディレクトリ扱いになり、
   起動場所を誤って走査してしまうため）。読み込み後は走査した絶対パスを表示する
-- **自動検出の判別ルール**（`scorelib/introspect.py`。ファイル名ではなく**中身の形**で
+- **自動検出の判別ルール**（`scorelib_param/introspect.py`。ファイル名ではなく**中身の形**で
   判別する — 係数ファイル等は世代・案件ごとに名前が変わるため）:
   - **optimization設定jsonc**: `*.jsonc` をパースし、トップレベルに `optimization{}`
     キーを持つオブジェクトだったもの
@@ -139,7 +139,7 @@ GUIサーバ上のSVNチェックアウトで実行される。
   - `parameterLabel_{type}.csv` / `dataName_{type}.csv` / `map_*.csv` → **type一覧**の検出
   - `{type}.csv` / `initial_temperature.csv`（あれば。テスト計算と値候補の精度向上に使用）
 - 認識できたファイル・不足ファイル・検出されたtypeと軸の一覧を表示
-- 軸の値候補の導出ルール（`scorelib/introspect.py`）:
+- 軸の値候補の導出ルール（`scorelib_param/introspect.py`）:
   - Label系軸: `map_Label.csv` の値一覧
   - Override系軸: true / false
   - State等 `map_{軸}.csv` がある軸: そのmapの値一覧
@@ -312,7 +312,7 @@ GUIサーバ上のSVNチェックアウトで実行される。
   type を dVtBudget 以外へ変えたら `__dvtbudget__` も削除
   （設定だけ消してステップが残ると検証エラーになる）
 
-## 5. エンジン側への追加実装（scorelib/introspect.py）
+## 5. エンジン側への追加実装（scorelib_param/introspect.py）
 
 UIのために以下の純粋関数を追加する（pytest対象）:
 
@@ -344,7 +344,7 @@ UIのために以下の純粋関数を追加する（pytest対象）:
 
 ## 6. テスト方針
 
-- `scorelib/introspect.py`: result_tmp_mini を使ったpytest（type検出、軸候補、
+- `scorelib_param/introspect.py`: result_tmp_mini を使ったpytest（type検出、軸候補、
   tRのPage軸など汎用性の確認）
 - `ui/state.py` の編集操作（パーツ追加・複製・orderの並べ替え・セット別名保存等）:
   純粋関数としてpytest
@@ -353,7 +353,7 @@ UIのために以下の純粋関数を追加する（pytest対象）:
 
 ## 7. 実装順序
 
-1. `scorelib/introspect.py` + pytest（UIの土台になる導出ロジック）
+1. `scorelib_param/introspect.py` + pytest（UIの土台になる導出ロジック）
 2. `ui/state.py`（編集状態の純粋ロジック）+ pytest
 3. 画面1（データ読み込み）→ 画面2（パーツ編集）→ 画面3（選択セット）→
    画面4（合成・制約）→ 画面5（テスト・エクスポート）の順に実装
@@ -380,6 +380,6 @@ UIのために以下の純粋関数を追加する（pytest対象）:
 4. **編集内容の自動バックアップ**: あり（4節の通り）
 5. **パッケージ制約**: proxyはあるがpipで入るものは基本OKとのこと。
    必須依存は streamlit のみ追加
-6. **ファイル構成**: UIコードは `scorelib/` と同列に置かず `ui/` に分離
+6. **ファイル構成**: UIコードは `scorelib_param/` と同列に置かず `ui/` に分離
    （`introspect.py` のみstreamlit非依存の純粋関数としてscorelib側）。
    テストは `tests/` 直下フラット＋モジュール対応命名（2節参照）

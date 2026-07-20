@@ -1,6 +1,6 @@
 [project]
-name = "scorelib"
-version = "0.1.0"
+name = "scorelib_param"
+version = "0.3.0"
 description = "Score / score-part definition, aggregation engine, and CLI for score_gui Phase1"
 requires-python = ">=3.10"
 dependencies = [
@@ -21,7 +21,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["scorelib"]
+packages = ["scorelib_param"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

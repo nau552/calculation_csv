@@ -3,8 +3,8 @@ import math
 import polars as pl
 import pytest
 
-from scorelib import io_jsonc
-from scorelib.dvtbudget import apply_dvtbudget, load_board_temperatures
+from scorelib_param import io_jsonc
+from scorelib_param.dvtbudget import apply_dvtbudget, load_board_temperatures
 
 
 def _write_temps(tmp_path):

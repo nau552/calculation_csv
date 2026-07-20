@@ -1,9 +1,9 @@
-"""バッチ計算 CLI: ``python -m scorelib.batch``（docs/batch_design.md 9節）。
+"""バッチ計算 CLI: ``python -m scorelib_param.batch``（docs/batch_design.md 9節）。
 
-現行 CLI（scorelib.cli）の入出力契約はそのまま。こちらは過去実験の
+現行 CLI（scorelib_param.cli）の入出力契約はそのまま。こちらは過去実験の
 result_history 群を受け取り、epoch ごとのスコア表を CSV に書く:
 
-    python -m scorelib.batch \
+    python -m scorelib_param.batch \
         --config config.jsonc \
         --history /data/expA/Step1/Loop01/result_history \
         --history expB=/data/expB/Step2/Loop03/result_history \
@@ -59,10 +59,10 @@ def _batch_size(value: str) -> Union[int, str]:
 
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(
-        prog="python -m scorelib.batch", description=__doc__,
+        prog="python -m scorelib_param.batch", description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--version", action="version", version=f"scorelib {__version__}")
+    parser.add_argument("--version", action="version", version=f"scorelib_param {__version__}")
     parser.add_argument("--config", required=True, help="run config jsonc (Generation + optimization{...})")
     parser.add_argument(
         "--history", required=True, action="append",
@@ -108,7 +108,7 @@ def main(argv=None) -> None:
         keep_staging=args.keep_staging,
         custom_parts_path=args.custom_parts,
     )
-    print(f"scorelib {__version__} (batch)", file=sys.stderr)
+    print(f"scorelib_param {__version__} (batch)", file=sys.stderr)
     try:
         result = runner.run()
     except StrictBatchError as err:

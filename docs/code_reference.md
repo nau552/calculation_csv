@@ -1,4 +1,4 @@
-# コードリファレンス（scorelib / ui / scripts）
+# コードリファレンス（scorelib_param / ui / scripts）
 
 このファイルは「**今のコードに何があるか**」を説明するリファレンスです（チーム内での報告・引き継ぎ用）。
 「なぜこの設計にしたか」の経緯は `score_gui_design.md`（エンジン）と `score_gui_ui_design.md`（UI）、
@@ -33,12 +33,12 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 
 ---
 
-## scorelib/（エンジン）
+## scorelib_param/（エンジン）
 
-### `scorelib/__init__.py`
+### `scorelib_param/__init__.py`
 - `__version__` — エンジンの版。SVNへ同期するたびに上げる（UIサイドバー・CLIに表示）。
 
-### `scorelib/jsonc.py` — コメント付きJSONの読み書き
+### `scorelib_param/jsonc.py` — コメント付きJSONの読み書き
 | 関数 | 内容 |
 |---|---|
 | `strip_jsonc_comments(text)` | `//` と `/* */` コメントを文字列リテラル内を壊さずに除去（1文字ずつ走査） |
@@ -47,17 +47,17 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 
 設計: 外部ライブラリを増やさないための最小実装。この形式（JSON+コメント+末尾カンマ）で十分なため。
 
-### `scorelib/io_jsonc.py` — pydanticモデル⇔jsoncファイルの入出力
+### `scorelib_param/io_jsonc.py` — pydanticモデル⇔jsoncファイルの入出力
 `load_run_config` / `save_run_config` / `load_score_file` / `save_score_file` /
 `load_dvtbudget_coef` の5関数。すべて「jsonc.load → models の model_validate」の薄い糊。
 
-### `scorelib/expression.py` — 自由記述式の評価
+### `scorelib_param/expression.py` — 自由記述式の評価
 | 関数 | 内容 |
 |---|---|
 | `evaluate_expression(expr, variables)` | simpleeval（サンドボックス評価器）で式を評価。パーツ合成式と `expr` op の両方で共用 |
 | `_make_functions()` / `_mean()` | 式で使える関数の登録（log=log10, ln, log2, exp, sqrt, min, max, mean, sum, abs） |
 
-### `scorelib/models.py` — データモデルと検証（エンジンの「文法」）
+### `scorelib_param/models.py` — データモデルと検証（エンジンの「文法」）
 | 定義 | 内容 |
 |---|---|
 | `COMBINED_SEP = "&"` | 複合軸の区切り（`"State&Read_Label"`） |
@@ -74,7 +74,7 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 
 設計: **検証はすべてここに集約**し、UIも同じモデルで検証する（二重実装しない）。
 
-### `scorelib/axis_resolve.py` — 必要な軸だけのcsv結合
+### `scorelib_param/axis_resolve.py` — 必要な軸だけのcsv結合
 | 定義 | 内容 |
 |---|---|
 | `JOIN_KEYS` | `(InBatchEpoch, Board, Chip, Block, Measure)`。測定csvとラベルcsvの結合キー |
@@ -83,7 +83,7 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 
 設計: 全展開（FBC_expanded.csv 相当）を作らず、パーツが言及した軸だけを結合する。
 
-### `scorelib/aggregate.py` — orderの逐次集計
+### `scorelib_param/aggregate.py` — orderの逐次集計
 | 関数 | 内容 |
 |---|---|
 | `group_column_expr(axis, ranges)` | グループ派生列を作る polars 式（範囲→グループ名） |
@@ -93,18 +93,18 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 | `collapse` / `collapse_to_scalar` | 潰し残しの列や null（filterが0行等）を検出してエラーにし、1スカラーを返す |
 | `aggregate_score_part` | 上2つをつないだ入口 |
 
-### `scorelib/relative.py` — 相対化
+### `scorelib_param/relative.py` — 相対化
 `apply_relative(lf, col, relative)` のみ。split_axis で分子/分母に分け、分母だけ事前集計
 （denominator_pre_aggregation）してから、**その時点で残っている全列一致**で左結合し、
 ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算する。
 
-### `scorelib/dvtbudget.py` — dVtBudget変換
+### `scorelib_param/dvtbudget.py` — dVtBudget変換
 | 関数 | 内容 |
 |---|---|
 | `load_board_temperatures(path)` | initial_temperature.csv → {Board: 温度} |
 | `apply_dvtbudget(lf, col, generation, coef, temps)` | Board の実測温度に最も近い温度キーの係数 b を State ごとに引き、`-log10(値)/b*1000` を行単位で適用。Board/State 列が既に潰されていたらエラー |
 
-### `scorelib/custom.py` — 自作Python関数パーツ
+### `scorelib_param/custom.py` — 自作Python関数パーツ
 | 定義 | 内容 |
 |---|---|
 | `CustomContext` | 関数に渡す入れ物（data_dir / generation / group_defs / params） |
@@ -113,7 +113,7 @@ ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算
 | `list_custom_functions(module)` | モジュール内で定義された公開関数名の一覧（import された名前・`_`始まりは除外） |
 | `compute_custom_part(part, module, ctx)` | 関数を呼び、戻り値が有限な1スカラーであることを検証 |
 
-### `scorelib/introspect.py` — UI向けメタデータの導出
+### `scorelib_param/introspect.py` — UI向けメタデータの導出
 | 関数 | 内容 |
 |---|---|
 | `detect_types(dir)` | 測定typeの検出（`parameterLabel_*`/`dataName_*` の命名 + Measure列を持つcsv） |
@@ -125,7 +125,7 @@ ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算
 
 複数候補の扱い（黙って選ばずエラー）は呼び出し側（ui/state.py）の責務。
 
-### `scorelib/cli.py` — 計算の入口（最適化側からはサブプロセスで呼ばれる）
+### `scorelib_param/cli.py` — 計算の入口（最適化側からはサブプロセスで呼ばれる）
 | 定義 | 内容 |
 |---|---|
 | `RELATIVE_STEP` / `DVTBUDGET_STEP` | order に置ける仮想ステップ名（`__relative__` / `__dvtbudget__`） |
@@ -240,20 +240,20 @@ ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算
 
 ---
 
-## scorelib/batch/（過去実験データのバッチスコア計算）
+## scorelib_param/batch/（過去実験データのバッチスコア計算）
 
 設計は `docs/batch_design.md`。複数の result_history（過去実験の epoch 群）を
 受け取り、識別列 `Epoch` を通してバッチ単位に一括計算する。単一 epoch 計算と
-数値等価（tests/test_batch.py で保証）。CLI: `python -m scorelib.batch`。
+数値等価（tests/test_batch.py で保証）。CLI: `python -m scorelib_param.batch`。
 
-### `scorelib/batch/history.py` — result_history の列挙と Epoch ID
+### `scorelib_param/batch/history.py` — result_history の列挙と Epoch ID
 | 名前 | 内容 |
 |---|---|
 | `EpochRef` | 1 epoch への参照（label / epoch_no / source_dir）。`epoch_id` = `"{label}#{NNNN}"` |
 | `derive_label(path)` | `<実験ログ>/Step{N}/Loop{NN}/result_history` から親3段でラベル導出（構造が違えば警告） |
 | `enumerate_epochs(histories)` | パスのリスト or {ラベル: パス} → 全 EpochRef。ラベル重複・空 history はエラー、`result.NNNN` 以外は警告して無視 |
 
-### `scorelib/batch/staging.py` — アーカイブ展開・検証・削除
+### `scorelib_param/batch/staging.py` — アーカイブ展開・検証・削除
 | 名前 | 内容 |
 |---|---|
 | `StagedEpoch` | 計算可能になった 1 epoch（data_dir / created_dir=削除対象 / error=skip理由） |
@@ -264,7 +264,7 @@ ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算
 安全対策: アーカイブ内の絶対パス・`..` エントリは拒否。ディレクトリごと固めた
 tar は展開後に1段持ち上げる（flatten）。symlink 不可の環境はコピーで代替。
 
-### `scorelib/batch/compute.py` — バッチ計算層（純粋・polars）
+### `scorelib_param/batch/compute.py` — バッチ計算層（純粋・polars）
 | 名前 | 内容 |
 |---|---|
 | `EPOCH_COL` | 識別軸の予約名 `"Epoch"`。設計内の軸・グループ定義と衝突したらエラー |
@@ -277,7 +277,7 @@ tar は展開後に1段持ち上げる（flatten）。symlink 不可の環境は
 filter 空振りで行ごと消えた epoch は「パーツごとに全 epoch が揃っているか」の
 検証で捕まえる。
 
-### `scorelib/batch/runner.py` — パイプライン実行
+### `scorelib_param/batch/runner.py` — パイプライン実行
 | 名前 | 内容 |
 |---|---|
 | `Fetcher` | `(EpochRef, staging_root) -> Path`。デフォルト `passthrough_fetcher`（ローカル/マウント済みをそのまま）。scp 等はこの実装を足すだけ |
@@ -286,8 +286,8 @@ filter 空振りで行ごと消えた epoch は「パーツごとに全 epoch �
 | `estimate_epoch_bytes()` / `_advise_batch_size()` | 最初の epoch を実測して batch_size auto / 過大・過小の助言（stderr。実行はブロックしない） |
 | `StrictBatchError` | strict モードで不良 epoch を検出したときの例外 |
 
-### `scorelib/batch/__main__.py` — CLI
-`python -m scorelib.batch --config ... --history ... --out scores.csv`。
+### `scorelib_param/batch/__main__.py` — CLI
+`python -m scorelib_param.batch --config ... --history ... --out scores.csv`。
 `--history` は繰り返し可・`label=path` 形式可。除外 epoch は stderr と
 `<out>.failed.csv` に理由つきで出力。`--max-threads N` で計算スレッド数を
 制限できる（POLARS_MAX_THREADS を polars の初回 import **前**に設定する
@@ -312,6 +312,8 @@ filter 空振りで行ごと消えた epoch は「パーツごとに全 epoch �
 | `config_mini.jsonc` | UI動作確認用のサンプルスコア設定（tests/data/result_tmp_mini と組で使う） |
 | `scripts/convert_dvtbudget_coef.py` | 現行の係数Pythonファイル（`dVtBudget_coef = {...}`）を ast で安全に読み jsonc へ変換 |
 | `scripts/benchmark_batch.py` | 実運用マシンでバッチサイズごとの所要時間・ピークメモリを実測する（計測1回=子プロセス1つ。`--batch-sizes auto,10,25,50` / `--max-threads` / `--repeat`） |
+| `scripts/batch_bridge_example.py` | 最適化スクリプト（python3.7）からバッチCLIを subprocess 起動するブリッジ実装例。scorelib_param 非依存・py3.7互換で、そのまま現行スクリプトへコピーできる（stderr は `<out>.log` へ、失敗は log 末尾つき RuntimeError、`<out>.failed.csv` を failed dict として返す） |
+| `scripts/get_score_bridge_example.py` | turbo.py の get_score() に差し込む**毎epochの通常スコア計算**ブリッジ実装例（score_function="gui_score" 分岐）。`python -m scorelib_param.cli` を subprocess 起動し stdout の JSON を dict で返す。py3.7互換・scorelib非依存。initial_temperature 省略時は data_dir 内を自動使用 |
 | `tests/data/result_tmp_mini/` | テスト・動作確認用の小さな測定データ一式（git登録済み。実データ result_tmp/ は登録しない） |
 | `tests/` | テスト（解説は `testing_guide.md`） |
 | `reference_scripts/` | 現行スクリプトの参照用コピー（エンジン検証の正解データ生成に使用。expand_FBC_measure.py はテストが実行する） |

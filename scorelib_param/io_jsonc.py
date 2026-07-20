@@ -1,4 +1,4 @@
-"""scorelib.models の pydantic モデル ⇔ jsonc ファイルの読み書き。"""
+"""scorelib_param.models の pydantic モデル ⇔ jsonc ファイルの読み書き。"""
 from __future__ import annotations
 
 from pathlib import Path

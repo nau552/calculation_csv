@@ -6,10 +6,10 @@ import sys
 import polars as pl
 import pytest
 
-from scorelib import io_jsonc
-from scorelib.cli import compute_score_file, compute_score_part
-from scorelib.dvtbudget import load_board_temperatures
-from scorelib.expression import evaluate_expression
+from scorelib_param import io_jsonc
+from scorelib_param.cli import compute_score_file, compute_score_part
+from scorelib_param.dvtbudget import load_board_temperatures
+from scorelib_param.expression import evaluate_expression
 
 
 @pytest.fixture
@@ -84,7 +84,7 @@ def test_group_axis_reduced_after_other_axes(expanded_mini_dir, run_config):
     """旧 group_reduce では表現できなかったユーザシナリオ: まず WLgroup 内で
     WL を平均し、Board/Chip/Block/STR を集約した後、**最後に** WLgroup を
     max で潰す。"""
-    from scorelib.models import ScorePart
+    from scorelib_param.models import ScorePart
 
     wlgroup = run_config.optimization.WLgroup
     part = ScorePart.model_validate(
@@ -129,7 +129,7 @@ def test_group_axis_reduced_after_other_axes(expanded_mini_dir, run_config):
 def test_group_values_outside_ranges_rejected(data_dir_mini):
     """どの範囲にも入らないデータ行が「名無し(null)グループ」として静かに
     混ざってはならない（値一覧つきのエラーになること）。"""
-    from scorelib.models import GroupDef, ScorePart
+    from scorelib_param.models import GroupDef, ScorePart
 
     part = ScorePart.model_validate(
         {"name": "p", "type": "FBC", "order": ["G"], "aggregations": {"G": {"op": "max"}}}
@@ -140,7 +140,7 @@ def test_group_values_outside_ranges_rejected(data_dir_mini):
 
 
 def test_group_def_name_clashing_with_source_axis_rejected(data_dir_mini, run_config):
-    from scorelib.models import GroupDef, ScorePart
+    from scorelib_param.models import GroupDef, ScorePart
 
     part = ScorePart.model_validate(
         {"name": "p", "type": "FBC", "order": ["WL"], "aggregations": {"WL": {"op": "max"}}}
@@ -170,7 +170,7 @@ def test_compute_score_file_returns_all_parts(data_dir_mini, run_config, dvt_inp
 
 
 def test_custom_part_computes(data_dir_mini, fixtures_dir):
-    from scorelib.models import RunConfig
+    from scorelib_param.models import RunConfig
 
     rc = RunConfig.model_validate(
         {
@@ -195,11 +195,11 @@ def test_custom_part_computes(data_dir_mini, fixtures_dir):
 
 
 def test_custom_part_errors(data_dir_mini, fixtures_dir):
-    from scorelib.cli import SharedComputeContext
-    from scorelib.custom import (
+    from scorelib_param.cli import SharedComputeContext
+    from scorelib_param.custom import (
         CustomContext, compute_custom_part, list_custom_functions, load_custom_module,
     )
-    from scorelib.models import ScorePart
+    from scorelib_param.models import ScorePart
 
     module = load_custom_module(fixtures_dir / "custom_parts.py")
     assert list_custom_functions(module) == [
@@ -216,7 +216,7 @@ def test_custom_part_errors(data_dir_mini, fixtures_dir):
 
 
 def test_custom_fields_rejected_on_pipeline_parts():
-    from scorelib.models import ScorePart
+    from scorelib_param.models import ScorePart
 
     with pytest.raises(Exception, match="only valid on type='custom'"):
         ScorePart.model_validate({"name": "p", "type": "FBC", "function": "f"})
@@ -229,7 +229,7 @@ def test_custom_fields_rejected_on_pipeline_parts():
 
 def test_cli_subprocess_end_to_end(data_dir_mini, fixtures_dir, dvtbudget_coef_path):
     cmd = [
-        sys.executable, "-m", "scorelib.cli",
+        sys.executable, "-m", "scorelib_param.cli",
         "--config", str(fixtures_dir / "config.jsonc"),
         "--data-dir", str(data_dir_mini),
         "--dvtbudget-coef", str(dvtbudget_coef_path),
