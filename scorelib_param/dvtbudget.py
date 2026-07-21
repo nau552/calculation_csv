@@ -21,9 +21,50 @@ from .models import DvtBudgetCoefFile
 
 
 def load_board_temperatures(initial_temperature_path: str | Path) -> Dict[int, float]:
-    """initial_temperature.csv（ヘッダなし: Board, 温度）→ {Board: 温度}。"""
-    df = pl.read_csv(initial_temperature_path, has_header=False, new_columns=["Board", "Temperature"])
-    return {int(board): float(temp) for board, temp in zip(df["Board"], df["Temperature"])}
+    """initial_temperature.csv → {Board: 温度}。
+
+    実機の形式はヘッダあり（InBatchEpoch, Board, Temp）。列は名前で拾うので
+    列順や余分な列（InBatchEpoch等）は問わない。温度列名は Temp / Temperature
+    のどちらでもよい。ヘッダなし2列（Board, 温度）の旧参照データ形式も
+    受け付ける（1行目の先頭セルが数値ならヘッダなしと判定）。
+    """
+    df = pl.read_csv(initial_temperature_path, has_header=False, infer_schema=False)
+    rows = [[("" if v is None else str(v).strip()) for v in r] for r in df.rows()]
+    if not rows:
+        raise ValueError(f"{initial_temperature_path}: empty file")
+
+    try:
+        float(rows[0][0])
+        board_i, temp_i = 0, 1  # ヘッダなし旧形式
+    except ValueError:
+        header = [h.lower() for h in rows[0]]
+        rows = rows[1:]
+
+        def find(*names: str) -> int:
+            for n in names:
+                if n in header:
+                    return header.index(n)
+            raise ValueError(
+                f"{initial_temperature_path}: column {'/'.join(names)} not found "
+                f"in header {header}"
+            )
+
+        board_i, temp_i = find("board"), find("temp", "temperature")
+
+    temps: Dict[int, float] = {}
+    for r in rows:
+        if not r[board_i]:
+            continue
+        board, temp = int(r[board_i]), float(r[temp_i])
+        if board in temps and temps[board] != temp:
+            raise ValueError(
+                f"{initial_temperature_path}: Board {board} has conflicting "
+                f"temperatures {temps[board]} and {temp}"
+            )
+        temps[board] = temp
+    if not temps:
+        raise ValueError(f"{initial_temperature_path}: no temperature rows")
+    return temps
 
 
 def _nearest_temp_key(available_keys, target_temp: float) -> str:

@@ -21,6 +21,35 @@ def test_load_board_temperatures(tmp_path):
     assert temps[1] == pytest.approx(82.934)
 
 
+def test_load_board_temperatures_real_header_format(tmp_path):
+    # 実機の形式: ヘッダあり・InBatchEpoch 列つき・温度列名は Temp
+    p = tmp_path / "initial_temperature.csv"
+    p.write_text(
+        "InBatchEpoch, Board, Temp\n0,0,-28.236\n0,1,82.934\n", encoding="utf-8"
+    )
+    assert load_board_temperatures(p) == load_board_temperatures(_write_temps(tmp_path))
+
+
+def test_load_board_temperatures_header_temperature_column(tmp_path):
+    p = tmp_path / "initial_temperature.csv"
+    p.write_text("Board,Temperature\n3,25.0\n", encoding="utf-8")
+    assert load_board_temperatures(p) == {3: 25.0}
+
+
+def test_load_board_temperatures_header_missing_column(tmp_path):
+    p = tmp_path / "initial_temperature.csv"
+    p.write_text("InBatchEpoch,Board,Humidity\n0,0,50\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="temp"):
+        load_board_temperatures(p)
+
+
+def test_load_board_temperatures_conflicting_rows(tmp_path):
+    p = tmp_path / "initial_temperature.csv"
+    p.write_text("Board,Temp\n0,25.0\n0,30.0\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="conflicting"):
+        load_board_temperatures(p)
+
+
 def test_apply_dvtbudget_nearest_temperature_and_formula(dvtbudget_coef_path, tmp_path):
     coef = io_jsonc.load_dvtbudget_coef(dvtbudget_coef_path)
     board_temps = load_board_temperatures(_write_temps(tmp_path))
