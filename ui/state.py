@@ -17,7 +17,7 @@ from pydantic import ValidationError
 from scorelib_param import custom as scorelib_custom
 from scorelib_param import introspect, io_jsonc, jsonc
 from scorelib_param.expression import evaluate_expression
-from scorelib_param.models import COMBINED_SEP, ScoreFile
+from scorelib_param.models import COMBINED_SEP, TRANSFORM_OPS, ScoreFile
 
 DRAFT_PATH = Path.home() / ".scorelib_draft.jsonc"
 
@@ -46,6 +46,7 @@ def empty_score_file() -> Dict[str, Any]:
         "constraintThreshold": {},
         "selectionSets": {},
         "groupDefs": {},
+        "weightSets": {},
     }
 
 
@@ -244,14 +245,29 @@ def move_entry(lst: list, index: int, delta: int) -> int:
 
 # ------------------------------------------------------------- グループ定義
 
-def import_config_group_defs(score_file: Dict[str, Any], wlgroup: Optional[Dict[str, Any]]) -> bool:
-    """設定jsoncの WLgroup を編集可能な定義として取り込む。score file は
-    自己完結（エンジンが使うのは score file 側の groupDefs）で、config の
-    WLgroup はあくまで初期テンプレート。追加したら True を返す。"""
+def import_config_group_defs(
+    score_file: Dict[str, Any],
+    wlgroup: Optional[Dict[str, Any]],
+    defin_logical: bool = True,
+    wlgroup_weight: Optional[Any] = None,
+) -> bool:
+    """設定jsoncの WLgroup（+ WLgroupDefinLogical / WLgroupWeight）を編集可能な
+    定義として取り込む。score file は自己完結（エンジンが使うのは score file
+    側の groupDefs / weightSets）で、config の値はあくまで初期テンプレート。
+    追加したら True を返す。"""
+    weights = score_file.setdefault("weightSets", {})
+    if wlgroup_weight is not None and "WLgroupWeight" not in weights:
+        weights["WLgroupWeight"] = (
+            dict(wlgroup_weight) if isinstance(wlgroup_weight, dict) else wlgroup_weight
+        )
     defs = score_file.setdefault("groupDefs", {})
     if not wlgroup or "WLgroup" in defs:
         return False
-    defs["WLgroup"] = {"axis": "WL", "groups": {k: list(v) for k, v in wlgroup.items()}}
+    defs["WLgroup"] = {
+        "axis": "WL",
+        "groups": {k: list(v) for k, v in wlgroup.items()},
+        "definedInLogical": bool(defin_logical),
+    }
     return True
 
 
@@ -263,6 +279,9 @@ def _part_axis_names(part: Dict[str, Any]) -> set:
     こちらは編集途中の不完全な dict に耐える — 意図的な並行実装であり、
     統合を試みないこと。"""
     axes = set(_axes_in_order(part))
+    for s in _part_specs(part):
+        if isinstance(s, dict) and s.get("by"):
+            axes.add(s["by"])  # 変換ステップの重みが参照する軸（cli._named_axes と対）
     rel = part.get("relative") or {}
     if rel.get("split_axis"):
         axes.add(rel["split_axis"])
@@ -386,7 +405,7 @@ def validate_score_file(data: Dict[str, Any]) -> List[str]:
             problems.append(f"constraintThreshold のキー '{key}' に対応するスコアパーツがありません")
     for part in sf.score_parts:
         try:
-            part.resolve_selection_refs(sf.selectionSets)
+            part.resolve_selection_refs(sf.selectionSets, sf.weightSets)
         except (ValueError, ValidationError) as err:
             problems.append(str(err) if isinstance(err, ValueError) else "; ".join(_format_pydantic_error(err)))
     return problems
@@ -401,13 +420,18 @@ def _expression_problems(expression: str, names: List[str]) -> List[str]:
     return []
 
 
-def validate_part(part: Dict[str, Any], selection_sets: Optional[Dict[str, list]] = None) -> List[str]:
+def validate_part(
+    part: Dict[str, Any],
+    selection_sets: Optional[Dict[str, list]] = None,
+    weight_sets: Optional[Dict[str, Any]] = None,
+) -> List[str]:
     """編集中のパーツ1つぶんの検証。"""
     single = {
         "score_parts": [part],
         "expression": "",
         "constraintThreshold": {},
         "selectionSets": selection_sets or {},
+        "weightSets": weight_sets or {},
     }
     return validate_score_file(single)
 
@@ -486,6 +510,8 @@ def build_context(
         "has_initial_temperature": (d / "initial_temperature.csv").exists(),
         "generation": None,
         "wlgroup": {},
+        "wlgroup_defin_logical": True,
+        "wlgroup_weight": None,
         "existing_score_file": None,
         "geninfo": None,
         "geninfo_path": None,
@@ -509,6 +535,8 @@ def build_context(
             raise ValueError(f"optimization設定jsoncを読み込めません ({config_file}): {err}")
         ctx["generation"] = run_config.Generation
         ctx["wlgroup"] = dict(run_config.optimization.WLgroup)
+        ctx["wlgroup_defin_logical"] = run_config.optimization.WLgroupDefinLogical
+        ctx["wlgroup_weight"] = run_config.optimization.WLgroupWeight
         existing = run_config.to_score_file()
         if existing.score_parts or existing.selectionSets or existing.expression:
             ctx["existing_score_file"] = existing.model_dump(exclude_none=True)
@@ -809,18 +837,41 @@ def load_draft(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
 
 
 def _part_refs(part: Dict[str, Any]) -> List[str]:
-    """パーツが参照している選択セット名（エクスポート同梱用）。"""
-    return sorted({s["ref"] for s in _part_specs(part) if isinstance(s, dict) and s.get("ref")})
+    """パーツが参照している選択セット名（エクスポート同梱用）。
+    変換op（TRANSFORM_OPS）の ref は重みセット参照なので含めない。"""
+    return sorted(
+        {
+            s["ref"]
+            for s in _part_specs(part)
+            if isinstance(s, dict) and s.get("ref") and s.get("op") not in TRANSFORM_OPS
+        }
+    )
+
+
+def _part_weight_refs(part: Dict[str, Any]) -> List[str]:
+    """パーツが参照している重みセット名（変換opの ref）。"""
+    return sorted(
+        {
+            s["ref"]
+            for s in _part_specs(part)
+            if isinstance(s, dict) and s.get("ref") and s.get("op") in TRANSFORM_OPS
+        }
+    )
 
 
 def export_part(score_file: Dict[str, Any], index: int) -> str:
     """パーツ1つを自己完結の score.jsonc としてエクスポートする（参照する
-    選択セットとグループ定義を同梱）。別の場所で再インポートできる。"""
+    選択セット・重みセットとグループ定義を同梱）。別の場所で再インポートできる。"""
     part = score_file["score_parts"][index]
     refs = _part_refs(part)
     missing = [r for r in refs if r not in score_file["selectionSets"]]
     if missing:
         raise ValueError(f"パーツ '{part.get('name')}' が参照する選択セットが未定義です: {missing}")
+    weight_refs = _part_weight_refs(part)
+    all_weights = score_file.get("weightSets", {})
+    missing_w = [r for r in weight_refs if r not in all_weights]
+    if missing_w:
+        raise ValueError(f"パーツ '{part.get('name')}' が参照する重みセットが未定義です: {missing_w}")
     all_defs = score_file.get("groupDefs", {})
     used_defs = sorted(_part_axis_names(part) & set(all_defs))
     bundle = {
@@ -829,6 +880,7 @@ def export_part(score_file: Dict[str, Any], index: int) -> str:
         "constraintThreshold": {},
         "selectionSets": {r: score_file["selectionSets"][r] for r in refs},
         "groupDefs": {n: all_defs[n] for n in used_defs},
+        "weightSets": {r: all_weights[r] for r in weight_refs},
     }
     return score_file_to_jsonc(bundle)
 
@@ -840,6 +892,7 @@ def run_test_compute(
     wlgroup: Optional[Dict[str, Any]] = None,
     coef_path: Optional[str] = None,
     custom_path: Optional[str] = None,
+    geninfo_path: Optional[str] = None,
 ) -> Dict[str, float]:
     """画面5: 実データでエンジンを走らせる。係数ファイルは指定があれば
     `coef_path` から（通常 result_tmp の外にある）。initial_temperature.csv
@@ -864,6 +917,7 @@ def run_test_compute(
                 # score file 側の定義が config の WLgroup より優先される
                 "WLgroup": wlgroup or {},
                 "groupDefs": dump.get("groupDefs", {}),
+                "weightSets": dump.get("weightSets", {}),
             },
         }
     )
@@ -873,7 +927,10 @@ def run_test_compute(
     coef = io_jsonc.load_dvtbudget_coef(coef_file) if coef_file else None
     temp_csv = d / "initial_temperature.csv"
     temps = load_board_temperatures(temp_csv) if temp_csv.exists() else None
-    return compute_score_file(d, run_config, coef, temps, custom_parts_path=custom_path)
+    return compute_score_file(
+        d, run_config, coef, temps, custom_parts_path=custom_path,
+        generation_info_path=geninfo_path,
+    )
 
 
 def import_score_file(text: str) -> Dict[str, Any]:

@@ -114,7 +114,11 @@ def _offer_draft_restore() -> None:
                     ci["data_dir"], ci.get("config_path"), ci.get("coef_path"),
                     ci.get("geninfo_path"), ci.get("custom_path"),
                 )
-                state.import_config_group_defs(ss.score_file, ss.context["wlgroup"])
+                state.import_config_group_defs(
+                    ss.score_file, ss.context["wlgroup"],
+                    ss.context.get("wlgroup_defin_logical", True),
+                    ss.context.get("wlgroup_weight"),
+                )
             except Exception as err:
                 ss.restore_warning = (
                     f"編集内容は復元しましたが、データの再読み込みに失敗しました。"
@@ -200,7 +204,11 @@ def screen_data() -> None:
                     found["data_dir"], found.get("config_path"), found.get("coef_path"),
                     found.get("geninfo_path"), found.get("custom_path"),
                 )
-                if state.import_config_group_defs(ss.score_file, ss.context["wlgroup"]):
+                if state.import_config_group_defs(
+                    ss.score_file, ss.context["wlgroup"],
+                    ss.context.get("wlgroup_defin_logical", True),
+                    ss.context.get("wlgroup_weight"),
+                ):
                     st.toast("設定jsoncの WLgroup をグループ定義として取り込みました")
                 st.toast("zipを展開して読み込みました")
                 st.rerun()
@@ -239,7 +247,11 @@ def screen_data() -> None:
     if st.button("読み込み", type="primary", key="load_btn"):
         try:
             ss.context = state.build_context(path, config_in, coef_in, geninfo_in, custom_in)
-            if state.import_config_group_defs(ss.score_file, ss.context["wlgroup"]):
+            if state.import_config_group_defs(
+                ss.score_file, ss.context["wlgroup"],
+                ss.context.get("wlgroup_defin_logical", True),
+                ss.context.get("wlgroup_weight"),
+            ):
                 st.toast("設定jsoncの WLgroup をグループ定義として取り込みました（画面3で編集できます）")
             st.toast("読み込みました")
         except Exception as err:
@@ -314,6 +326,8 @@ def _order_entry_label(entry: str, part: dict) -> str:
         return "__dvtbudget__（dVtBudget変換を実行）"
     spec = part.get("aggregations", {}).get(entry, {})
     detail = spec.get("op", "?")
+    if spec.get("by"):
+        detail += f" by {spec['by']}"
     if spec.get("ref"):
         detail += f" (ref: {spec['ref']})"
     elif spec.get("value") is not None:
@@ -346,9 +360,10 @@ def _add_entry_controls(part: dict, catalog: dict, uid: str) -> None:
         part["aggregations"][entry] = {"op": "sum"}
         st.rerun()
 
-    if st.button("＋ 定数加算ステップを追加", key=f"{uid}_addvirt_btn",
-                 help="値に定数を足すステップ（__offset__）を order に追加します。"
-                      "典型例: オフセットを足してから相対化する。実行位置は上下ボタンで調整してください"):
+    if st.button("＋ 定数演算ステップを追加", key=f"{uid}_addvirt_btn",
+                 help="値に定数を 足す/引く/掛ける/割る ステップ（__offset__ 等）を order に追加します。"
+                      "典型例: オフセットを足してから相対化、-1を掛けて正負反転、"
+                      "「軸の値ごと」を選んで WLgroup 別の重み。実行位置は上下ボタンで調整してください"):
         name, n = "__offset__", 2
         while name in part["order"]:
             name = f"__offset{n}__"
@@ -373,10 +388,11 @@ def _add_entry_controls(part: dict, catalog: dict, uid: str) -> None:
             st.rerun()
 
 
-def _order_editor(part: dict, catalog: dict, sets: dict, uid: str) -> None:
+def _order_editor(part: dict, catalog: dict, sf: dict, uid: str) -> None:
     """order エディタ: 一覧（並べ替え・削除）+ 選択エントリ用の常時表示
     エディタ1つ。expander はラベルが変わるたびに閉じてしまい値の編集が
     苦痛になるため使わない。"""
+    sets = sf["selectionSets"]
     sel_key = f"{uid}_sel_entry"
     order = part["order"]
     if st.session_state.get(sel_key) not in order:
@@ -438,10 +454,20 @@ def _order_editor(part: dict, catalog: dict, sets: dict, uid: str) -> None:
                 st.caption("このステップに集計指示はありません（位置のみ意味を持ちます）")
             else:
                 spec = part["aggregations"].setdefault(entry, {"op": "mean"})
+                gdefs = sf.get("groupDefs", {})
                 widgets.agg_editor(
                     entry, spec, catalog,
                     set_names=sorted(sets),
                     key=f"{uid}_{entry}",
+                    # 変換ステップの「軸の値ごとの定数（重み）」用: グループ派生軸を
+                    # 先頭に、次いで値候補が分かるカテゴリ軸
+                    by_candidates=sorted(gdefs)
+                    + [a for a in catalog if a != "InBatchEpoch" and a not in gdefs],
+                    by_value_labels={
+                        **{a: c for a, c in catalog.items() if c},
+                        **{n: list(d.get("groups", {})) for n, d in gdefs.items()},
+                    },
+                    weight_set_names=sorted(sf.get("weightSets", {})),
                 )
 
 
@@ -531,7 +557,8 @@ def screen_parts() -> None:
     # 検証マーカー: D&D部品は文字列しか描画できず項目単位の色分けが
     # 不可能なため、⚠ の接頭記号を見た目の代替にする
     invalid = {
-        p["_uid"] for p in sf["score_parts"] if state.validate_part(p, sf["selectionSets"])
+        p["_uid"] for p in sf["score_parts"]
+        if state.validate_part(p, sf["selectionSets"], sf.get("weightSets"))
     }
     for r, p in zip(rows, sf["score_parts"]):
         r["検証"] = "⚠ NG" if p["_uid"] in invalid else "OK"
@@ -643,10 +670,10 @@ def screen_parts() -> None:
             key=f"{uid}_rel",
         )
         st.divider()
-        _order_editor(part, catalog, sf["selectionSets"], uid)
+        _order_editor(part, catalog, sf, uid)
         _add_entry_controls(part, catalog, uid)
 
-    problems = state.validate_part(part, sf["selectionSets"])
+    problems = state.validate_part(part, sf["selectionSets"], sf.get("weightSets"))
     for p in problems:
         st.error(p)
     if not problems:
@@ -791,6 +818,16 @@ def _group_defs_section(sf: dict, ctx) -> None:
         index=axis_opts.index(cur_axis) if cur_axis in axis_opts else 0,
         key=f"gdef_{name}_axis",
     )
+    physical = st.checkbox(
+        "範囲を Physical 番号で記入する（現行スクリプトの WLgroupDefinLogical=False 相当）",
+        value=not gd.get("definedInLogical", True),
+        key=f"gdef_{name}_phys",
+        help="データの csv は Logical 番号なので、計算時に軸の総数 N（世代情報jsonの numWLs 等）を"
+             "使って N-1-p で読み替えます。世代情報jsonを画面1で読み込んでおいてください",
+    )
+    gd["definedInLogical"] = not physical
+    if physical and not (ctx and ctx.get("geninfo")):
+        st.warning("世代情報json（numWLs等）が未読み込みです。Physical記法の計算には必要です（画面1で指定）")
 
     def _reset_row_widgets() -> None:
         # 行ウィジェットのキーは添字ベースなので、行の増減後は記憶された
@@ -834,6 +871,40 @@ def _group_defs_section(sf: dict, ctx) -> None:
             st.rerun()
         except ValueError as err:
             st.error(str(err))
+
+    st.divider()
+    weights_all = sf.setdefault("weightSets", {})
+    wname = f"{name}Weight"
+    enabled = st.checkbox(
+        f"重みセット {wname} を定義する", value=wname in weights_all,
+        key=f"gdef_{name}_w_on",
+        help="パーツの order に定数演算ステップ（掛け算など）を置き、「軸の値ごと」でこのセットを"
+             " ref 参照すると、好きなタイミングでグループ別の重みを掛けられます。"
+             "設定jsoncの WLgroupWeight はこの名前で取り込まれます",
+    )
+    if not enabled:
+        weights_all.pop(wname, None)
+    else:
+        cur = weights_all.get(wname)
+        scalar_mode = st.checkbox(
+            "全グループ共通の1値にする", value=not isinstance(cur, dict),
+            key=f"gdef_{name}_w_scalar",
+        )
+        if scalar_mode:
+            weights_all[wname] = st.number_input(
+                "重み", value=float(cur) if isinstance(cur, (int, float)) else 1.0,
+                key=f"gdef_{name}_w_sv",
+            )
+        else:
+            cur = cur if isinstance(cur, dict) else {}
+            weights_all[wname] = {
+                g: st.number_input(
+                    g,
+                    value=float(cur[g]) if isinstance(cur.get(g), (int, float)) else 1.0,
+                    key=f"gdef_{name}_w_{i}",
+                )
+                for i, g in enumerate(groups)
+            }
 
 
 # ---------------------------------------------------- 画面4: スコア合成・制約
@@ -936,6 +1007,7 @@ def screen_test_export() -> None:
                             wlgroup=ctx["wlgroup"] if ctx else None,
                             coef_path=test_coef or None,
                             custom_path=ctx["custom_path"] if ctx else None,
+                            geninfo_path=ctx["geninfo_path"] if ctx else None,
                         )
                     st.dataframe(
                         [{"項目": k, "値": v} for k, v in result.items()],

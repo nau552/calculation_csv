@@ -65,6 +65,9 @@ def compute_batch_scores(
     max_threads=None,      # マシンを共有する場合に CPU スレッド数を制限
     max_prefetch=2,
     strict=False,
+    generation_info=None,  # {Generation}.json のパス。Physical記法のグループ定義
+                           # （WLgroupDefinLogical=False）がある場合のみ必要
+                           # （各 epoch ディレクトリ内にあれば省略可）
     scorelib_parent=None,  # scorelib_param/ を含む場所（例: kicOpt/）。省略時は
                            # このファイルの場所から親方向に scorelib_param/ を自動探索
     timeout=None,          # 秒。None なら無制限（数千 epoch は分単位かかる）
@@ -106,6 +109,8 @@ def compute_batch_scores(
             cmd += ["--max-threads", str(max_threads)]
         if strict:
             cmd += ["--strict"]
+        if generation_info:
+            cmd += ["--generation-info", generation_info]
 
         # cwd は変えず、PYTHONPATH で scorelib_param を見つけさせる
         # （呼び出し側が相対パスを渡しても壊れないように）

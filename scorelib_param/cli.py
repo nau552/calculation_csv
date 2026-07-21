@@ -67,10 +67,15 @@ def _named_axes(score_part: ScorePart) -> Set[str]:
     for entry in score_part.order:
         if not _is_virtual(entry):
             axes.update(_step_axes(entry))
+    for spec in score_part.aggregations.values():
+        if spec.by:
+            axes.add(spec.by)  # 変換ステップの重みが参照する軸（グループ派生軸名も可）
     if score_part.relative:
         axes.add(score_part.relative.split_axis)
         for step in score_part.relative.denominator_pre_aggregation:
             axes.add(step.axis)
+            if step.by:
+                axes.add(step.by)
     return axes
 
 
@@ -112,6 +117,13 @@ def _with_group_columns(
     derived = _referenced_group_defs(score_part, group_defs)
     if not derived:
         return lf
+    for name, gd in derived.items():
+        if not gd.definedInLogical:
+            raise ValueError(
+                f"group def '{name}' is still in physical numbering — resolve it to "
+                "logical ranges first (cli.resolve_group_defs reads numWLs etc. from "
+                "{Generation}.json and converts)"
+            )
     lf = lf.with_columns(
         [group_column_expr(gd.axis, gd.groups).alias(name) for name, gd in derived.items()]
     )
@@ -164,6 +176,67 @@ def _effective_order(score_part: ScorePart) -> list[str]:
 def _source_type(score_part: ScorePart) -> str:
     """実際に読む csv の type（dVtBudget パーツは FBC.csv を読む）。"""
     return "FBC" if score_part.type == "dVtBudget" else score_part.type
+
+
+# {Generation}.json（世代ごとのチップ情報）のキー → 軸名。Physical 記法の
+# グループ定義を Logical へ読み替えるときの軸総数 N の出所
+_GENERATION_AXIS_KEYS = {"WL": "numWLs", "STR": "numStrings"}
+
+
+def load_axis_counts(generation_info_path: str | Path) -> Dict[str, int]:
+    """世代情報 json から軸ごとの本数（{"WL": 120, "STR": 4} など）を読む。"""
+    from . import jsonc
+
+    info = jsonc.load(generation_info_path)
+    counts: Dict[str, int] = {}
+    if isinstance(info, dict):
+        for axis, key in _GENERATION_AXIS_KEYS.items():
+            if isinstance(info.get(key), int):
+                counts[axis] = info[key]
+    return counts
+
+
+def resolve_group_defs(
+    run_config: RunConfig,
+    data_dir: str | Path,
+    generation_info_path: Optional[str | Path] = None,
+) -> Dict[str, GroupDef]:
+    """config の全グループ定義を、Physical 記法（definedInLogical=false）の
+    定義は Logical 範囲へ読み替えたうえで返す。読み替えに必要な軸総数 N は
+    世代情報 json（既定: data_dir/{Generation}.json、`generation_info_path` で
+    上書き可）の numWLs / numStrings から取る。全定義が Logical ならファイルは
+    読まない。"""
+    defs = run_config.group_defs()
+    if all(gd.definedInLogical for gd in defs.values()):
+        return defs
+
+    path = (
+        Path(generation_info_path)
+        if generation_info_path
+        else Path(data_dir) / f"{run_config.Generation}.json"
+    )
+    if not path.is_file():
+        raise ValueError(
+            "group defs use physical numbering (definedInLogical=false / "
+            f"WLgroupDefinLogical=False) but the generation info json was not found: {path} "
+            "— place {Generation}.json (numWLs, ...) in the data dir or pass --generation-info"
+        )
+    counts = load_axis_counts(path)
+    resolved: Dict[str, GroupDef] = {}
+    for name, gd in defs.items():
+        if gd.definedInLogical:
+            resolved[name] = gd
+            continue
+        n = counts.get(gd.axis)
+        if n is None:
+            raise ValueError(
+                f"group def '{name}': axis count for '{gd.axis}' not found in {path} "
+                f"(known keys: {_GENERATION_AXIS_KEYS})"
+            )
+        resolved[name] = GroupDef(
+            axis=gd.axis, groups=gd.resolved_groups(n), definedInLogical=True
+        )
+    return resolved
 
 
 class SharedComputeContext:
@@ -249,6 +322,7 @@ def compute_score_part(
     board_temperatures: Optional[Dict[int, float]] = None,
     shared_ctx: Optional[SharedComputeContext] = None,
     selection_sets: Optional[Dict[str, list]] = None,
+    weight_sets: Optional[Dict[str, object]] = None,
     custom_module=None,
     identity_axes: tuple[str, ...] = (),
 ):
@@ -288,7 +362,7 @@ def compute_score_part(
             ),
         )
 
-    score_part = score_part.resolve_selection_refs(selection_sets or {})
+    score_part = score_part.resolve_selection_refs(selection_sets or {}, weight_sets or {})
     source_type = _source_type(score_part)
     required_axes = _required_axes(score_part, group_defs)
 
@@ -313,7 +387,7 @@ def compute_score_part(
     if shared_ctx is not None:
         defs_sig = tuple(
             sorted(
-                (name, gd.axis, tuple(sorted(gd.groups.items())))
+                (name, gd.axis, gd.definedInLogical, tuple(sorted(gd.groups.items())))
                 for name, gd in _referenced_group_defs(score_part, group_defs).items()
             )
         )
@@ -375,11 +449,12 @@ def compute_score_file(
     dvtbudget_coef: Optional[DvtBudgetCoefFile] = None,
     board_temperatures: Optional[Dict[int, float]] = None,
     custom_parts_path: Optional[str | Path] = None,
+    generation_info_path: Optional[str | Path] = None,
 ) -> Dict[str, float]:
     """config の全スコアパーツを計算し、expression を評価して
     {"Score": ..., パーツ名: ...} を返す。"""
     score_file = run_config.to_score_file()
-    group_defs = run_config.group_defs()
+    group_defs = resolve_group_defs(run_config, data_dir, generation_info_path)
 
     # type="custom" のパーツは、リポジトリ直下の SVN 管理された custom_parts.py
     # の関数を呼ぶ。config にパスは持たせない（configから任意コードを実行
@@ -414,6 +489,7 @@ def compute_score_file(
             board_temperatures=board_temperatures,
             shared_ctx=shared_ctx,
             selection_sets=score_file.selectionSets,
+            weight_sets=score_file.weightSets,
             custom_module=custom_module,
         )
 
@@ -431,6 +507,11 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument("--dvtbudget-coef", help="dVtBudget coefficient jsonc (required if any score part uses type=dVtBudget)")
     parser.add_argument("--initial-temperature", help="initial_temperature.csv (Board,Temperature; required for dVtBudget)")
     parser.add_argument("--custom-parts", help="custom_parts.py override (default: repository root)")
+    parser.add_argument(
+        "--generation-info",
+        help="{Generation}.json with numWLs etc. (default: found in --data-dir; needed "
+             "only when group defs use physical numbering)",
+    )
     args = parser.parse_args(argv)
 
     run_config = io_jsonc.load_run_config(args.config)
@@ -440,6 +521,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     result = compute_score_file(
         args.data_dir, run_config, dvtbudget_coef, board_temperatures,
         custom_parts_path=args.custom_parts,
+        generation_info_path=args.generation_info,
     )
     # stdout には結果 JSON **だけ**を出す（最適化側がパースする）。
     # 版数の目印は実行ログ用に stderr へ

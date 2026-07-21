@@ -31,9 +31,12 @@ AggOp = Literal[
     # ちょうど2つの選択の組（順序あり）で軸を潰す:
     # {"op": "diff", "value": [a, b]} -> value(a) - value(b)
     "diff",
-    # 変換op: 軸を潰さず値列に行単位で適用する。order の仮想ステップ
-    # "__xxx__"（例: __offset__）が使う
+    # 変換op（下の TRANSFORM_OPS）: 軸を潰さず値列に行単位で適用する。
+    # order の仮想ステップ "__xxx__"（例: __offset__）が使う
     "add",
+    "sub",
+    "mul",
+    "div",
 ]
 
 # `value` が通常opの修飾子になる前の旧表記（読み込み時に自動変換）
@@ -47,6 +50,13 @@ _SUBSET_ALIASES = {
 # 任意の選択リストを `value` に取れる集計op。UI（ui/widgets.py）と共有して
 # 両者が食い違わないようにする
 MULTI_OPS = ("mean", "sum", "min", "max")
+
+# 変換op: 軸を潰さず値列へ行単位で定数演算を適用する（aggregate.apply_transform）。
+# order には "__xxx__" 仮想ステップとして複数置ける。`value` は
+# - 数値: 全行に同じ定数（例: {"op": "mul", "value": -1} で正負反転）
+# - `by` + 辞書: 軸の値ごとの定数（例: WLgroup 別の重み。
+#   {"op": "mul", "by": "WLgroup", "value": {"WLgroup00": 10.0, ...}}）
+TRANSFORM_OPS = ("add", "sub", "mul", "div")
 
 
 class AggregationSpec(BaseModel):
@@ -64,11 +74,16 @@ class AggregationSpec(BaseModel):
 
     op: AggOp
     value: Optional[Any] = None
-    # インラインの `value` の代わりに使う、名前付き選択セット
-    # （optimization.selectionSets）への参照。計算前に解決され、解決後の
-    # 内容はインラインで書いた場合と全く同じ形状検査を通る
+    # インラインの `value` の代わりに使う、名前付きセットへの参照。
+    # 通常opでは選択セット（optimization.selectionSets）、変換op（TRANSFORM_OPS）
+    # では重みセット（optimization.weightSets / WLgroupWeight）を指す。
+    # 計算前に解決され、解決後の内容はインラインで書いた場合と
+    # 全く同じ形状検査を通る
     ref: Optional[str] = None
     expr: Optional[str] = None
+    # 変換op専用: 定数を「この軸の値ごと」に引く（例: by="WLgroup" +
+    # value={グループ名: 重み}）。その時点で軸列が残っている必要がある
+    by: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -96,11 +111,20 @@ class AggregationSpec(BaseModel):
     def _check_value_shape(self):
         """op ごとの value 形状検査（間違えやすい箇所なのでエラーは具体的に）。"""
         op, v = self.op, self.value
+        if self.by is not None and op not in TRANSFORM_OPS:
+            raise ValueError(
+                f"'by' applies only to transform ops {list(TRANSFORM_OPS)}, not op '{op}'"
+            )
         if self.ref is not None:
             if v is not None:
-                raise ValueError("give either 'value' or 'ref' (a named selection set), not both")
-            if op in ("add", "expr"):
-                raise ValueError(f"op '{op}' takes no selections, so 'ref' is not applicable")
+                raise ValueError("give either 'value' or 'ref' (a named set), not both")
+            if op == "expr":
+                raise ValueError("op 'expr' takes no selections, so 'ref' is not applicable")
+            if op in TRANSFORM_OPS and self.by is None:
+                raise ValueError(
+                    f"op '{op}' with 'ref' (a weight set) also needs 'by': the axis whose "
+                    "values the weights are keyed by (e.g. \"by\": \"WLgroup\")"
+                )
             # 形状検査は ref 解決後にもう一度走る
             return self
         if op == "filter":
@@ -114,9 +138,33 @@ class AggregationSpec(BaseModel):
                     )
             elif v is None:
                 raise ValueError("op 'filter' requires 'value'")
-        elif op == "add":
-            if not isinstance(v, (int, float)) or isinstance(v, bool):
-                raise ValueError("op 'add' requires a numeric 'value'")
+        elif op in TRANSFORM_OPS:
+            def _num(x):
+                return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+            if self.by is None:
+                if not _num(v):
+                    raise ValueError(f"op '{op}' requires a numeric 'value'")
+                if op == "div" and v == 0:
+                    raise ValueError("op 'div' cannot divide by zero")
+            elif isinstance(v, dict):
+                if not v or not all(_num(x) for x in v.values()):
+                    raise ValueError(
+                        f"op '{op}' with 'by' requires 'value' as a non-empty dict of "
+                        f"numbers keyed by values of '{self.by}' "
+                        '(e.g. {"WLgroup00": 10.0, "WLgroup01": 1.0})'
+                    )
+                if op == "div" and any(x == 0 for x in v.values()):
+                    raise ValueError("op 'div' cannot divide by zero (a weight is 0)")
+            elif _num(v):
+                # スカラー重みセット（全行同一の定数）を by つきで参照した場合
+                if op == "div" and v == 0:
+                    raise ValueError("op 'div' cannot divide by zero")
+            else:
+                raise ValueError(
+                    f"op '{op}' with 'by' requires 'value' as a dict of numbers "
+                    "(per-value weights) or a single number"
+                )
         elif op == "diff":
             if not isinstance(v, list) or len(v) != 2:
                 raise ValueError(
@@ -244,10 +292,17 @@ class ScorePart(BaseModel):
                     )
         return self
 
-    def resolve_selection_refs(self, selection_sets: Dict[str, List[Any]]) -> "ScorePart":
-        """全 `ref` を参照先の選択セットの中身で置き換えたコピーを返す。
+    def resolve_selection_refs(
+        self,
+        selection_sets: Dict[str, List[Any]],
+        weight_sets: Optional[Dict[str, Any]] = None,
+    ) -> "ScorePart":
+        """全 `ref` を参照先のセットの中身で置き換えたコピーを返す。
+        通常opの ref は選択セット、変換op（TRANSFORM_OPS）の ref は重みセット
+        （optimization.WLgroupWeight / weightSets）から解決する。
         パーツ全体を再検証するので、解決後の選択はインラインで書いた場合と
         全く同じ検査を通る。"""
+        weight_sets = weight_sets or {}
         specs = list(self.aggregations.values())
         if self.relative:
             specs += list(self.relative.denominator_pre_aggregation)
@@ -258,12 +313,20 @@ class ScorePart(BaseModel):
             ref = spec_dict.get("ref")
             if ref is None:
                 return
-            if ref not in selection_sets:
-                raise ValueError(
-                    f"score part '{self.name}': unknown selection set '{ref}' "
-                    f"(defined sets: {sorted(selection_sets)})"
-                )
-            spec_dict["value"] = deepcopy(selection_sets[ref])
+            if spec_dict.get("op") in TRANSFORM_OPS:
+                if ref not in weight_sets:
+                    raise ValueError(
+                        f"score part '{self.name}': unknown weight set '{ref}' "
+                        f"(defined weight sets: {sorted(weight_sets)})"
+                    )
+                spec_dict["value"] = deepcopy(weight_sets[ref])
+            else:
+                if ref not in selection_sets:
+                    raise ValueError(
+                        f"score part '{self.name}': unknown selection set '{ref}' "
+                        f"(defined sets: {sorted(selection_sets)})"
+                    )
+                spec_dict["value"] = deepcopy(selection_sets[ref])
             spec_dict["ref"] = None
 
         data = self.model_dump()
@@ -280,10 +343,32 @@ class GroupDef(BaseModel):
     （例: WLgroup: WL 0-3 → "WLgroup01"）。グループ列はデータ読み込み時に
     作られるため、定義名をパーツの `order` に置いて任意の位置で普通の軸と
     同様に集計できる（例: WL mean → Board max → WLgroup max）。
-    定義名は元軸名と同名にできない。"""
+    定義名は元軸名と同名にできない。
+
+    definedInLogical=False のときは、範囲が Physical 番号で書かれている
+    ことを表す（データの csv は Logical 番号。軸の総数 N に対して
+    Physical p ↔ Logical N-1-p）。計算前に resolved_groups() で Logical 範囲へ
+    読み替えてから使う。N は {Generation}.json（numWLs / numStrings）から
+    取る（cli.resolve_group_defs）。"""
 
     axis: str
     groups: Dict[str, Tuple[int, int]] = Field(default_factory=dict)
+    definedInLogical: bool = True
+
+    def resolved_groups(self, axis_count: Optional[int] = None) -> Dict[str, Tuple[int, int]]:
+        """Logical 番号での範囲。Physical 定義は [lo, hi] → [N-1-hi, N-1-lo]。"""
+        if self.definedInLogical:
+            return dict(self.groups)
+        if axis_count is None:
+            raise ValueError(
+                f"group def on axis '{self.axis}' is defined in physical numbering "
+                "(definedInLogical=false) — the axis count (e.g. numWLs from "
+                "{Generation}.json) is required to convert it"
+            )
+        return {
+            name: (axis_count - 1 - hi, axis_count - 1 - lo)
+            for name, (lo, hi) in self.groups.items()
+        }
 
 
 class ConstraintThresholdEntry(BaseModel):
@@ -304,19 +389,63 @@ class ScoreFile(BaseModel):
     expression: str = ""
     constraintThreshold: Dict[str, ConstraintThresholdEntry] = Field(default_factory=dict)
     # パーツが `ref` やグループ派生軸を使っていてもエクスポートが自己完結する
-    # よう、選択セットとグループ定義を同梱する
+    # よう、選択セット・グループ定義・重みセットを同梱する
     selectionSets: Dict[str, List[Any]] = Field(default_factory=dict)
     groupDefs: Dict[str, GroupDef] = Field(default_factory=dict)
+    # 変換op（TRANSFORM_OPS）の ref が参照する名前付き重み: 値は数値
+    # （全行同一の定数）か {軸の値: 数値}（by 軸の値ごとの定数）
+    weightSets: Dict[str, Any] = Field(default_factory=dict)
+
+
+def _is_weight(w) -> bool:
+    def num(x):
+        return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+    return num(w) or (isinstance(w, dict) and bool(w) and all(num(x) for x in w.values()))
 
 
 class OptimizationConfig(BaseModel):
     score_function: Optional[str] = None
     constraintThreshold: Dict[str, ConstraintThresholdEntry] = Field(default_factory=dict)
     WLgroup: Dict[str, Tuple[int, int]] = Field(default_factory=dict)
+    # WLgroup の範囲の記法: True（既定）= Logical 番号、False = Physical 番号
+    # （データの Logical 番号を N-1-p で読み替える。N は {Generation}.json の
+    # numWLs）。現行スクリプト互換で "True"/"False" の文字列も受ける
+    WLgroupDefinLogical: bool = True
+    # WLgroup 各グループの重み（{グループ名: 数値}）または全グループ共通の
+    # 数値1つ。名前 "WLgroupWeight" の重みセットとして ref から参照できる
+    WLgroupWeight: Optional[Any] = None
+    weightSets: Dict[str, Any] = Field(default_factory=dict)
     selectionSets: Dict[str, List[Any]] = Field(default_factory=dict)
     groupDefs: Dict[str, GroupDef] = Field(default_factory=dict)
     score_parts: List[ScorePart] = Field(default_factory=list)
     expression: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _parse_bool_strings(cls, data):
+        """現行 config は真偽値を "True"/"False" 文字列で書く流儀があるので吸収する。"""
+        if isinstance(data, dict) and isinstance(data.get("WLgroupDefinLogical"), str):
+            low = data["WLgroupDefinLogical"].strip().lower()
+            if low not in ("true", "false"):
+                raise ValueError(
+                    f"WLgroupDefinLogical must be true or false, got {data['WLgroupDefinLogical']!r}"
+                )
+            data = {**data, "WLgroupDefinLogical": low == "true"}
+        return data
+
+    @model_validator(mode="after")
+    def _check_weights(self):
+        for name, w in {
+            **({"WLgroupWeight": self.WLgroupWeight} if self.WLgroupWeight is not None else {}),
+            **self.weightSets,
+        }.items():
+            if not _is_weight(w):
+                raise ValueError(
+                    f"weight set '{name}' must be a number or a non-empty dict "
+                    f"{{value: number}}, got {w!r}"
+                )
+        return self
 
 
 class RunConfig(BaseModel):
@@ -332,16 +461,31 @@ class RunConfig(BaseModel):
             constraintThreshold=self.optimization.constraintThreshold,
             selectionSets=self.optimization.selectionSets,
             groupDefs=self.optimization.groupDefs,
+            weightSets=self.weight_sets(),
         )
 
     def group_defs(self) -> Dict[str, GroupDef]:
         """全グループ定義: 旧来の optimization.WLgroup（暗黙に「WLに対する
-        定義」として読む）+ groupDefs。名前が衝突したら groupDefs が勝つ。"""
+        定義」として読む。記法は WLgroupDefinLogical に従う）+ groupDefs。
+        名前が衝突したら groupDefs が勝つ。"""
         defs: Dict[str, GroupDef] = {}
         if self.optimization.WLgroup:
-            defs["WLgroup"] = GroupDef(axis="WL", groups=self.optimization.WLgroup)
+            defs["WLgroup"] = GroupDef(
+                axis="WL",
+                groups=self.optimization.WLgroup,
+                definedInLogical=self.optimization.WLgroupDefinLogical,
+            )
         defs.update(self.optimization.groupDefs)
         return defs
+
+    def weight_sets(self) -> Dict[str, Any]:
+        """全重みセット: 旧来の optimization.WLgroupWeight（"WLgroupWeight" と
+        いう名前のセットとして読む）+ weightSets。衝突は weightSets が勝つ。"""
+        sets: Dict[str, Any] = {}
+        if self.optimization.WLgroupWeight is not None:
+            sets["WLgroupWeight"] = self.optimization.WLgroupWeight
+        sets.update(self.optimization.weightSets)
+        return sets
 
 
 class DvtBudgetCoefEntry(BaseModel):

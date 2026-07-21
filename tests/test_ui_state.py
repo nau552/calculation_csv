@@ -223,12 +223,27 @@ def test_save_set_as(sf):
 def test_import_config_group_defs(sf):
     wlgroup = {"g1": (0, 3), "g2": (4, 8)}
     assert state.import_config_group_defs(sf, wlgroup) is True
-    assert sf["groupDefs"]["WLgroup"] == {"axis": "WL", "groups": {"g1": [0, 3], "g2": [4, 8]}}
+    assert sf["groupDefs"]["WLgroup"] == {
+        "axis": "WL", "groups": {"g1": [0, 3], "g2": [4, 8]}, "definedInLogical": True,
+    }
     # 再取り込み（や先の編集）で編集可能コピーが上書きされてはならない
     sf["groupDefs"]["WLgroup"]["groups"]["g1"] = [0, 5]
     assert state.import_config_group_defs(sf, wlgroup) is False
     assert sf["groupDefs"]["WLgroup"]["groups"]["g1"] == [0, 5]
     assert state.import_config_group_defs(sf, None) is False
+
+
+def test_import_config_group_defs_physical_and_weight(sf):
+    wlgroup = {"g1": (0, 3)}
+    assert state.import_config_group_defs(
+        sf, wlgroup, defin_logical=False, wlgroup_weight={"g1": 2.0}
+    ) is True
+    assert sf["groupDefs"]["WLgroup"]["definedInLogical"] is False
+    assert sf["weightSets"]["WLgroupWeight"] == {"g1": 2.0}
+    # 既に編集済みの重みセットは上書きしない
+    sf["weightSets"]["WLgroupWeight"] = 5.0
+    state.import_config_group_defs(sf, None, wlgroup_weight={"g1": 9.0})
+    assert sf["weightSets"]["WLgroupWeight"] == 5.0
 
 
 def test_group_def_delete_guarded_by_references(sf, catalog):
@@ -265,6 +280,66 @@ def test_export_part_bundles_group_defs(sf, catalog):
     sf["groupDefs"]["unused"] = {"axis": "STR", "groups": {"a": [0, 1]}}
     back = state.import_score_file(state.export_part(sf, 0))
     assert list(back["groupDefs"]) == ["WLgroup"]  # 参照している定義だけ同梱される
+
+
+def test_validate_weight_ref_resolves_against_weight_sets(sf, catalog):
+    """重みセット ref の検証: 定義済みなら通り、未定義なら分かるエラーになる。
+    （回帰: 検証層が weightSets を渡さず、定義済みでも常に
+    "unknown weight set" になっていた）"""
+    part = state.part_skeleton("p", "FBC", catalog)
+    part["order"].insert(0, "__weight__")
+    part["aggregations"]["__weight__"] = {"op": "mul", "by": "WLgroup", "ref": "WLgroupWeight"}
+    sf["score_parts"].append(part)
+    sf["groupDefs"]["WLgroup"] = {"axis": "WL", "groups": {"g1": [0, 1000]}}
+
+    # 未定義 → 検証で捕まる（計算まで行かない）
+    assert any("WLgroupWeight" in p for p in state.validate_score_file(sf))
+    assert state.validate_part(part, sf["selectionSets"], sf.get("weightSets"))
+
+    # 定義済み → 検証を通る
+    sf["weightSets"]["WLgroupWeight"] = {"g1": 2.0}
+    assert state.validate_score_file(sf) == []
+    assert state.validate_part(part, sf["selectionSets"], sf["weightSets"]) == []
+
+
+def test_export_part_bundles_weight_sets(sf, catalog):
+    part = state.part_skeleton("p", "FBC", catalog)
+    part["order"] = ["WL", "__weight__", "WLgroup"] + [
+        e for e in part["order"] if e not in ("WL",)
+    ]
+    part["aggregations"]["WLgroup"] = {"op": "max"}
+    part["aggregations"]["__weight__"] = {"op": "mul", "by": "WLgroup", "ref": "WLgroupWeight"}
+    sf["score_parts"].append(part)
+    sf["groupDefs"]["WLgroup"] = {"axis": "WL", "groups": {"g1": [0, 100]}}
+    sf["weightSets"]["WLgroupWeight"] = {"g1": 2.0}
+    sf["weightSets"]["unusedW"] = 1.5
+    back = state.import_score_file(state.export_part(sf, 0))
+    assert back["weightSets"] == {"WLgroupWeight": {"g1": 2.0}}  # 参照分だけ同梱
+    assert "WLgroup" in back["groupDefs"]
+
+
+def test_run_test_compute_with_weight_step(sf, catalog, data_dir_mini):
+    """UI経由の一気通貫: WLgroup 別の重みステップつきパーツが実データで
+    計算でき、重み全1なら重みなしと一致する。"""
+    def make(with_weight):
+        f = state.empty_score_file()
+        part = state.part_skeleton("p", "FBC", catalog)
+        part["order"].append("WLgroup")
+        part["aggregations"]["WLgroup"] = {"op": "max"}
+        if with_weight:
+            part["order"].insert(part["order"].index("WLgroup"), "__weight__")
+            part["aggregations"]["__weight__"] = {
+                "op": "mul", "by": "WLgroup", "ref": "WLgroupWeight",
+            }
+            f["weightSets"]["WLgroupWeight"] = {"low": 1.0, "high": 1.0}
+        f["groupDefs"]["WLgroup"] = {"axis": "WL", "groups": {"low": [0, 10], "high": [11, 1000]}}
+        f["score_parts"].append(part)
+        f["expression"] = "p"
+        return f
+
+    weighted = state.run_test_compute(make(True), str(data_dir_mini))
+    plain = state.run_test_compute(make(False), str(data_dir_mini))
+    assert weighted["p"] == pytest.approx(plain["p"])
 
 
 def test_run_test_compute_with_group_axis(sf, catalog, data_dir_mini):

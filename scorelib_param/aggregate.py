@@ -11,10 +11,9 @@ from typing import Dict, Mapping, Sequence, Tuple
 import polars as pl
 
 from .expression import evaluate_expression
-from .models import AggregationSpec
+from .models import TRANSFORM_OPS, AggregationSpec
 
 _SIMPLE_OPS = {"mean", "sum", "min", "max"}
-TRANSFORM_OPS = {"add"}
 
 
 def group_column_expr(axis: str, ranges: Mapping[str, Tuple[int, int]]) -> pl.Expr:
@@ -34,15 +33,58 @@ def _reduce(lf: pl.LazyFrame, value_col: str, group_keys: Sequence[str], op: str
     return lf.select(agg_expr)
 
 
+def _combine(op: str, value: pl.Expr, operand) -> pl.Expr:
+    if op == "add":
+        return value + operand
+    if op == "sub":
+        return value - operand
+    if op == "mul":
+        return value * operand
+    if op == "div":
+        return value / operand
+    raise ValueError(f"unknown transform op '{op}' (expected one of {sorted(TRANSFORM_OPS)})")
+
+
 def apply_transform(lf: pl.LazyFrame, value_col: str, spec: AggregationSpec) -> pl.LazyFrame:
-    """値列への行単位変換。apply_axis_op と違って軸は潰さない。order 内の
-    仮想ステップ "__xxx__"（例: 相対化の前にオフセットを足す __offset__）が使う。
+    """値列への行単位の定数演算（add/sub/mul/div）。apply_axis_op と違って軸は
+    潰さない。order 内の仮想ステップ "__xxx__"（例: 相対化の前にオフセットを
+    足す __offset__、WLgroup 別の重みを掛ける __weight__）が使う。
+
+    `spec.by` が指定され value が辞書のときは「by 軸の値ごとの定数」:
+    各行の by 列の値に対応する定数で演算する（例: WLgroup 別の重み）。
+    辞書に無い値の行が存在したらエラー（重み定義の古さの検出）。
     """
-    if spec.op == "add":
-        if spec.value is None:
-            raise ValueError("transform op 'add' requires 'value'")
-        return lf.with_columns((pl.col(value_col) + spec.value).alias(value_col))
-    raise ValueError(f"unknown transform op '{spec.op}' (expected one of {sorted(TRANSFORM_OPS)})")
+    if spec.value is None:
+        raise ValueError(f"transform op '{spec.op}' requires 'value'")
+
+    if spec.by is None or not isinstance(spec.value, dict):
+        # 全行共通の定数（スカラー重みセットを by つきで参照した場合を含む）
+        return lf.with_columns(_combine(spec.op, pl.col(value_col), spec.value).alias(value_col))
+
+    schema_cols = lf.collect_schema().names()
+    if spec.by not in schema_cols:
+        raise ValueError(
+            f"transform 'by' axis '{spec.by}' not present at this step (already "
+            f"aggregated away? columns = {schema_cols}); place the step while the "
+            "axis is still alive"
+        )
+    operand = pl.lit(None, dtype=pl.Float64)
+    for key, const in spec.value.items():
+        operand = pl.when(pl.col(spec.by) == key).then(pl.lit(float(const))).otherwise(operand)
+
+    # 辞書に無い by 値は定数が null になり静かに null が伝播してしまう —
+    # ほぼ確実に重み定義の古さが原因なので、該当値の一覧つきで失敗させる
+    # （グループ派生列の未カバー検出 cli._with_group_columns と同じ方針）
+    uncovered = (
+        lf.filter(operand.is_null()).select(pl.col(spec.by).unique()).collect()
+    )
+    if uncovered.height:
+        vals = sorted(uncovered[spec.by].to_list())
+        raise ValueError(
+            f"values of '{spec.by}' have no entry in the transform weights: {vals} "
+            "(extend the weight dict or aggregate those values away first)"
+        )
+    return lf.with_columns(_combine(spec.op, pl.col(value_col), operand).alias(value_col))
 
 
 def apply_axis_op(

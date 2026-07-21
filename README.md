@@ -125,6 +125,8 @@ python -m scorelib_param.cli \
     --data-dir <そのepochの測定結果ディレクトリ（result_tmp相当）> \
     --dvtbudget-coef <dVtBudget係数.jsonc> \        # dVtBudgetパーツがある場合のみ必須
     --initial-temperature <initial_temperature.csv>  # 同上
+    # --generation-info <{Generation}.json>          # Physical記法のグループ定義がある場合のみ
+    #                                                # （data-dir 内にあれば自動発見されるので省略可）
 ```
 
 標準出力に1つのJSONオブジェクトを返す:
@@ -202,7 +204,7 @@ CLI（stderr / `--version`）に表示される — SVN側エンジンとの版�
 2. **スコアパーツ編集** — 「追加」で**そのまま計算が通る雛形**（全軸をデフォルト順に並べ、
    カテゴリ軸は先頭候補のfilter・数値軸はmean・相対化ON）を生成し、差分編集していく。
    order は要約行リスト（✎で選択・上下ボタン・削除）＋選択エントリの常時表示エディタ。
-   複合軸の束ね、定数加算ステップ（`__offset__`）の追加、opごとに必要な入力欄だけを
+   複合軸の束ね、定数演算ステップ（`__offset__` 等。加減乗除・グループ別重み）の追加、opごとに必要な入力欄だけを
    出す集計エディタ。相対化のON/OFF・split_axis変更時は order との整合を自動で取る
    （OFFにすると split_axis が filter False で order に復帰する）。
    分母の事前集計にも同じ集計エディタをフルで使える。
@@ -211,8 +213,10 @@ CLI（stderr / `--version`）に表示される — SVN側エンジンとの版�
    custom_parts.py を読み込んでいる場合は type に **custom** が並び、
    関数プルダウン+params 行エディタでPython関数パーツを設計できる
 3. **選択セット・グループ定義** — ref で使い回す選択リストの作成・編集・**別名で保存**・
-   削除（参照中のセットは削除不可）。グループ定義（WLgroup 等の派生軸）の作成・範囲編集も
-   ここで行う（設定jsoncの WLgroup は読み込み時に編集可能な定義として自動取り込み）
+   削除（参照中のセットは削除不可）。グループ定義（WLgroup 等の派生軸）の作成・範囲編集・
+   Logical/Physical 記法の切り替え・グループ別重みセットの編集もここで行う
+   （設定jsoncの WLgroup / WLgroupDefinLogical / WLgroupWeight は読み込み時に
+   編集可能な定義として自動取り込み）
 4. **スコア合成・制約** — expression の編集（パーツ名クリック挿入・式の即時検証）と
    constraintThreshold の行エディタ（動的制約 active/type/coef 対応）
 5. **テスト実行・エクスポート** — 実データディレクトリを指定して `compute_score_file` を
@@ -247,6 +251,12 @@ CLI（stderr / `--version`）に表示される — SVN側エンジンとの版�
         "WLgroup": {                   // 既存フォーマットそのまま。[min, max]（両端含む）
             "WLgroup01": [0, 3],
             "WLgroup02": [4, 8]
+        },
+        "WLgroupDefinLogical": "True", // 既存キー。"False"なら上の範囲はPhysical番号
+                                       // （計算時にLogicalへ反転変換。{Generation}.jsonのnumWLsが必要）
+        "WLgroupWeight": {             // 既存キー。グループ別重み（重みセット"WLgroupWeight"になる）
+            "WLgroup01": 1.0,          // 数値1つ（全グループ共通）でもよい。
+            "WLgroup02": 10.0          // パーツの__weight__ステップからrefで参照（後述）
         },
         "score_parts": [ /* 後述 */ ],
         "expression": "0.5 * FBC_A2B_upper1_rel + dVtBudget_R2A"
@@ -304,6 +314,13 @@ CLI（stderr / `--version`）に表示される — SVN側エンジンとの版�
 
 - 従来の `optimization.WLgroup` は「WL に対する WLgroup 定義」として互換読み込みされる
   （`groupDefs` に同名があればそちらが優先）。
+- **Logical / Physical 記法**: 範囲は既定では Logical 番号（csv の WL 列の値そのもの）。
+  現行スクリプトの `WLgroupDefinLogical: "False"` 相当で **Physical 番号**で書きたい場合は、
+  `optimization.WLgroupDefinLogical` を `False` に（groupDefs 側は各定義の
+  `"definedInLogical": false`）。計算時に軸の総数 N を使って `[lo, hi]` → `[N-1-hi, N-1-lo]`
+  へ読み替える。N は **`{Generation}.json`**（`numWLs` / `numStrings`）から取る —
+  データディレクトリ内にあれば自動発見、別の場所なら CLI の `--generation-info` で指定。
+  Logical 記法しか使っていなければこのファイルは不要。
 - 定義名は対象軸名と同名にできない。定義名を order に置いていないパーツでは列は作られず、
   対象軸は通常どおり扱われる。
 - パーツが定義名を参照していると、そのパーツ内ではグループ列が最初から存在する扱いになる
@@ -379,7 +396,38 @@ OverrideのTrueからFalseを引いたdelta値を取りたい場合は `"mode": 
 | `"__dvtbudget__"` | この位置でdVtBudget変換（type=dVtBudgetのみ） | `__relative__` の直後 |
 | その他の `"__名前__"` | 値列への行単位変換。aggregationsに同名のエントリで内容を指定 | （明示したときのみ実行） |
 
-現在使える変換op: `add`（値列に定数を加算）。
+現在使える変換op: `add` / `sub` / `mul` / `div`（値列に定数を 加算/減算/乗算/除算）。
+仮想ステップは名前を変えれば**何個でも**置ける（例: `__offset__` で+1 →
+相対化 → `__flip__` で×-1）。
+
+`value` の形は2通り:
+
+- **数値**: 全行に同じ定数。例: 正負反転 `{"op": "mul", "value": -1}`
+- **`by` + 辞書**: 指定した軸の**値ごと**の定数。グループ別の重みがこれ:
+
+```jsonc
+"order": [..., "WL", "__weight__", "WLgroup", ...],
+"aggregations": {
+    "WL": {"op": "mean"},
+    // WL平均の直後・WLgroup集計の前に、グループごとの重みを掛ける
+    "__weight__": {"op": "mul", "by": "WLgroup", "value": {"WLgroup01": 1.0, "WLgroup02": 10.0}},
+    "WLgroup": {"op": "max"}
+}
+```
+
+- `by` の軸がまだ列として残っている位置にステップを置くこと（潰した後だとエラー）。
+  重みを掛けるタイミングは order 上の位置で自由に選べる
+- 辞書に無い値の行がデータにあると、値の一覧つきで計算エラーになる（重み定義の
+  古さの検出）
+- インライン辞書の代わりに `"ref": "WLgroupWeight"` で**名前付き重みセット**を参照できる。
+  重みセットは `optimization.WLgroupWeight`（現行キー互換。辞書または数値1つ）か
+  `optimization.weightSets`（任意個）で定義する。数値1つの重みセットは全行共通の定数として働く
+
+```jsonc
+"WLgroupWeight": { "WLgroup01": 1.0, "WLgroup02": 10.0 },   // または "WLgroupWeight": 2.0（全グループ共通）
+...
+"__weight__": {"op": "mul", "by": "WLgroup", "ref": "WLgroupWeight"}
+```
 
 例:「オフセットを足す → WLで平均 → 相対化 → dVtBudget変換 → 残りを集計」という流れ:
 
@@ -625,7 +673,8 @@ python -m scorelib_param.batch \
     --dvtbudget-coef dvtbudget_coef.jsonc \                   # dVtBudgetパーツがある場合のみ
     --out scores.csv \
     [--batch-size 50 | --batch-size auto] [--max-prefetch 2] \
-    [--staging-dir DIR] [--strict] [--keep-staging] [--max-threads N]
+    [--staging-dir DIR] [--strict] [--keep-staging] [--max-threads N] \
+    [--generation-info {Generation}.json]   # Physical記法のグループ定義がある場合のみ
 ```
 
 出力 CSV は 1 epoch = 1 行:

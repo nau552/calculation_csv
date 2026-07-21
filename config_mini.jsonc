@@ -15,10 +15,18 @@
         },
 
         // result_tmp_mini の WL は 0~5 なので 2 グループに分割する例
+        "WLgroupDefinLogical": "True",
         "WLgroup": {
             "WLgroup02": [0, 2],
             "WLgroup01": [3, 4],
             "WLgroup00": [5, 5]
+        },
+
+        // "WLgroupWeight": 2.0
+        "WLgroupWeight": {
+            "WLgroup02": 1.0,
+            "WLgroup01": 1.0,
+            "WLgroup00": 10.0
         },
 
         "score_parts": [

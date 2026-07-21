@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
-from scorelib_param.models import COMBINED_SEP, MULTI_OPS
+from scorelib_param.models import COMBINED_SEP, MULTI_OPS, TRANSFORM_OPS
 
 # ドラッグ&ドロップ並べ替えはソフト依存: コミュニティ製カスタムコンポーネント
 # （streamlit-sortables）は Streamlit 本体のメジャー更新で壊れうる。
@@ -138,34 +138,130 @@ def _ref_widget(spec: Dict[str, Any], set_names: List[str], key: str) -> None:
     spec["ref"] = st.selectbox("選択セット", set_names, index=index, key=f"{key}_ref")
 
 
+_TRANSFORM_LABELS = {"add": "add（足す）", "sub": "sub（引く）", "mul": "mul（掛ける）", "div": "div（割る）"}
+
+
+def _transform_editor(
+    spec: Dict[str, Any],
+    op: str,
+    by_candidates: List[str],
+    by_value_labels: Dict[str, list],
+    weight_set_names: List[str],
+    key: str,
+) -> None:
+    """変換ステップ（定数演算）の入力欄: 全行共通の定数か、by 軸の値ごとの
+    定数（グループ別重みなど）かを選ぶ。"""
+    modes = ["定数（全行共通）", "軸の値ごと（重み）"]
+    mode = st.radio(
+        "適用のしかた", modes, index=1 if spec.get("by") else 0,
+        key=f"{key}_tmode", horizontal=True,
+    )
+    default = 1.0 if op in ("mul", "div") else 0.0
+
+    if mode == modes[0]:
+        spec.pop("by", None)
+        spec.pop("ref", None)
+        v = spec.get("value")
+        spec["value"] = st.number_input(
+            "値", value=float(v) if isinstance(v, (int, float)) else default, key=f"{key}_tv"
+        )
+        return
+
+    if not by_candidates:
+        st.caption("値ごとの定数を使うにはグループ定義（画面3）を作成してください")
+        spec.pop("by", None)
+        return
+    cur = spec.get("by")
+    spec["by"] = st.selectbox(
+        "対象軸（この軸の値ごとに定数を変える）", by_candidates,
+        index=by_candidates.index(cur) if cur in by_candidates else 0, key=f"{key}_tby",
+        help="通常はグループ派生軸（例: WLgroup）。この軸がまだ列として残っている位置にステップを置いてください",
+    )
+
+    sources = ["重みセット(ref)", "直接入力"]
+    src = st.radio(
+        "重みの指定", sources, index=0 if spec.get("ref") else 1,
+        key=f"{key}_tsrc", horizontal=True,
+    )
+    if src == sources[0]:
+        if not weight_set_names:
+            st.caption("重みセットが未定義です（画面3のグループ定義で作成、または設定jsoncの WLgroupWeight を読み込み）")
+            spec["ref"] = None
+            return
+        spec.pop("value", None)
+        cur_ref = spec.get("ref")
+        spec["ref"] = st.selectbox(
+            "重みセット", weight_set_names,
+            index=weight_set_names.index(cur_ref) if cur_ref in weight_set_names else 0,
+            key=f"{key}_tref",
+        )
+        return
+
+    spec.pop("ref", None)
+    labels = by_value_labels.get(spec["by"]) or []
+    current = spec.get("value") if isinstance(spec.get("value"), dict) else {}
+    if labels:
+        weights = {}
+        for i, label in enumerate(labels):
+            v = current.get(label)
+            weights[label] = st.number_input(
+                str(label), value=float(v) if isinstance(v, (int, float)) else default,
+                key=f"{key}_tw{i}",
+            )
+        spec["value"] = weights
+    elif current:
+        # 値の候補が分からない軸: 既存の辞書のキーだけ編集できる
+        spec["value"] = {
+            k: st.number_input(str(k), value=float(v), key=f"{key}_twk{i}")
+            for i, (k, v) in enumerate(current.items())
+        }
+    else:
+        st.caption("この軸の値の候補が分かりません。グループ派生軸を選ぶか、jsonc で直接記入してください")
+
+
 def agg_editor(
     entry: str,
     spec: Dict[str, Any],
     catalog: Dict[str, Optional[list]],
     set_names: List[str],
     key: str,
+    by_candidates: Optional[List[str]] = None,
+    by_value_labels: Optional[Dict[str, list]] = None,
+    weight_set_names: Optional[List[str]] = None,
 ) -> None:
     """order エントリごとの集計指示エディタ（設計書 画面2）。
     選んだ op に関係する入力欄だけを出すので、value/values の混同は
-    UI 上は構造的に起きない。`spec` をその場で書き換える。"""
+    UI 上は構造的に起きない。`spec` をその場で書き換える。
+
+    `by_candidates` / `by_value_labels` / `weight_set_names` は変換ステップ
+    （"__xxx__"）の「軸の値ごとの定数（重み）」入力用: 対象軸の候補・軸ごとの
+    値ラベル・参照できる重みセット名。"""
     axes = entry.split(COMBINED_SEP)
     is_virtual = entry.startswith("__")
 
-    ops = ["add"] if is_virtual else AXIS_OPS
+    ops = list(TRANSFORM_OPS) if is_virtual else AXIS_OPS
     cur_op = spec.get("op") if spec.get("op") in ops else ops[0]
-    op = st.selectbox("op", ops, index=ops.index(cur_op), key=f"{key}_op")
+    op = st.selectbox(
+        "op", ops, index=ops.index(cur_op), key=f"{key}_op",
+        format_func=(lambda o: _TRANSFORM_LABELS.get(o, o)) if is_virtual else str,
+    )
     if op != spec.get("op"):
         # op が変わった: op 固有のフィールドが残らないよう掃除する
-        # （"axis" だけは残す: 事前集計ステップは軸名を spec 内に持つため）
-        axis_field = spec.get("axis")
-        spec.clear()
-        if axis_field is not None:
-            spec["axis"] = axis_field
+        # （"axis" だけは残す: 事前集計ステップは軸名を spec 内に持つため。
+        # 変換op同士の切り替えでは by/value/ref を保つ — 演算だけ変える操作なので）
+        if not (op in TRANSFORM_OPS and spec.get("op") in TRANSFORM_OPS):
+            axis_field = spec.get("axis")
+            spec.clear()
+            if axis_field is not None:
+                spec["axis"] = axis_field
         spec["op"] = op
     spec["op"] = op
 
-    if op == "add":
-        spec["value"] = st.number_input("加算する値", value=float(spec.get("value") or 0.0), key=f"{key}_addv")
+    if op in TRANSFORM_OPS:
+        _transform_editor(
+            spec, op, by_candidates or [], by_value_labels or {}, weight_set_names or [],
+            key,
+        )
         return
 
     if op == "filter":

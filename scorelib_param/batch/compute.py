@@ -28,6 +28,7 @@ from ..cli import (
     _source_type,
     compute_score_file,
     compute_score_part,
+    resolve_group_defs,
 )
 from ..dvtbudget import load_board_temperatures
 from ..expression import evaluate_expression
@@ -131,6 +132,7 @@ def _per_epoch_fallback(
     dvtbudget_coef: Optional[DvtBudgetCoefFile],
     custom_parts_path,
     batch_error: Exception,
+    generation_info_path=None,
 ) -> BatchResult:
     """バッチ一括計算が失敗したときの切り分け: epoch ごとの逐次計算
     （compute_score_file — バッチと数値等価）に落とし、原因 epoch を特定して
@@ -153,6 +155,7 @@ def _per_epoch_fallback(
             values = compute_score_file(
                 se.data_dir, run_config, dvtbudget_coef, temps,
                 custom_parts_path=custom_parts_path,
+                generation_info_path=generation_info_path,
             )
             rows.append({**_epoch_row(se), **values})
         except Exception as err:  # noqa: BLE001 — epoch単位で理由ごと報告する
@@ -165,6 +168,7 @@ def compute_score_batch(
     run_config: RunConfig,
     dvtbudget_coef: Optional[DvtBudgetCoefFile] = None,
     custom_parts_path=None,
+    generation_info_path=None,
 ) -> BatchResult:
     """1バッチ分の epoch 群のスコアをまとめて計算する。
 
@@ -172,10 +176,18 @@ def compute_score_batch(
       呼び出し側=runner が事前に failed へ回す）。
     - バッチ一括計算がエラーになった場合は epoch 逐次計算へ自動フォール
       バックして原因 epoch を特定する（結果は数値等価）。
+    - `generation_info_path`: Physical 記法のグループ定義の読み替えに使う
+      世代情報 json。省略時は先頭 epoch のデータディレクトリ内を探す。
     """
     _check_epoch_col_free(run_config)
     score_file = run_config.to_score_file()
-    group_defs = run_config.group_defs()
+    # Physical 記法のグループ定義は Logical へ読み替えてから使う。世代情報は
+    # epoch 間で共通なので先頭 epoch のディレクトリで解決する
+    group_defs = resolve_group_defs(
+        run_config,
+        epochs[0].data_dir if epochs else "",
+        generation_info_path,
+    )
     part_names = [p.name for p in score_file.score_parts]
     failed: Dict[str, str] = {}
 
@@ -235,6 +247,7 @@ def compute_score_batch(
                 board_temperatures=per_epoch_temps if part.type == "dVtBudget" else None,
                 shared_ctx=ctx,
                 selection_sets=score_file.selectionSets,
+                weight_sets=score_file.weightSets,
                 identity_axes=(EPOCH_COL,),
             )
             value_col = _source_type(part)  # collapse 後の列は {EPOCH_COL, 値列} のみ
@@ -242,7 +255,10 @@ def compute_score_batch(
                 zip(df[EPOCH_COL].to_list(), (float(v) for v in df[value_col].to_list()))
             )
     except Exception as err:  # noqa: BLE001 — バッチ全体エラー → epoch 逐次で切り分け
-        fb = _per_epoch_fallback(epochs, run_config, dvtbudget_coef, custom_parts_path, err)
+        fb = _per_epoch_fallback(
+            epochs, run_config, dvtbudget_coef, custom_parts_path, err,
+            generation_info_path=generation_info_path,
+        )
         fb.failed.update(failed)
         return fb
 

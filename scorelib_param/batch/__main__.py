@@ -72,6 +72,11 @@ def main(argv=None) -> None:
     parser.add_argument("--dvtbudget-coef", help="dVtBudget coefficient jsonc (required if any part uses type=dVtBudget)")
     parser.add_argument("--custom-parts", help="custom_parts.py override (default: repository root)")
     parser.add_argument(
+        "--generation-info",
+        help="{Generation}.json with numWLs etc. (default: found in each epoch dir; "
+             "needed only when group defs use physical numbering)",
+    )
+    parser.add_argument(
         "--batch-size", type=_batch_size, default=DEFAULT_BATCH_SIZE,
         help=f"epochs per batch, or 'auto' to size from available memory (default {DEFAULT_BATCH_SIZE})",
     )
@@ -107,6 +112,7 @@ def main(argv=None) -> None:
         strict=args.strict,
         keep_staging=args.keep_staging,
         custom_parts_path=args.custom_parts,
+        generation_info_path=args.generation_info,
     )
     print(f"scorelib_param {__version__} (batch)", file=sys.stderr)
     try:

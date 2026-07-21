@@ -150,6 +150,7 @@ class BatchRunner:
         keep_staging: bool = False,
         fetcher: Optional[Fetcher] = None,
         custom_parts_path=None,
+        generation_info_path=None,
     ):
         self.histories = histories
         self.run_config = run_config
@@ -160,6 +161,7 @@ class BatchRunner:
         self.keep_staging = keep_staging
         self.fetcher: Fetcher = fetcher or passthrough_fetcher
         self.custom_parts_path = custom_parts_path
+        self.generation_info_path = generation_info_path
 
         self._own_staging = staging_dir is None
         self.staging_root = Path(
@@ -273,7 +275,8 @@ class BatchRunner:
         good = [s for s, _ in prepared if s.error is None]
         pre_failed = {s.ref.epoch_id: s.error for s, _ in prepared if s.error is not None}
         result = compute_score_batch(
-            good, self.run_config, self.dvtbudget_coef, self.custom_parts_path
+            good, self.run_config, self.dvtbudget_coef, self.custom_parts_path,
+            generation_info_path=self.generation_info_path,
         )
         result.failed.update(pre_failed)
         return result

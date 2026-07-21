@@ -57,6 +57,9 @@ def compute_epoch_score(
     dvtbudget_coef=None,       # dVtBudget パーツがある場合のみ必須
     initial_temperature=None,  # 省略時: dvtbudget_coef 指定なら data_dir 内を使う
     custom_parts=None,         # テスト用の custom_parts.py 上書き（通常は不要）
+    generation_info=None,      # {Generation}.json のパス。Physical記法のグループ定義
+                               # （WLgroupDefinLogical=False）がある場合のみ必要
+                               # （data_dir 内にあれば省略可 — 自動発見される）
     scorelib_parent=None,      # scorelib_param/ ディレクトリを含む場所（例: kicOpt/）。
                                # 省略時はこのファイルの場所から親方向に scorelib_param/
                                # を自動探索する（turbo.py が kicOpt/optlib/ に
@@ -97,6 +100,8 @@ def compute_epoch_score(
                     "--initial-temperature", initial_temperature]
         if custom_parts:
             cmd += ["--custom-parts", custom_parts]
+        if generation_info:
+            cmd += ["--generation-info", generation_info]
 
         # cwd は変えず、PYTHONPATH で scorelib_param を見つけさせる
         # （呼び出し側が相対パスを渡しても壊れないように）
