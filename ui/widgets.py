@@ -219,6 +219,74 @@ def _transform_editor(
         st.caption("この軸の値の候補が分かりません。グループ派生軸を選ぶか、jsonc で直接記入してください")
 
 
+def _agg_weight_editor(
+    spec: Dict[str, Any],
+    labels: List[Any],
+    weight_set_names: List[str],
+    key: str,
+) -> None:
+    """集計時重み（任意）: この軸を潰す直前に、軸の値ごとの重みを値へ乗じてから
+    集計する（例: WLgroup の重み付き worst）。正規化された加重平均ではない
+    （mean なら mean(重み × 値)）。タイミングを制御したい場合は変換ステップ
+    （"__xxx__" + by）を使う。"""
+    modes = ["なし", "重みセット(ref)", "値ごとに入力", "定数1つ"]
+    if spec.get("weight_ref"):
+        idx = 1
+    elif isinstance(spec.get("weight"), dict):
+        idx = 2
+    elif spec.get("weight") is not None:
+        idx = 3
+    else:
+        idx = 0
+    mode = st.radio(
+        "重み（集計の前に値へ掛ける）", modes, index=idx, key=f"{key}_wmode", horizontal=True,
+        help="この軸の値ごとの重みを掛けてから集計します。"
+             "掛けるタイミングを自分で制御したい場合は変換ステップ（__xxx__）を使ってください",
+    )
+    if mode == modes[0]:
+        spec.pop("weight", None)
+        spec.pop("weight_ref", None)
+        return
+    if mode == modes[1]:
+        spec.pop("weight", None)
+        if not weight_set_names:
+            st.caption("重みセットが未定義です（画面3のグループ定義で作成、または設定jsoncの WLgroupWeight / weightSets）")
+            spec["weight_ref"] = None
+            return
+        cur = spec.get("weight_ref")
+        spec["weight_ref"] = st.selectbox(
+            "重みセット", weight_set_names,
+            index=weight_set_names.index(cur) if cur in weight_set_names else 0,
+            key=f"{key}_wref",
+        )
+        return
+    spec.pop("weight_ref", None)
+    if mode == modes[3]:
+        v = spec.get("weight")
+        spec["weight"] = st.number_input(
+            "重み", value=float(v) if isinstance(v, (int, float)) else 1.0, key=f"{key}_wc"
+        )
+        return
+    current = spec.get("weight") if isinstance(spec.get("weight"), dict) else {}
+    if labels:
+        weights = {}
+        for i, label in enumerate(labels):
+            v = current.get(label)
+            weights[label] = st.number_input(
+                str(label), value=float(v) if isinstance(v, (int, float)) else 1.0,
+                key=f"{key}_wv{i}",
+            )
+        spec["weight"] = weights
+    elif current:
+        # 値の候補が分からない軸: 既存の辞書のキーだけ編集できる
+        spec["weight"] = {
+            k: st.number_input(str(k), value=float(v), key=f"{key}_wvk{i}")
+            for i, (k, v) in enumerate(current.items())
+        }
+    else:
+        st.caption("この軸の値の候補が分かりません。重みセットを使うか、jsonc で直接記入してください")
+
+
 def agg_editor(
     entry: str,
     spec: Dict[str, Any],
@@ -306,6 +374,12 @@ def agg_editor(
             # dict が持つリストそのものを渡す: 行の追加・削除の変更が
             # st.rerun() をまたいで生き残るように
             spec["value"] = selection_list_widget(axes, catalog, spec["value"], f"{key}_mv")
+        if len(axes) == 1:
+            # 集計時重み（複合軸は jsonc 直接記入のみ対応）。値ラベルは
+            # by_value_labels 優先: グループ派生軸（WLgroup等）の名前は
+            # catalog（データ軸の値）には無く、そちらにしか入っていない
+            labels = (by_value_labels or {}).get(axes[0]) or catalog.get(axes[0]) or []
+            _agg_weight_editor(spec, labels, weight_set_names or [], key)
         return
 
     if op == "expr":

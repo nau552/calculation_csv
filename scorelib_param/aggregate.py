@@ -45,6 +45,26 @@ def _combine(op: str, value: pl.Expr, operand) -> pl.Expr:
     raise ValueError(f"unknown transform op '{op}' (expected one of {sorted(TRANSFORM_OPS)})")
 
 
+def _per_value_operand(lf: pl.LazyFrame, axis: str, mapping: Mapping, what: str) -> pl.Expr:
+    """{軸の値: 定数} の辞書を「各行の axis 列の値に対応する定数」の式にする。
+
+    辞書に無い値の行が存在すると定数が null になり静かに null が伝播して
+    しまう — ほぼ確実に定義の古さが原因なので、該当値の一覧つきで失敗させる
+    （グループ派生列の未カバー検出 cli._with_group_columns と同じ方針）。
+    """
+    operand = pl.lit(None, dtype=pl.Float64)
+    for key, const in mapping.items():
+        operand = pl.when(pl.col(axis) == key).then(pl.lit(float(const))).otherwise(operand)
+    uncovered = lf.filter(operand.is_null()).select(pl.col(axis).unique()).collect()
+    if uncovered.height:
+        vals = sorted(uncovered[axis].to_list())
+        raise ValueError(
+            f"values of '{axis}' have no entry in the {what}: {vals} "
+            "(extend the weight dict or aggregate those values away first)"
+        )
+    return operand
+
+
 def apply_transform(lf: pl.LazyFrame, value_col: str, spec: AggregationSpec) -> pl.LazyFrame:
     """値列への行単位の定数演算（add/sub/mul/div）。apply_axis_op と違って軸は
     潰さない。order 内の仮想ステップ "__xxx__"（例: 相対化の前にオフセットを
@@ -68,22 +88,7 @@ def apply_transform(lf: pl.LazyFrame, value_col: str, spec: AggregationSpec) -> 
             f"aggregated away? columns = {schema_cols}); place the step while the "
             "axis is still alive"
         )
-    operand = pl.lit(None, dtype=pl.Float64)
-    for key, const in spec.value.items():
-        operand = pl.when(pl.col(spec.by) == key).then(pl.lit(float(const))).otherwise(operand)
-
-    # 辞書に無い by 値は定数が null になり静かに null が伝播してしまう —
-    # ほぼ確実に重み定義の古さが原因なので、該当値の一覧つきで失敗させる
-    # （グループ派生列の未カバー検出 cli._with_group_columns と同じ方針）
-    uncovered = (
-        lf.filter(operand.is_null()).select(pl.col(spec.by).unique()).collect()
-    )
-    if uncovered.height:
-        vals = sorted(uncovered[spec.by].to_list())
-        raise ValueError(
-            f"values of '{spec.by}' have no entry in the transform weights: {vals} "
-            "(extend the weight dict or aggregate those values away first)"
-        )
+    operand = _per_value_operand(lf, spec.by, spec.value, "transform weights")
     return lf.with_columns(_combine(spec.op, pl.col(value_col), operand).alias(value_col))
 
 
@@ -103,6 +108,17 @@ def apply_axis_op(
     if spec.op in _SIMPLE_OPS:
         # `value` リストを付けると、その選択集合に限定してから集計する
         target = lf.filter(pl.col(axis).is_in(spec.value)) if spec.value is not None else lf
+        if spec.weight is not None:
+            # 集計時重み: この軸を潰す直前に軸の値ごとの重みを値へ乗じる
+            # （正規化された加重平均ではない: mean なら mean(weight × value)）。
+            # 未カバー検出は選択集合で絞った後の行が対象
+            if isinstance(spec.weight, dict):
+                operand = _per_value_operand(
+                    target, axis, spec.weight, f"aggregation weights for axis '{axis}'"
+                )
+            else:
+                operand = pl.lit(float(spec.weight))
+            target = target.with_columns((pl.col(value_col) * operand).alias(value_col))
         return _reduce(target, value_col, group_keys, spec.op)
 
     if spec.op == "diff":

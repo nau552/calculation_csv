@@ -65,7 +65,7 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 | `COMBINED_SEP = "&"` | 複合軸の区切り（`"State&Read_Label"`） |
 | `CUSTOM_TYPE = "custom"` | 自作関数パーツの type 値 |
 | `MULTI_OPS` | value で対象を絞れる集計op（mean/sum/min/max）。UIと共有 |
-| `AggregationSpec` | 1エントリの集計指示。op/value/ref/expr。before検証で旧表記（`*_subset`、`values`、廃止済み `group_reduce`）を変換/エラー化、after検証で opごとの value 形状を検査 |
+| `AggregationSpec` | 1エントリの集計指示。op/value/ref/expr/by + 集計時重み `weight`/`weight_ref`（mean系専用: その軸を潰す直前に値へ乗算。正規化された加重平均ではない）。before検証で旧表記（`*_subset`、`values`、廃止済み `group_reduce`）を変換/エラー化、after検証で opごとの value/weight 形状を検査 |
 | `AxisAggregation` | 上に axis 名が付いたもの（分母事前集計はリストなので軸名を自分で持つ） |
 | `RelativeConfig` | 相対化設定（split_axis / numerator_when / denominator_when / mode / denominator_offset / denominator_pre_aggregation）。廃止済み `enabled: false` は明示エラー |
 | `ScorePart` | 1スコアパーツ。name/type/relative/order/aggregations + custom用の function/params。custom と集計フィールドの混在を拒否。複合軸の辞書選択の形状検査。`resolve_selection_refs()` で ref を選択セットの中身に展開して再検証 |
@@ -89,8 +89,9 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 | 関数 | 内容 |
 |---|---|
 | `group_column_expr(axis, ranges)` | グループ派生列を作る polars 式（範囲→グループ名） |
-| `apply_transform(lf, col, spec)` | 軸を潰さない行単位変換（現状 `add` のみ。`__offset__` 用） |
-| `apply_axis_op(lf, col, axis, spec, group_keys)` | 1軸を1つの指示で潰す。filter / mean系（value で対象限定可）/ diff（a−b の自己結合）/ expr（グループごとに評価） |
+| `_per_value_operand(lf, axis, mapping, what)` | {軸の値: 定数} を行ごとの定数式へ。辞書に無い値の行は一覧つきエラー（変換の by 重みと集計時重みで共用） |
+| `apply_transform(lf, col, spec)` | 軸を潰さない行単位変換（add/sub/mul/div。`__offset__`/`__weight__` 等の仮想ステップ用） |
+| `apply_axis_op(lf, col, axis, spec, group_keys)` | 1軸を1つの指示で潰す。filter / mean系（value で対象限定可、`weight` で集計直前に重み乗算）/ diff（a−b の自己結合）/ expr（グループごとに評価） |
 | `apply_aggregations(lf, col, order, aggregations)` | order を上から順に適用。**残っている全列をグループキー**にするのが要（グループ派生列が自然にキーとして生き残る仕組み） |
 | `collapse` / `collapse_to_scalar` | 潰し残しの列や null（filterが0行等）を検出してエラーにし、1スカラーを返す |
 | `aggregate_score_part` | 上2つをつないだ入口 |
@@ -221,7 +222,7 @@ ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算
 | `_SORTABLE_STYLE` | D&D項目のCSS（半透明グレー・左揃え。デフォルトの赤・中央揃えの上書き） |
 | `parse_scalar(text)` | 自由入力 → bool/int/float/str |
 | `value_widget` / `dict_selection_row` / `selection_widget` / `selection_list_widget` | 値1個 / 複合軸1行 / どちらか自動 / 可変行リスト（単一軸+候補ありは multiselect） |
-| `agg_editor(entry, spec, catalog, set_names, key)` | 集計指示エディタ。**opに応じた入力欄だけを出す**（value/values の混同がUI上起きない）。op変更時は古いフィールドを掃除 |
+| `agg_editor(entry, spec, catalog, set_names, key)` | 集計指示エディタ。**opに応じた入力欄だけを出す**（value/values の混同がUI上起きない）。op変更時は古いフィールドを掃除。mean系の単一軸エントリには集計時重み欄（`_agg_weight_editor`: なし/重みセット/値ごと/定数。値ラベルは by_value_labels 優先=グループ派生軸対応） |
 | `relative_editor(part, catalog, set_names, key)` | 相対化ブロックのエディタ。ON/OFF/split変更は state.py の整合関数を呼ぶ。分母事前集計は agg_editor をフル再利用 |
 
 ### `ui/app.py` — 5画面本体（ウィジェット配置と session_state だけ）

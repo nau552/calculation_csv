@@ -84,6 +84,16 @@ class AggregationSpec(BaseModel):
     # 変換op専用: 定数を「この軸の値ごと」に引く（例: by="WLgroup" +
     # value={グループ名: 重み}）。その時点で軸列が残っている必要がある
     by: Optional[str] = None
+    # 集計時重み（mean/sum/min/max 専用・任意）: この軸を潰す**直前**に、
+    # 軸の値ごとの重みを値列に乗じてから集計する。正規化された加重平均では
+    # ない（mean なら mean(weight × value)）。
+    # - 辞書 {軸の値: 数値}（例: {"WLgroup00": 10.0, ...}）または数値1つ
+    # - weight_ref は重みセット（optimization.WLgroupWeight / weightSets）参照
+    # タイミングを明示的に制御したい場合（dVtBudget 変換の前後など）は従来
+    # どおり "__xxx__" 変換ステップ（by + mul）を使う。両方が適用可能な
+    # 場面では結果は同一
+    weight: Optional[Any] = None
+    weight_ref: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -111,10 +121,30 @@ class AggregationSpec(BaseModel):
     def _check_value_shape(self):
         """op ごとの value 形状検査（間違えやすい箇所なのでエラーは具体的に）。"""
         op, v = self.op, self.value
+
+        def _num(x):
+            return isinstance(x, (int, float)) and not isinstance(x, bool)
+
         if self.by is not None and op not in TRANSFORM_OPS:
             raise ValueError(
                 f"'by' applies only to transform ops {list(TRANSFORM_OPS)}, not op '{op}'"
             )
+        if (self.weight is not None or self.weight_ref is not None) and op not in MULTI_OPS:
+            raise ValueError(
+                f"'weight'/'weight_ref' apply only to aggregation ops {list(MULTI_OPS)}, "
+                f"not op '{op}' (for transform steps use 'by' + a weight dict in 'value')"
+            )
+        if self.weight is not None and self.weight_ref is not None:
+            raise ValueError("give either 'weight' or 'weight_ref' (a named weight set), not both")
+        if self.weight is not None:
+            if isinstance(self.weight, dict):
+                if not self.weight or not all(_num(x) for x in self.weight.values()):
+                    raise ValueError(
+                        "'weight' requires a non-empty dict of numbers keyed by axis values "
+                        '(e.g. {"WLgroup00": 10.0, "WLgroup01": 1.0}) or a single number'
+                    )
+            elif not _num(self.weight):
+                raise ValueError("'weight' requires a dict of numbers or a single number")
         if self.ref is not None:
             if v is not None:
                 raise ValueError("give either 'value' or 'ref' (a named set), not both")
@@ -139,9 +169,6 @@ class AggregationSpec(BaseModel):
             elif v is None:
                 raise ValueError("op 'filter' requires 'value'")
         elif op in TRANSFORM_OPS:
-            def _num(x):
-                return isinstance(x, (int, float)) and not isinstance(x, bool)
-
             if self.by is None:
                 if not _num(v):
                     raise ValueError(f"op '{op}' requires a numeric 'value'")
@@ -306,10 +333,19 @@ class ScorePart(BaseModel):
         specs = list(self.aggregations.values())
         if self.relative:
             specs += list(self.relative.denominator_pre_aggregation)
-        if not any(s.ref is not None for s in specs):
+        if not any(s.ref is not None or s.weight_ref is not None for s in specs):
             return self
 
         def _resolve(spec_dict: dict) -> None:
+            wref = spec_dict.get("weight_ref")
+            if wref is not None:
+                if wref not in weight_sets:
+                    raise ValueError(
+                        f"score part '{self.name}': unknown weight set '{wref}' "
+                        f"(defined weight sets: {sorted(weight_sets)})"
+                    )
+                spec_dict["weight"] = deepcopy(weight_sets[wref])
+                spec_dict["weight_ref"] = None
             ref = spec_dict.get("ref")
             if ref is None:
                 return

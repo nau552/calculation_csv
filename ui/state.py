@@ -849,13 +849,11 @@ def _part_refs(part: Dict[str, Any]) -> List[str]:
 
 
 def _part_weight_refs(part: Dict[str, Any]) -> List[str]:
-    """パーツが参照している重みセット名（変換opの ref）。"""
+    """パーツが参照している重みセット名（変換opの ref + 集計時重みの weight_ref）。"""
+    specs = [s for s in _part_specs(part) if isinstance(s, dict)]
     return sorted(
-        {
-            s["ref"]
-            for s in _part_specs(part)
-            if isinstance(s, dict) and s.get("ref") and s.get("op") in TRANSFORM_OPS
-        }
+        {s["ref"] for s in specs if s.get("ref") and s.get("op") in TRANSFORM_OPS}
+        | {s["weight_ref"] for s in specs if s.get("weight_ref")}
     )
 
 

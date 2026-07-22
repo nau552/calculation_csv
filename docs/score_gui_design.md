@@ -270,6 +270,7 @@ v1のサンプルで type="FBC" なのに `dvtbudget` フィールドが存在�
 | `filter` | 指定した値のみ残す |
 | `mean` / `sum` / `min` / `max` | 単純集計 |
 | `mean` / `sum` / `min` / `max` + `values` | `values` 指定で値集合に限定してから集計（旧 `*_subset` は読み込み時に自動変換） |
+| `mean` / `sum` / `min` / `max` + `weight` | **集計時重み**: その軸を潰す直前に、軸の値ごとの重みを値へ**乗じてから**集計する（例: `{"op": "max", "weight": {"WLgroup00": 10.0, ...}}`）。正規化された加重平均**ではない**（mean なら mean(重み×値)）。`weight` は辞書か数値1つ、`weight_ref` で重みセット（WLgroupWeight / weightSets）参照。重みを掛けるタイミングを明示的に制御したい場合（dVtBudget変換の前後で変えたい等）は従来どおり変換ステップ（`__xxx__` + `by`）を使う — 両方が適用可能な場面では結果は同一 |
 | `expr` | 自由記述式 |
 
 **グループ集計は派生軸（groupDefs）で表現する**（`group_reduce` op は廃止。読み込み時に

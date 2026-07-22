@@ -932,7 +932,7 @@ def screen_compose() -> None:
     sf["expression"] = st.text_input("expression", value=sf["expression"], key="expr_input")
 
     st.subheader("constraintThreshold（制約）")
-    st.caption("小さいほど良い前提のため演算子指定はありません。値を超えたパーツは最適化側で候補から除外されます。")
+    st.caption("指定したパーツの値がこの値を超えた提案パラメータは、解の候補になりません。")
     ct = sf["constraintThreshold"]
     for key in list(ct):
         entry = ct[key] if isinstance(ct[key], dict) else {"value": ct[key]}
