@@ -10,6 +10,6 @@ __pycache__
 # tests/data/ に登録済み。FBC_expanded.csv はテストが毎回生成する）
 result_tmp/
 reference_scripts/*.csv
-FBC.csv
 FBC_normal.csv
 reference_param.csv
+gomigomi
