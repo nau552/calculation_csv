@@ -28,7 +28,7 @@ def dvt_inputs(dvtbudget_coef_path, data_dir_mini):
     }
 
 
-def _dvt_part(name: str, state: str, offset: float = 1) -> ScorePart:
+def _dvt_part(name: str, state: str, offset: float = 1, board_op: str = "mean") -> ScorePart:
     return ScorePart.model_validate(
         {
             "name": name,
@@ -45,7 +45,7 @@ def _dvt_part(name: str, state: str, offset: float = 1) -> ScorePart:
                 "State": {"op": "filter", "value": state},
                 "WL": {"op": "mean"},
                 "STR": {"op": "mean"},
-                "Board": {"op": "mean"},
+                "Board": {"op": board_op},
                 "Chip": {"op": "mean"},
                 "Block": {"op": "mean"},
             },
@@ -83,9 +83,11 @@ def test_resolve_runs_once_per_type(data_dir_mini, mini_config, dvt_inputs, monk
     assert calls.count("FBC") == 1
 
 
-def test_prefix_shared_across_states(data_dir_mini, dvt_inputs, monkeypatch):
-    """State の filter だけが違うパーツ同士は、resolve + 相対化 + dVtBudget の
-    前段全体を共有すること（「全State分まとめて計算して選ぶ」パターン）。"""
+def test_states_prefiltered_instead_of_shared(data_dir_mini, dvt_inputs, monkeypatch):
+    """State の filter だけが違うパーツ同士は前段を共有**しない**: filter 前絞り
+    （cli._hoistable_prefilters）により、相対化は各パーツが自分の State に絞った
+    行だけで実行される（全行の相対化1回を共有するより、絞り済み×パーツ数の方が
+    速い）。値は従来（前絞りなし・共有あり）と同一でなければならない。"""
     relative_calls = []
     original = cli.apply_relative
 
@@ -103,7 +105,33 @@ def test_prefix_shared_across_states(data_dir_mini, dvt_inputs, monkeypatch):
             data_dir_mini, p, generation="B9LS", shared_ctx=ctx, **dvt_inputs
         )
 
-    assert len(relative_calls) == 1  # 相対化は1回計算され、3回再利用される
+    assert len(relative_calls) == len(parts)  # 前絞りが違うためパーツごとに計算
+    for p in parts:
+        standalone = compute_score_part(data_dir_mini, p, generation="B9LS", **dvt_inputs)
+        assert values[p.name] == pytest.approx(standalone, rel=1e-12)
+
+
+def test_prefix_shared_when_prefilters_match(data_dir_mini, dvt_inputs, monkeypatch):
+    """前絞りまで同一のパーツ同士（違いはキャッシュ点より後の Board 集計のみ）は、
+    引き続き resolve + 相対化 + dVtBudget の前段を共有すること。"""
+    relative_calls = []
+    original = cli.apply_relative
+
+    def counting(lf, value_col, relative):
+        relative_calls.append(1)
+        return original(lf, value_col, relative)
+
+    monkeypatch.setattr(cli, "apply_relative", counting)
+
+    parts = [_dvt_part("mean", "A2B", board_op="mean"), _dvt_part("max", "A2B", board_op="max")]
+    ctx = SharedComputeContext(data_dir_mini, parts)
+    values = {}
+    for p in parts:
+        values[p.name] = compute_score_part(
+            data_dir_mini, p, generation="B9LS", shared_ctx=ctx, **dvt_inputs
+        )
+
+    assert len(relative_calls) == 1  # 相対化は1回計算され、2つ目は再利用
     for p in parts:
         standalone = compute_score_part(data_dir_mini, p, generation="B9LS", **dvt_inputs)
         assert values[p.name] == pytest.approx(standalone, rel=1e-12)

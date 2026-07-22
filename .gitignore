@@ -8,7 +8,7 @@ __pycache__
 
 # 実データ・生成物はリポジトリに入れない（テストが必要とする最小データは
 # tests/data/ に登録済み。FBC_expanded.csv はテストが毎回生成する）
-result_tmp/
+result_tmp*/
 reference_scripts/*.csv
 FBC_normal.csv
 reference_param.csv

@@ -173,6 +173,60 @@ def _effective_order(score_part: ScorePart) -> list[str]:
     return order
 
 
+def _hoistable_prefilters(
+    score_part: ScorePart, group_defs: Optional[Dict[str, GroupDef]] = None
+) -> list[tuple[str, object]]:
+    """暗黙挿入される __relative__ より前に安全に適用できる filter の列
+    [(軸, 値), ...]。
+
+    _effective_order は相対化を order の先頭に挿入するため、ユーザが先頭に
+    書いた filter 群は「全行の相対化 → filter」の順で実行されてしまう。
+    軸 X の filter は X を潰さない演算すべてと可換（グループキーは常に
+    「残っている全列」なので X の値ごとに独立した世界で計算される）なので、
+    先に行を絞ってから相対化しても結果は変わらない。ここでは列は落とさず
+    行だけ絞る（列は本来の filter ステップが本来の位置で落とすので、
+    __dvtbudget__ 等が途中で参照する列も欠けない）。
+
+    可換にならない唯一の例外が相対化の内部で潰される軸で、以下は前に出さない:
+    - split_axis（分子/分母の振り分けに使う）
+    - denominator_pre_aggregation で潰す軸・その重み参照軸（`by`）。
+      分母は「全値の集計 vs 絞った値の集計」で結果が変わるため。
+      グループ派生軸は元軸と紐づけて双方向に判定する
+      （例: WL を事前集計するなら WLgroup の filter も前に出さない）。
+
+    対象は order 先頭から連続する単一軸の filter のみ（複合軸・仮想ステップで
+    走査を打ち切る）。__relative__ を明示配置したパーツはユーザの並びを
+    尊重して対象外。selection ref は解決済みの ScorePart を渡すこと。
+    """
+    rel = score_part.relative
+    if rel is None or RELATIVE_STEP in score_part.order:
+        return []
+
+    def expand(name: str) -> set:
+        names = {name}
+        if group_defs and name in group_defs:
+            names.add(group_defs[name].axis)
+        return names
+
+    forbidden: set = expand(rel.split_axis)
+    for step in rel.denominator_pre_aggregation:
+        forbidden |= expand(step.axis)
+        if step.by:
+            forbidden |= expand(step.by)
+
+    out: list[tuple[str, object]] = []
+    for entry in score_part.order:
+        if _is_virtual(entry) or COMBINED_SEP in entry:
+            break
+        spec = score_part.aggregations.get(entry)
+        if spec is None or spec.op != "filter":
+            break
+        if expand(entry) & forbidden:
+            break
+        out.append((entry, spec.value))
+    return out
+
+
 def _source_type(score_part: ScorePart) -> str:
     """実際に読む csv の type（dVtBudget パーツは FBC.csv を読む）。"""
     return "FBC" if score_part.type == "dVtBudget" else score_part.type
@@ -378,6 +432,13 @@ def compute_score_part(
 
     lf = _with_group_columns(lf, score_part, group_defs)
 
+    # 暗黙の __relative__ より前に安全な filter の行絞りだけ先に適用する
+    # （列は残し、本来の filter ステップがそのまま再適用+列削除する）。
+    # 相対化・dVtBudget 変換の入力行数を減らす純粋な最適化で、結果は不変
+    prefilters = _hoistable_prefilters(score_part, group_defs)
+    for axis, value in prefilters:
+        lf = lf.filter(pl.col(axis) == value)
+
     steps = _effective_order(score_part)
     sigs = [_step_signature(score_part, s) for s in steps]
 
@@ -391,7 +452,12 @@ def compute_score_part(
                 for name, gd in _referenced_group_defs(score_part, group_defs).items()
             )
         )
-        base_sig = (source_type, tuple(sorted(required_axes)), defs_sig, tuple(identity_axes))
+        # prefilters をキーに含める: 前絞りが違えばキャッシュ点のフレームの
+        # 中身が違うため、ステップ署名列が同じでも共有してはならない
+        base_sig = (
+            source_type, tuple(sorted(required_axes)), defs_sig,
+            tuple(identity_axes), tuple(prefilters),
+        )
         cache_keys = {
             i: (base_sig, tuple(sigs[: i + 1]))
             for i, s in enumerate(steps)
