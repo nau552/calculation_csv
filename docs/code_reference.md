@@ -135,7 +135,7 @@ ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算
 | `_referenced_group_defs` / `_required_axes` | 派生軸名→元軸への読み替え。定義名=軸名の同名を拒否 |
 | `_with_group_columns` | 読み込み直後にグループ派生列を生成。どの範囲にも入らない値の行は値一覧つきエラー。元軸がパーツに不要なら落とす（暗黙集約と同じ扱いに戻す） |
 | `_effective_order(part)` | 明示されなかった `__relative__`（先頭）/`__dvtbudget__`（相対化直後）を補完 |
-| `_hoistable_prefilters(part, group_defs)` | 暗黙 `__relative__` より前に安全な filter の行絞り [(軸,値),...] を判定。split軸・分母事前集計の軸（派生軸は元軸と双方向対応）は対象外。列は落とさず行だけ先に絞る純最適化（結果不変、tests/test_prefilter.py） |
+| `_hoistable_prefilters(part, group_defs)` | order 内の位置・`__relative__` の明示/暗黙によらず、可換な filter の行絞り [(軸,値),...] をパイプライン先頭に前出しする判定。除外は split軸・分母事前集計の軸とその `by`（派生軸は元軸と双方向対応）・複合軸の構成軸。列は落とさず行だけ先に絞る純最適化（結果不変、tests/test_prefilter.py）。診断上の変化: 後段の検証（dVtBudget係数カバレッジ等）は filter 後に残る値だけが対象になる |
 | `SharedComputeContext` | 1回の compute_score_file 内でtype単位のcsv読み込みと `__relative__`/`__dvtbudget__` 直後の中間結果を共有するキャッシュ（結果は共有なしと同一。customパーツは対象外）。前絞りが異なるパーツは共有しない（キーに prefilters を含む） |
 | `_apply_axis_step` | 複合軸なら列を `&` で融合してから aggregate に渡す |
 | `compute_score_part(...)` | 1パーツの計算。type=custom は関数呼び出しへ分岐 |

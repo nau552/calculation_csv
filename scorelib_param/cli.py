@@ -176,53 +176,60 @@ def _effective_order(score_part: ScorePart) -> list[str]:
 def _hoistable_prefilters(
     score_part: ScorePart, group_defs: Optional[Dict[str, GroupDef]] = None
 ) -> list[tuple[str, object]]:
-    """暗黙挿入される __relative__ より前に安全に適用できる filter の列
-    [(軸, 値), ...]。
+    """パイプラインの先頭に安全に前出しできる filter の列 [(軸, 値), ...]。
 
-    _effective_order は相対化を order の先頭に挿入するため、ユーザが先頭に
-    書いた filter 群は「全行の相対化 → filter」の順で実行されてしまう。
-    軸 X の filter は X を潰さない演算すべてと可換（グループキーは常に
-    「残っている全列」なので X の値ごとに独立した世界で計算される）なので、
-    先に行を絞ってから相対化しても結果は変わらない。ここでは列は落とさず
-    行だけ絞る（列は本来の filter ステップが本来の位置で落とすので、
-    __dvtbudget__ 等が途中で参照する列も欠けない）。
+    軸 X の filter は X を潰さない演算すべてと可換: グループキーは常に
+    「残っている全列」なので、他軸の集計・行単位変換（__offset__ 等・
+    dVtBudget 変換）・相対化のペアリングは X の値ごとに独立した世界で
+    計算され、X==v の世界を先に切り出しても結果は変わらない。そこで
+    order 内の位置や __relative__ の明示/暗黙によらず、可換な filter は
+    全行の相対化・変換が走る前に行だけ先に絞る。列は落とさない（列は
+    本来の filter ステップが本来の位置で落とすので、__dvtbudget__ 等が
+    途中で参照する列も欠けず、列を潰す順序の検証も従来どおり働く）。
 
-    可換にならない唯一の例外が相対化の内部で潰される軸で、以下は前に出さない:
-    - split_axis（分子/分母の振り分けに使う）
+    可換にならない軸だけを除外する:
+    - relative.split_axis（分子/分母の振り分けに使う）
     - denominator_pre_aggregation で潰す軸・その重み参照軸（`by`）。
       分母は「全値の集計 vs 絞った値の集計」で結果が変わるため。
       グループ派生軸は元軸と紐づけて双方向に判定する
-      （例: WL を事前集計するなら WLgroup の filter も前に出さない）。
+      （例: WL を事前集計するなら WLgroup の filter も前に出さない）
+    - 複合軸エントリ（"A&B"）の構成軸（filter は組に対して働くため）
 
-    対象は order 先頭から連続する単一軸の filter のみ（複合軸・仮想ステップで
-    走査を打ち切る）。__relative__ を明示配置したパーツはユーザの並びを
-    尊重して対象外。selection ref は解決済みの ScorePart を渡すこと。
+    対象は単一軸の純粋な filter（op="filter"）のみ。selection ref は
+    解決済みの ScorePart を渡すこと。
+
+    診断への影響: 行が先に減るため、後段ステップの検証が「filter で残る
+    行」だけを対象にするようになる（例: dVtBudget 係数は filter 後に残る
+    State の分だけあればよい。従来は全 State 分を要求していた）。
     """
-    rel = score_part.relative
-    if rel is None or RELATIVE_STEP in score_part.order:
-        return []
-
     def expand(name: str) -> set:
         names = {name}
         if group_defs and name in group_defs:
             names.add(group_defs[name].axis)
         return names
 
-    forbidden: set = expand(rel.split_axis)
-    for step in rel.denominator_pre_aggregation:
-        forbidden |= expand(step.axis)
-        if step.by:
-            forbidden |= expand(step.by)
+    forbidden: set = set()
+    rel = score_part.relative
+    if rel is not None:
+        forbidden |= expand(rel.split_axis)
+        for step in rel.denominator_pre_aggregation:
+            forbidden |= expand(step.axis)
+            if step.by:
+                forbidden |= expand(step.by)
+    for entry in score_part.order:
+        if not _is_virtual(entry) and COMBINED_SEP in entry:
+            for axis in _step_axes(entry):
+                forbidden |= expand(axis)
 
     out: list[tuple[str, object]] = []
     for entry in score_part.order:
         if _is_virtual(entry) or COMBINED_SEP in entry:
-            break
+            continue
         spec = score_part.aggregations.get(entry)
         if spec is None or spec.op != "filter":
-            break
+            continue
         if expand(entry) & forbidden:
-            break
+            continue
         out.append((entry, spec.value))
     return out
 
