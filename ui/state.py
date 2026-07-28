@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -19,7 +20,19 @@ from scorelib_param import introspect, io_jsonc, jsonc
 from scorelib_param.expression import evaluate_expression
 from scorelib_param.models import COMBINED_SEP, TRANSFORM_OPS, ScoreFile
 
-DRAFT_PATH = Path.home() / ".scorelib_draft.jsonc"
+DRAFT_PATH = Path.home() / ".scorelib_draft.jsonc"  # 旧: 単一ユーザ時代の下書き（定数は互換のため残す）
+DRAFTS_DIR = Path.home() / ".scorelib_drafts"  # ユーザ名ごとの下書き置き場（共用サーバ対応）
+
+
+def draft_path_for(user: str) -> Path:
+    """ユーザ名ごとの下書きパス（DRAFTS_DIR/<名前>.jsonc）。
+
+    UI は共用サーバで複数人が使うため、下書きを1ファイルで取り合うと相互上書き・
+    他人の下書きの復元提案が起きる。認証が無い間は自己申告の名前で分離し、
+    リバースプロキシ認証の導入後はヘッダのユーザ名がそのままここに入る
+    （app._sidebar_user）。名前はファイル名に安全な文字へ正規化する。"""
+    safe = re.sub(r"[^\w\-]", "_", str(user).strip())[:64] or "_"
+    return DRAFTS_DIR / f"{safe}.jsonc"
 
 # InBatchEpoch は集計対象にしない（ユーザ判断。設計書5節）。order に
 # 入れないことで、エンジンは周囲の軸と一緒に暗黙に集約する。
@@ -968,6 +981,7 @@ def save_draft(
     ユーザを画面1からやり直させずに済む。"""
     path = path or DRAFT_PATH  # テストが DRAFT_PATH を差し替えられるよう呼び出し時に解決
     payload = {"score_file": score_file, "context_inputs": context_inputs or {}}
+    path.parent.mkdir(parents=True, exist_ok=True)  # DRAFTS_DIR は初回保存時に作られる
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 

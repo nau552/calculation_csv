@@ -88,9 +88,14 @@ git config core.hooksPath scripts/hooks         # push前テストのフック�
 
 - pyproject.toml は `dynamic = ["version"]` でこの値を参照する（二重管理しない）
 - UIサイドバー・CLI（`--version` / stderr のログ）もこの値を表示する
+- **版数はエンジン専用**: `scorelib_param/` に変更があるリリースでだけ上げる。
+  **ui/ のみの変更では上げない**（UI リリースは番号を持たない `ui-YYYYMMDD` タグ —
+  「リリース手順」参照）。理由: 版数は UIサイドバー・CLI stderr・SVN 内コードの
+  すべてに表示され、見比べた人（SVN を共同開発する他の開発者含む）が
+  「一致=正常、不一致=同期漏れ」とだけ解釈できる状態を保つため。
+  UI の都合で上がると「SVN が古く見える」偽の不一致が生まれる
 - 上げるタイミング:
   - **SVN のスクリプト領域へ scorelib_param/ を同期するたび**
-    （SVN側エンジンとUI同梱エンジンの版ズレ確認が目的のため）
   - **設定ファイル（jsonc）の語彙・意味が変わる機能を main に入れた時点**でも上げる
     （新フィールドや新しい値の形は旧エンジンで読み込みエラーになるため、
     「この設定を読めるエンジンか」を版で見分けられるようにする。
@@ -117,17 +122,28 @@ git config core.hooksPath scripts/hooks         # push前テストのフック�
 - **pre-push フック**: push 前にローカルでも全テストが走る。
   clone 後に1回 `git config core.hooksPath scripts/hooks` で有効化する
 
-## リリース手順（SVN 同期）
+## リリース手順
+
+**エンジンリリース（SVN 同期）** — `scorelib_param/` に変更があるとき:
 
 1. main でテスト全パス（CI が green であること）
 2. `scorelib_param/__init__.py` の `__version__` を上げる（上記の判断基準）
-3. `CHANGELOG.md` にこの版の変更点を追記する
+3. `CHANGELOG.md` の「未リリース」をこの版の `ver.X.Y.Z` 節として確定する
 4. コミットして **タグを打つ**: `git tag -a ver.X.Y.Z -m "変更の要旨"` →
    `git push --follow-tags`（コミットと注釈付きタグを1コマンドで push。
    PowerShell 5.1 では `&&` が使えないため連結しない）
 5. **タグの状態から** `scorelib_param/` + `custom_parts.py` を SVN のスクリプト領域へ
    同期する（タグ = SVN 側で動いている版の git 上の対応点。版ズレ調査・
    ロールバックは `git checkout ver.X.Y.Z`）
+
+**UI のみのリリース（UI サーバ更新）** — 変更が ui/ に閉じているとき:
+
+1. main でテスト全パス（CI が green であること）
+2. `CHANGELOG.md` に `ui-YYYYMMDD` 節を書く（エンジン変更なしであることを明記）
+3. コミットして `git tag -a ui-YYYYMMDD -m "要旨"` → `git push --follow-tags`
+4. タグの状態から UI サーバへ配布する（「UI 実行サーバの立て方」。
+   取り出すタグは **最新の `ver.*` または `ui-*`**）
+5. **`__version__` は上げない**（版数はエンジン専用 — 「バージョンの上げ方」参照）
 
 ## 配置まとめ（どこに何を置くか）
 
@@ -161,7 +177,7 @@ git config core.hooksPath scripts/hooks         # push前テストのフック�
 必要部分だけを取り出して配置する:
 
 ```bash
-# 配置（初回・更新とも同じ。ver.X.Y.Z はリリースタグ）
+# 配置（初回・更新とも同じ。タグは最新の ver.X.Y.Z または ui-YYYYMMDD）
 git clone --depth 1 --branch ver.X.Y.Z <社内GitLabのURL> /tmp/scorelib-src
 mkdir -p /opt/scorelib_ui
 git -C /tmp/scorelib-src archive HEAD scorelib_param ui custom_parts.py pyproject.toml \
@@ -214,6 +230,59 @@ Docker 化（イメージに4点+依存を焼き込み、サーバにはイメ�
 上記が動いた後の選択肢: 環境をイメージに固定でき、更新が「イメージ差し替え」の
 1操作になる。docker build の可否・base イメージの取得経路（閉域網の場合は
 社内レジストリ）の確認が取れたら移行を検討する。
+
+#### 複数ユーザでの利用
+
+Streamlit は**ブラウザのタブごとに独立したセッション**を作るため、複数人が
+同時に操作しても編集内容・画面状態が混ざることはない（フレームワークの基本設計）。
+共有されるのは以下だけで、それぞれ対処済み・対処方法がある:
+
+- **下書き**: サイドバーの名前ごとに `~/.scorelib_drafts/<名前>.jsonc` へ分離
+  （名前未入力の間は自動保存されない）。認証を導入したら、認証ユーザ名を
+  ヘッダ（既定 `X-Remote-User`、環境変数 `SCORELIB_UI_USER_HEADER` で変更可）で
+  UI へ渡せば名前入力欄は消え、自動でユーザ別になる
+- **一時ファイル**: zip 展開・ダミー展開・アップロードは毎回ユニークな
+  一時ディレクトリを作るため衝突しないが、削除されず溜まる。サーバでは
+  systemd-tmpfiles のルールを1つ置いて自動掃除する（毎日実行・3日より古いものを削除）:
+
+  ```
+  # /etc/tmpfiles.d/scorelib-ui.conf
+  e /tmp/scorelib_* - - - 3d
+  ```
+
+- **同時のテスト計算**: CPU を取り合って遅くなるだけで、正しさには影響しない
+  （数人規模なら対策不要）
+
+#### 認証（必要になったら）: nginx リバースプロキシの例
+
+Streamlit 自体に認証機能は無い。認証が必要なら、前段に nginx を置いて
+Basic 認証（または社内 SSO）をかけるのが定石で、**アプリ側の変更は不要**。
+設定例（要確認事項が解けたら実態に合わせて更新する下書き）:
+
+```nginx
+# /etc/nginx/sites-available/scorelib-ui
+server {
+    listen 80;                       # 社内標準が https ならそれに従う
+    server_name <UIサーバのホスト名>;
+
+    auth_basic "scorelib UI";
+    auth_basic_user_file /etc/nginx/.htpasswd;   # htpasswd コマンドで作成
+
+    location / {
+        proxy_pass http://127.0.0.1:8501;
+        proxy_http_version 1.1;
+        # Streamlit は WebSocket（常時接続）を使うため、この2行が必須
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        # 認証ユーザ名を UI へ渡す → 下書きのユーザ別分離が自動化される
+        proxy_set_header X-Remote-User $remote_user;
+        proxy_read_timeout 3600;
+    }
+}
+```
+
+nginx を前段に置いたら、Streamlit 側は外から直接触れないよう
+`--server.address 127.0.0.1` に変更する（systemd ユニットの ExecStart）。
 
 ### 最適化サーバのエンジン用 python 環境（miniforge）
 
@@ -359,8 +428,12 @@ CLI（stderr / `--version`）に表示される — SVN側エンジンとの版�
    直接呼び、Score+全パーツ値を表示。`score.jsonc`（selectionSets同梱）や
    パーツ単体（参照セット同梱）のダウンロード、既存jsoncのインポート
 
-編集内容は**操作のたび**に `~/.scorelib_draft.jsonc` へ自動保存され、次回起動時に復元を提案する
+編集内容は**操作のたび**に自動保存され、次回アクセス時に復元を提案する
 （復元するとデータ読み込みと画面1の入力欄も前回の状態に戻る）。
+保存先は**サイドバーで入力した名前ごと**に `~/.scorelib_drafts/<名前>.jsonc`
+（共用サーバで複数人の下書きが混ざらないための分離。名前未入力の間は保存されない。
+リバースプロキシ認証を導入した場合はヘッダのユーザ名で自動化される — 下記
+「複数ユーザでの利用」参照）。
 サイドバーの「↩ 元に戻す」で直近20操作までアンドゥできる。
 
 ### 測定前設計（ダミー一式の Board/Chip 展開）

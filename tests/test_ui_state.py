@@ -857,6 +857,17 @@ def test_in_dir_discovery_rejects_ambiguous_configs(tmp_path, data_dir_mini, fix
 
 # ------------------------------------------------------------- draft / export
 
+def test_draft_path_for_sanitizes(monkeypatch, tmp_path):
+    """ユーザ名ごとの下書きパス: パス区切り等はファイル名安全な文字へ正規化
+    （名前入力によるディレクトリ脱出の防止）。"""
+    monkeypatch.setattr(state, "DRAFTS_DIR", tmp_path)
+    p = state.draft_path_for("田中 ../evil")
+    assert p.parent == tmp_path
+    assert p.suffix == ".jsonc"
+    assert "/" not in p.name and "\\" not in p.name and ".." not in p.name
+    assert state.draft_path_for("  ") .name == "_.jsonc"  # 空相当は "_"
+
+
 def test_draft_roundtrip(tmp_path, sf, catalog):
     sf["score_parts"].append(state.part_skeleton("p", "FBC", catalog))
     path = tmp_path / "draft.jsonc"

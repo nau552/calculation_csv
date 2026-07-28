@@ -232,7 +232,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 **下書き・エクスポート・テスト計算**
 | 関数 | 内容 |
 |---|---|
-| `save_draft` / `load_draft` | `~/.scorelib_draft.jsonc`。score_file+画面1の入力（context_inputs）を保存。旧形式も読める |
+| `save_draft` / `load_draft` / `draft_path_for(user)` | 下書きは**ユーザ名ごと**に `DRAFTS_DIR`（`~/.scorelib_drafts/<名前>.jsonc`。名前はファイル名安全に正規化 — 共用サーバで混ざらないための分離）。score_file+画面1の入力（context_inputs）を保存。旧形式も読める |
 | `export_part(sf, i)` | パーツ単体を自己完結jsoncに（参照する選択セット・グループ定義を同梱） |
 | `score_file_to_jsonc` / `import_score_file` | 全体のエクスポート/インポート（RunConfig形式も受理。エラーはパーツ名付き） |
 | `run_test_compute(sf, dir, ...)` | ScoreFile dict → RunConfig を組み立てて `compute_score_file` を直接呼ぶ |
@@ -253,7 +253,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 |---|---|
 | `_RESERVED_STATE` / `_init` | アプリデータのキー宣言と初期化（それ以外はウィジェット状態とみなし undo 時に破棄） |
 | `_snapshot` / `_track_history` / `_undo` | JSON文字列スナップショットによる undo（20件）。undo 時はウィジェット状態も破棄 |
-| `_offer_draft_restore` / `_autosave` | 起動時の下書き復元（データ読み込み・画面1入力欄も復元）/ 設定が変わった settled run ごとに自動保存 |
+| `_offer_draft_restore` / `_autosave` / `_sidebar_user` / `_header_user` | 下書きの復元提案と自動保存を**ユーザ名ごと**に行う（draft_path_for）。ユーザ名は認証ヘッダ（既定 X-Remote-User、SCORELIB_UI_USER_HEADER で変更）があればそれ、無ければサイドバーの名前入力。未入力の間は保存・復元とも停止 |
 | `_merged_catalog` / `_catalog_for_part` / `_with_group_axes` | カタログの合成（パーツtype用+グループ派生軸の追加） |
 | `screen_data` / `_handle_load` / `_DEV_MODE` | 画面1。**「① スコア設定（設定jsoncアップロード = 編集の出発点。両形式対応・編集状態を置き換え）+ ② データ（実測一式zip / ダミー一式+Board・Chip数 / なし の radio）」の2段 + 読み込みボタン1つ**。係数・custom の追加は「係数・自作関数を追加する」expander（パスモードではパス欄 — 実測・ダミー共通の2欄）。**一般ユーザの画面はアップロードのみ**で、パス指定は開発者モード（`-- --dev` / `SCORELIB_UI_DEV=1`）のトグルでのみ現れ、オン時は各アップローダがパス欄に置き換わる（併記しない）。優先順位: 個別アップロード > ①の設定（RunConfig 形式なら config_path としても使用 — `is_run_config_text`）> zip 内・パス指定。②なし+①あり = `load_config_only`（設定のみ編集）。認識結果（データ由来の軸本数と世代情報json の食い違い診断警告を含む）は共通で下部に表示 |
 | `_order_entry_label` / `_order_editor` | orderの1行ラベル / 常時ドラッグ可能リスト+「編集するエントリ」プルダウン+常時表示エディタ（削除ボタン内蔵）。フォールバックは ✎/↑↓/✕ 行 |

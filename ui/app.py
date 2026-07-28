@@ -36,13 +36,40 @@ VIRTUAL_FIXED = ("__relative__", "__dvtbudget__")
 # パス指定は UI と同じマシンにファイルがある開発者・管理者専用の入力手段
 _DEV_MODE = "--dev" in sys.argv or os.environ.get("SCORELIB_UI_DEV") == "1"
 
+# リバースプロキシ認証が転送するユーザ名ヘッダ（README「UI 実行サーバの立て方」の
+# nginx 例では X-Remote-User）。認証導入後は名前入力欄の代わりにこれを使う
+_USER_HEADER = os.environ.get("SCORELIB_UI_USER_HEADER", "X-Remote-User")
+
+
+def _header_user() -> str | None:
+    try:
+        name = st.context.headers.get(_USER_HEADER)
+    except Exception:
+        return None
+    return name.strip() if name and name.strip() else None
+
+
+def _sidebar_user() -> str | None:
+    """下書きの持ち主となるユーザ名。認証ヘッダがあればそれ（表示のみ）、
+    無ければ名前入力欄。未入力の間は None = 下書きの自動保存・復元は停止
+    （共用サーバで1ファイルを取り合わないための分離 — state.draft_path_for）。"""
+    header_user = _header_user()
+    if header_user:
+        st.caption(f"ユーザ: {header_user}")
+        return header_user
+    name = st.text_input(
+        "名前（下書きの保存名）", key="draft_user_input",
+        help="編集内容の自動保存・復元を名前ごとに分けます。未入力の間は自動保存されません",
+    )
+    return name.strip() or None
+
 
 HISTORY_LIMIT = 20
 # アプリデータを保持する session_state のキー。これ以外はウィジェット状態と
 # みなし、undo 時に全消しして score_file から値を読み直させる
 _RESERVED_STATE = {
     "score_file", "context", "selected_part", "draft_prompt_done",
-    "history", "last_snapshot", "screen",
+    "history", "last_snapshot", "screen", "draft_user_input",
 }
 
 
@@ -89,16 +116,19 @@ def _undo() -> None:
     st.rerun()
 
 
-def _offer_draft_restore() -> None:
+def _offer_draft_restore(user: str | None) -> None:
     ss = st.session_state
     if ss.draft_prompt_done or ss.score_file["score_parts"]:
         ss.draft_prompt_done = True
         return
-    draft = state.load_draft()
+    if user is None:
+        # 名前が入るまで判定を保留（done にしない: 入力されたら次の実行で提案する）
+        return
+    draft = state.load_draft(state.draft_path_for(user))
     if draft is None:
         ss.draft_prompt_done = True
         return
-    st.info(f"前回の編集内容が {state.DRAFT_PATH} に残っています。復元しますか？")
+    st.info(f"前回の編集内容（{user}）が残っています。復元しますか？")
     ci = draft.get("context_inputs") or {}
     if ci.get("data_dir"):
         st.caption(f"データ読み込みも復元されます: {ci['data_dir']}")
@@ -143,7 +173,9 @@ def _offer_draft_restore() -> None:
     st.stop()
 
 
-def _autosave() -> None:
+def _autosave(user: str | None) -> None:
+    if user is None:
+        return  # 名前未入力（共用サーバで誰の下書きか分からないため保存しない）
     ss = st.session_state
     sf = ss.score_file
     if sf["score_parts"] or sf["selectionSets"] or sf["expression"]:
@@ -156,7 +188,7 @@ def _autosave() -> None:
             "custom_path": ctx.get("custom_path"),
         }
         try:
-            state.save_draft(sf, context_inputs)
+            state.save_draft(sf, context_inputs, state.draft_path_for(user))
         except OSError:
             pass
 
@@ -1224,6 +1256,7 @@ def main() -> None:
 
     with st.sidebar:
         st.title("スコア設計")
+        user = _sidebar_user()
         screen = st.radio("画面", SCREENS, key="screen")
         sf = st.session_state.score_file
         st.divider()
@@ -1239,7 +1272,7 @@ def main() -> None:
             help="このUIに同梱されたエンジンの版。実験実行側（SVNの scorelib）と一致しているかの確認用",
         )
 
-    _offer_draft_restore()
+    _offer_draft_restore(user)
     warning = st.session_state.pop("restore_warning", None)
     if warning:
         st.warning(warning)
@@ -1264,7 +1297,7 @@ def main() -> None:
         st.rerun()
 
     _track_history()
-    _autosave()
+    _autosave(user)
 
 
 main()

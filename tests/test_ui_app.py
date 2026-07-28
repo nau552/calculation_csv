@@ -17,7 +17,7 @@ SCREEN_TEST = "5. テスト実行・エクスポート"
 def at(tmp_path, monkeypatch):
     apptest = pytest.importorskip("streamlit.testing.v1").AppTest
     # ユーザの実際の下書きファイルに触れないよう保存先を差し替える
-    monkeypatch.setattr(state, "DRAFT_PATH", tmp_path / "draft.jsonc")
+    monkeypatch.setattr(state, "DRAFTS_DIR", tmp_path / "drafts")
     # AppTest は file_uploader を操作できないため、開発者モード
     # （パス指定トグル）でテストする。一般ユーザ表示のテストは
     # test_paths_hidden_without_dev_option が env を消して確認する
@@ -321,6 +321,9 @@ def test_undo_reverts_last_action(at, data_dir_mini):
 
 
 def test_draft_autosaved_and_restored(at, data_dir_mini, dvtbudget_coef_path, tmp_path):
+    """下書きは**名前ごと**に保存・復元される（共用サーバで他人と混ざらない）。
+    名前未入力の間は自動保存されない。"""
+    # 名前未入力のまま編集 → 保存されない
     at.toggle(key="paths_mode").set_value(True).run()
     at.text_input(key="data_dir_input").set_value(str(data_dir_mini))
     at.text_input(key="coef_path_input").set_value(str(dvtbudget_coef_path))
@@ -328,23 +331,35 @@ def test_draft_autosaved_and_restored(at, data_dir_mini, dvtbudget_coef_path, tm
     assert not at.exception
     at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
     at.button(key="add_part_btn").click().run()
-    assert state.DRAFT_PATH.exists()
-    draft = state.load_draft()
-    assert [p["name"] for p in draft["score_file"]["score_parts"]] == ["part_1"]
+    assert not state.draft_path_for("taro").exists()
+
+    # 名前を入れると以降の操作で保存される
+    at.text_input(key="draft_user_input").set_value("taro").run()
+    at.button(key="add_part_btn").click().run()
+    assert state.draft_path_for("taro").exists()
+    draft = state.load_draft(state.draft_path_for("taro"))
+    assert [p["name"] for p in draft["score_file"]["score_parts"]] == ["part_1", "part_2"]
     assert draft["context_inputs"]["data_dir"] == str(data_dir_mini.resolve())
     assert draft["context_inputs"]["coef_path"] == str(dvtbudget_coef_path.resolve())
 
-    # 別セッション（同じ下書きパス）: 復元で score file・データ読み込み
-    # コンテキスト・**パスモードの入力欄**まで戻ること（入力欄が空だと
-    # 読み込みボタンの再押下で係数パスの指定が外れてしまう）
+    # 別セッション: 名前を入れるまで復元は提案されず、同じ名前を入れると
+    # 復元で score file・データ読み込みコンテキスト・パスモードの入力欄まで戻る
     apptest = pytest.importorskip("streamlit.testing.v1").AppTest
     at2 = apptest.from_file(APP, default_timeout=60)
     at2.run()
+    assert all(b.key != "restore_btn" for b in at2.button)  # 名前未入力 → 提案なし
+    at2.text_input(key="draft_user_input").set_value("taro").run()
     at2.button(key="restore_btn").click().run()
     assert not at2.exception
-    assert [p["name"] for p in at2.session_state["score_file"]["score_parts"]] == ["part_1"]
+    assert [p["name"] for p in at2.session_state["score_file"]["score_parts"]] == ["part_1", "part_2"]
     assert at2.session_state["context"]["types"] == ["FBC", "tR"]
     assert "dVtBudget" in at2.session_state["context"]["part_types"]
     at2.toggle(key="paths_mode").set_value(True).run()
     assert at2.text_input(key="data_dir_input").value == str(data_dir_mini.resolve())
     assert at2.text_input(key="coef_path_input").value == str(dvtbudget_coef_path.resolve())
+
+    # 別の名前では他人の下書きは提案されない
+    at3 = apptest.from_file(APP, default_timeout=60)
+    at3.run()
+    at3.text_input(key="draft_user_input").set_value("jiro").run()
+    assert all(b.key != "restore_btn" for b in at3.button)
