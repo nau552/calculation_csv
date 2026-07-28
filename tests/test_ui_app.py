@@ -226,6 +226,28 @@ def test_dummy_expand_flow_end_to_end(at, tmp_path, data_dir_mini):
     assert len(at.dataframe) == 1
 
 
+def test_config_only_editing_flow(at, fixtures_dir):
+    """設定のみ編集: 設定から導出した context で画面2（パーツ編集）が開き、
+    画面5 のテスト計算はディレクトリ未入力の明確なエラーになる
+    （file_uploader は AppTest から操作できないため、読み込み自体は
+    state.load_config_only の単体テストでカバーし、ここでは注入する）。"""
+    text = (fixtures_dir / "config.jsonc").read_text(encoding="utf-8")
+    sf, ctx = state.load_config_only(text)
+    at.session_state["score_file"] = sf
+    at.session_state["context"] = ctx
+    at.run()
+    assert not at.exception
+    assert any("設定のみ編集中" in i.value for i in at.info)
+
+    at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
+    assert not at.exception  # データ無しでもパーツ編集が開ける
+
+    at.sidebar.radio(key="screen").set_value(SCREEN_TEST).run()
+    assert not at.exception
+    at.button(key="run_btn").click().run()
+    assert any("データディレクトリを入力" in e.value for e in at.error)
+
+
 def test_custom_part_end_to_end(at, data_dir_mini, fixtures_dir):
     """custom_parts.py 付きで読み込み、type=custom パーツを作成して計算する。"""
     at.text_input(key="data_dir_input").set_value(str(data_dir_mini))

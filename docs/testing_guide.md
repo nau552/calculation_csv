@@ -115,8 +115,8 @@ def test_filter_then_mean():
 ### UIテスト
 | ファイル | 層 | 内容 |
 |---|---|---|
-| `test_ui_state.py` | 単体〜結合 | ui/state.py の全ロジック。雛形が**そのまま計算に通る**こと（エンジンで実計算。相対化プリセット無し・Measure filter 先頭・Label/Override 除外）、相対化ON/OFFの order 整合と既定 split（Measure > Override > 先頭軸・分子/分母の位置初期化・相対化ONのままでも実計算が通ること）、labels 注記の付与/除去、parse_chip_counts とダミー展開→build_context の通し、グループ定義（取り込み/削除ガード/本数警告 — 本数は**データ由来**が正で世代情報jsonは補完・食い違いは診断警告/エクスポート同梱）、検証エラーのパーツ名表示、build_context（空パス拒否・各ファイルの指定/自動検出/**候補複数エラー**）、一式zip（フラット/ネスト/曖昧エラー）、custom（型切替の整合・実計算）、下書きの新旧形式、ラベル純関数（⚠/編集中/同名でも一意） |
-| `test_ui_app.py` | E2E | AppTest でUIを実際に動かす。起動、エラー表示、パーツ作成→計算の一気通貫、**ダミー展開→雛形→相対化ON（Measure 分割+labels 注記）→テスト計算の一気通貫**、式挿入ボタンの即時反映、並べ替え、undo、**下書き保存→別セッションで復元**（データ読み込み・入力欄まで）、config読み込みでの WLgroup 取り込み、本数警告の表示、custom パーツの作成→関数選択→計算、**複製→切替のウィジェット独立性**（回帰）、`__relative__` 残留の回帰 |
+| `test_ui_state.py` | 単体〜結合 | ui/state.py の全ロジック。雛形が**そのまま計算に通る**こと（エンジンで実計算。相対化プリセット無し・Measure filter 先頭・Label/Override 除外）、相対化ON/OFFの order 整合と既定 split（Measure > Override > 先頭軸・分子/分母の位置初期化・相対化ONのままでも実計算が通ること）、labels 注記の付与/除去、parse_chip_counts とダミー展開→build_context の通し、グループ定義（取り込み/削除ガード/本数警告 — 本数は**データ由来**が正で世代情報jsonは補完・食い違いは診断警告/エクスポート同梱）、検証エラーのパーツ名表示、build_context（空パス拒否・各ファイルの指定/自動検出/**候補複数エラー**）、一式zip（フラット/ネスト/曖昧エラー）、custom（型切替の整合・実計算）、**設定のみ編集**（load_config_only: RunConfig/score.jsonc 両形式・旧WLgroup取り込み・軸名カタログ導出・データ無し検証/エクスポート・Measure雛形の入力促し）、下書きの新旧形式、ラベル純関数（⚠/編集中/同名でも一意） |
+| `test_ui_app.py` | E2E | AppTest でUIを実際に動かす。起動、エラー表示、パーツ作成→計算の一気通貫、**ダミー展開→雛形→相対化ON（Measure 分割+labels 注記）→テスト計算の一気通貫**、式挿入ボタンの即時反映、並べ替え、undo、**下書き保存→別セッションで復元**（データ読み込み・入力欄まで）、config読み込みでの WLgroup 取り込み、本数警告の表示、custom パーツの作成→関数選択→計算、**設定のみ編集**（context 注入で画面2が開く・テスト計算はディレクトリ未入力エラー。file_uploader は AppTest 不可のため読み込みは state 層でカバー）、**複製→切替のウィジェット独立性**（回帰）、`__relative__` 残留の回帰 |
 
 ### AppTest の限界（知っておくべきこと）
 - **D&D部品（streamlit-sortables）は描画・操作できない** → ドラッグ操作は手動確認が必要。

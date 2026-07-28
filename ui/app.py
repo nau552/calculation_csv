@@ -123,6 +123,10 @@ def _offer_draft_restore() -> None:
                     f"編集内容は復元しましたが、データの再読み込みに失敗しました。"
                     f"画面1で読み込み直してください: {err}"
                 )
+        elif ss.score_file["score_parts"]:
+            # データ無しで編集していたセッション（設定のみ編集）: 設定から
+            # コンテキストを再導出して画面2以降を開けるようにする
+            ss.context = state.config_only_context(ss.score_file)
         ss.draft_prompt_done = True
         st.rerun()
     if c2.button("破棄して新規に始める", key="discard_btn"):
@@ -240,7 +244,28 @@ def screen_data() -> None:
             except Exception as err:
                 st.error(str(err))
 
-    default = ss.context["data_dir"] if ss.context else ""
+    with st.expander("⚙ 設定だけを編集する（データ不要）"):
+        st.caption(
+            "既存のスコア設定（score.jsonc / optimization設定jsonc）を読み込んで、"
+            "式・グループ定義・パーツの修正とエクスポートだけを行います。"
+            "値の候補表示とテスト計算にはデータかダミー一式の読み込みが必要です。"
+        )
+        up_cfg = st.file_uploader("設定 jsonc", type=["jsonc", "json"], key="cfgonly_up")
+        if up_cfg is not None and st.button(
+            "読み込んで編集（現在の編集内容を置き換え）", type="primary", key="cfgonly_btn"
+        ):
+            try:
+                sf, cfg_ctx = state.load_config_only(up_cfg.getvalue().decode("utf-8"))
+                ss.score_file = sf
+                state.ensure_uids(ss.score_file)
+                ss.context = cfg_ctx
+                ss.selected_part = 0
+                st.toast("設定を読み込みました（設定のみ編集）")
+                st.rerun()
+            except Exception as err:
+                st.error(str(err))
+
+    default = (ss.context.get("data_dir") or "") if ss.context else ""
     path = st.text_input("測定結果ディレクトリのパス（必須）", value=default, key="data_dir_input")
     st.caption(
         "optimization設定jsonc と dVtBudget係数jsonc は通常 result_tmp には含まれないため、"
@@ -284,6 +309,17 @@ def screen_data() -> None:
         return
 
     st.subheader("認識結果")
+    if ctx.get("config_only"):
+        st.info(
+            "設定のみ編集中（データ未読み込み）。式・グループ定義・パーツの修正と"
+            "エクスポートができます。テスト計算と値の候補表示には、上でデータか"
+            "ダミー一式を読み込んでください"
+        )
+        st.caption(
+            f"パーツ: {len(ss.score_file['score_parts'])} / "
+            f"type: {', '.join(ctx['part_types']) or 'なし'}"
+        )
+        return
     st.caption(f"走査したディレクトリ: `{ctx['data_dir']}`")
     if ctx.get("dummy_source"):
         st.info(f"ダミー一式 `{ctx['dummy_source']}` の Board/Chip 展開結果です（数値は無意味・構造検証のみ）")
@@ -601,7 +637,8 @@ def screen_parts() -> None:
 
     c1, c2, c3 = st.columns([2, 1, 1])
     new_type = c1.selectbox("新規パーツの type", ctx["part_types"], key="new_part_type")
-    if c2.button("追加（雛形を生成）", type="primary", key="add_part_btn"):
+    # 設定のみ編集でパーツが無い設定を読んだ場合など、type 候補が空なら追加不可
+    if c2.button("追加（雛形を生成）", type="primary", key="add_part_btn") and new_type:
         name = state.unique_part_name(sf)
         if new_type == "custom":
             part = state.custom_part_skeleton(name, ctx["custom_functions"])
@@ -1002,7 +1039,9 @@ def screen_test_export() -> None:
     st.caption("測定データのあるディレクトリでスコアを実際に計算します（エンジン compute_score_file を直接呼びます）")
     if ctx and ctx.get("dummy_source"):
         st.warning("ダミー展開データを読み込んでいます。テスト計算の数値に意味はありません（構造・設定の検証のみ）")
-    default_dir = ctx["data_dir"] if ctx else ""
+    if ctx and ctx.get("config_only"):
+        st.caption("設定のみ編集中: テスト計算にはデータディレクトリの指定（または画面1でのデータ/ダミー読み込み）が必要です")
+    default_dir = (ctx.get("data_dir") or "") if ctx else ""
     test_dir = st.text_input("データディレクトリ", value=default_dir, key="test_dir")
     c1, c2 = st.columns(2)
     generation = c1.text_input(
@@ -1013,7 +1052,9 @@ def screen_test_export() -> None:
         value=(ctx["coef_path"] if ctx else "") or "", key="test_coef",
     )
     if st.button("計算を実行", type="primary", key="run_btn"):
-        if not sf["score_parts"]:
+        if not test_dir.strip():
+            st.error("データディレクトリを入力してください")
+        elif not sf["score_parts"]:
             st.error("スコアパーツがありません")
         else:
             problems = state.validate_score_file(sf)

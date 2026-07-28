@@ -173,7 +173,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | 関数 | 内容 |
 |---|---|
 | `default_axis_order(catalog)` | 雛形の軸順（Measure→Label→Override→カテゴリ→数値→Board/Chip/Block。InBatchEpoch と DataName は除外 — DataName は Measure の表示名の扱い） |
-| `default_aggregation(axis, cands)` | カテゴリ/bool軸は先頭候補の filter、数値軸は mean。Measure は識別子軸なので先頭番号の filter（平均しない） |
+| `default_aggregation(axis, cands)` | カテゴリ/bool軸は先頭候補の filter、数値軸は mean。Measure は識別子軸なので filter（平均しない。候補が無い設定のみ編集では value 未入力の filter とし、入力まで検証エラーで促す） |
 | `part_skeleton(name, type, catalog)` | **そのまま計算が通る**雛形（全軸+デフォルトop）。相対化プリセットは無し（旧 Read_Override 自動ONは廃止）。Measure 軸のある type では Label/Override 軸も除外（Measure が一意に決める測定メタデータで、Measure 分割のペア結合を壊すため — docs/spec_change_dataname_measure.md 4節） |
 | `custom_part_skeleton(name, functions)` | custom パーツの雛形（先頭の関数+空params） |
 | `switch_part_type(part, new_type)` | type変更時の不整合フィールド除去（custom⇔通常、dVtBudget離脱時の `__dvtbudget__` 除去） |
@@ -216,6 +216,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `_resolve_optional_file(explicit, discover, label)` | 「明示指定優先・無ければ自動検出・**候補複数はエラー**」の共通ルール |
 | `build_context(data_dir, config, coef, geninfo, custom)` | 画面1の読み込み本体。空パス拒否、type/カタログ導出（Measure→dataName 対応の `measure_labels` 含む）、同梱ファイル解決、custom関数一覧化。ctx dict を返す。世代情報json の UI 入力欄は廃止 — UI は geninfo に None を渡し、`{Generation}.json` がディレクトリ内にあれば自動検出して診断にだけ使う |
 | `parse_chip_counts(text, n_boards)` | 「Board ごとの Chip 数」入力のパース（数1つ=全Board共通、カンマ区切り=Board別） |
+| `load_config_only(text)` / `config_only_context(sf)` | **設定だけ編集モード**: 設定 jsonc（score.jsonc / RunConfig 形式）だけから (score_file, context) を作る。カタログは設定が言及する軸名（値候補無し=自由入力）、measure_labels は labels 注記から回収（`_config_measure_labels`）。RunConfig なら旧 WLgroup も定義として取り込む。テスト計算以外の全機能がデータ無しで動く |
 | `expand_dummy_bundle(dir, chip_counts)` | ダミー一式を一時ディレクトリへ Board/Chip 展開（scorelib_param.dummy を呼ぶ。展開先は通常の build_context がそのまま読む） |
 | `extract_bundle_zip(bytes)` | 一式zipを一時ディレクトリへ展開（zip-slip対策、単一トップフォルダ降下） |
 | `locate_bundle_inputs(dir)` | 展開後ツリーを探索（深さ4）して測定ディレクトリ+同梱ファイルを特定。曖昧ならエラー |
@@ -253,14 +254,14 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `_snapshot` / `_track_history` / `_undo` | JSON文字列スナップショットによる undo（20件）。undo 時はウィジェット状態も破棄 |
 | `_offer_draft_restore` / `_autosave` | 起動時の下書き復元（データ読み込み・画面1入力欄も復元）/ 設定が変わった settled run ごとに自動保存 |
 | `_merged_catalog` / `_catalog_for_part` / `_with_group_axes` | カタログの合成（パーツtype用+グループ派生軸の追加） |
-| `screen_data` | 画面1。一式zip（`locate_bundle_inputs`）/ **ダミー一式の Board/Chip 展開**（Board数・BoardごとのChip数入力 → `expand_dummy_bundle` → 展開先を通常読み込み。ctx に dummy_source を記録）/ パス入力3+1（世代情報json 欄は廃止 — 本数はデータ由来）/ 認識結果（データ由来の軸本数と世代情報json の食い違い診断警告を含む）/ 本数警告 / 既存スコア設定の取り込み |
+| `screen_data` | 画面1。一式zip（`locate_bundle_inputs`）/ **設定だけ編集**（設定jsoncアップロード → `load_config_only`。データ無しで編集・エクスポート）/ **ダミー一式の Board/Chip 展開**（Board数・BoardごとのChip数入力 → `expand_dummy_bundle` → 展開先を通常読み込み。ctx に dummy_source を記録）/ パス入力3+1（世代情報json 欄は廃止 — 本数はデータ由来）/ 認識結果（データ由来の軸本数と世代情報json の食い違い診断警告を含む）/ 本数警告 / 既存スコア設定の取り込み |
 | `_order_entry_label` / `_order_editor` | orderの1行ラベル / 常時ドラッグ可能リスト+「編集するエントリ」プルダウン+常時表示エディタ（削除ボタン内蔵）。フォールバックは ✎/↑↓/✕ 行 |
 | `_add_entry_controls` | 軸追加・複合軸束ね・`__offset__`・仮想ステップ配置 |
 | `_custom_part_editor` | customパーツ用（関数プルダウン+params行エディタ） |
 | `screen_parts` | 画面2。**パーツ選択は _uid をキー付き状態("part_sel")で保持**（run開始時に選択が確定=マーカー即時追従。追加/複製は part_sel_pending で次runに予約）。検証NGは ⚠ |
 | `screen_sets` / `_selection_sets_section` / `_group_defs_section` | 画面3。選択セットとグループ定義の管理 |
 | `screen_compose` | 画面4。expression（パーツ名クリック挿入）+ constraintThreshold 行エディタ |
-| `screen_test_export` | 画面5。テスト計算（ダミー展開データ読み込み中は「数値は無意味」の警告表示）/ score.jsonc・パーツ単体エクスポート / インポート |
+| `screen_test_export` | 画面5。テスト計算（ダミー展開中は「数値は無意味」警告、設定のみ編集中はディレクトリ入力の案内・未入力は明確なエラー）/ score.jsonc・パーツ単体エクスポート / インポート |
 | `main` | サイドバー（undo・検証件数・エンジン版）→ 復元プロンプト → 画面 → **変更検知したら即 rerun**（全画面共通。画面ごとの実装忘れを構造的に防ぐ）→ 履歴・自動保存 |
 
 ---

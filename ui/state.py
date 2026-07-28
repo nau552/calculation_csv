@@ -100,9 +100,11 @@ def default_axis_order(catalog: Dict[str, Optional[list]], exclude: set[str] = f
 def default_aggregation(axis: str, candidates: Optional[list]) -> Dict[str, Any]:
     """カテゴリ/bool軸は先頭候補の filter から始める（意味があり、かつ必ず
     計算が通る）。数値・自由入力軸は mean から。Measure は数値だが識別子
-    （どの測定か）なので、量として平均せず先頭番号の filter から始める。"""
-    if axis == "Measure" and candidates:
-        return {"op": "filter", "value": candidates[0]}
+    （どの測定か）なので、量として平均せず filter から始める — 候補が無い
+    （設定のみ編集）場合は value 未入力の filter とし、ユーザが番号を入れる
+    まで検証エラーで促す（mean にすると測定が静かに混ざるため）。"""
+    if axis == "Measure":
+        return {"op": "filter", "value": candidates[0] if candidates else None}
     if candidates and isinstance(candidates[0], (str, bool)):
         return {"op": "filter", "value": candidates[0]}
     return {"op": "mean"}
@@ -1068,6 +1070,89 @@ def run_test_compute(
         d, run_config, coef, temps, custom_parts_path=custom_path,
         generation_info_path=geninfo_path,
     )
+
+
+def _config_measure_labels(part: Dict[str, Any]) -> Dict[int, str]:
+    """パーツの labels 注記（相対化・集計spec）から Measure 番号 → dataName を
+    回収する（設定のみ編集モードの表示用。設定に書かれている範囲だけ）。"""
+    out: Dict[int, str] = {}
+    specs = list(part.get("aggregations", {}).values()) + [part.get("relative") or {}]
+    for s in specs:
+        if not isinstance(s, dict):
+            continue
+        for k, v in (s.get("labels") or {}).items():
+            try:
+                out[int(k)] = str(v)
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
+def config_only_context(score_file: Dict[str, Any], generation: Optional[str] = None) -> Dict[str, Any]:
+    """「設定だけ編集」モードの context: データを読まず、**設定自身が言及する
+    軸名**からカタログを導出する（値候補は無し = 自由入力）。既存設定の微修正
+    （式・グループ定義・filter 値の変更等）とエクスポートに必要な情報は設定
+    ファイルが全部持っているため、これでエディタ・検証・エクスポートが動く。
+    テスト計算だけはデータ（またはダミー一式）の読み込みが必要。"""
+    group_names = set(score_file.get("groupDefs") or {})
+    catalogs: Dict[str, Dict[str, Optional[list]]] = {}
+    mlabels: Dict[str, Dict[int, str]] = {}
+    for part in score_file.get("score_parts", []):
+        type_ = part.get("type")
+        if not type_ or type_ == "custom":
+            continue
+        cat = catalogs.setdefault(type_, {})
+        for axis in sorted(_part_axis_names(part)):
+            if axis not in group_names and not axis.startswith("__"):
+                cat.setdefault(axis, None)
+        mlabels.setdefault(type_, {}).update(_config_measure_labels(part))
+    part_types = list(catalogs)
+    return {
+        "config_only": True,
+        "data_dir": None,
+        "types": part_types,
+        "part_types": part_types,
+        "catalogs": catalogs,
+        "measure_labels": mlabels,
+        "coef_path": None,
+        "coef_source": None,
+        "config_path": None,
+        "config_source": None,
+        "has_initial_temperature": False,
+        "generation": generation,
+        "wlgroup": {},
+        "wlgroup_defin_logical": True,
+        "wlgroup_weight": None,
+        "existing_score_file": None,
+        "geninfo": None,
+        "geninfo_path": None,
+        "geninfo_source": None,
+        "custom_path": None,
+        "custom_source": None,
+        "custom_functions": [],
+    }
+
+
+def load_config_only(text: str) -> tuple:
+    """設定 jsonc（score.jsonc または RunConfig 形式）だけから編集を開始する:
+    (score_file, config_only_context) を返す。RunConfig 形式なら旧来の
+    optimization.WLgroup も編集可能なグループ定義として取り込む
+    （データ読み込み経路の import_config_group_defs と同じ扱い）。"""
+    from scorelib_param.models import RunConfig
+
+    sf = import_score_file(text)
+    generation = None
+    raw = jsonc.loads(text)
+    if isinstance(raw, dict) and "optimization" in raw:
+        rc = RunConfig.model_validate(raw)  # import_score_file で検証済み = 成功する
+        generation = rc.Generation or None
+        import_config_group_defs(
+            sf,
+            dict(rc.optimization.WLgroup),
+            rc.optimization.WLgroupDefinLogical,
+            rc.optimization.WLgroupWeight,
+        )
+    return sf, config_only_context(sf, generation)
 
 
 def import_score_file(text: str) -> Dict[str, Any]:

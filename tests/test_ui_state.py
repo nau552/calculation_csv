@@ -626,6 +626,51 @@ def test_data_axis_counts_and_validation_counts(data_dir_mini):
     assert len(warns) == 1 and "100" in warns[0] and "6" in warns[0]
 
 
+# ------------------------------------------------------- 設定のみ編集モード
+
+def test_load_config_only_from_run_config(fixtures_dir):
+    """設定 jsonc だけからの編集開始: データ無しで検証・編集・エクスポートに
+    必要な情報が揃うこと。"""
+    text = (fixtures_dir / "config.jsonc").read_text(encoding="utf-8")
+    sf, ctx = state.load_config_only(text)
+    assert ctx["config_only"] is True
+    assert ctx["data_dir"] is None
+    assert sf["score_parts"]
+    # 旧来の optimization.WLgroup も編集可能なグループ定義として取り込まれる
+    assert "WLgroup" in sf["groupDefs"]
+    # カタログは設定が言及する軸名（値候補は無し = 自由入力）
+    assert ctx["part_types"]
+    cat = ctx["catalogs"][ctx["part_types"][0]]
+    assert cat and all(v is None for v in cat.values())
+    assert not any(a.startswith("__") for a in cat)  # 仮想ステップは軸ではない
+    # 検証・エクスポートはデータ非依存で動く
+    assert state.validate_score_file(sf) == []
+    assert state.score_file_to_jsonc(sf)
+
+
+def test_load_config_only_from_score_jsonc(sf, catalog):
+    """エクスポートした score.jsonc 形式も読める（式・グループ定義の微修正 →
+    再エクスポートの往復）。"""
+    sf["score_parts"].append(state.part_skeleton("p", "FBC", catalog))
+    sf["expression"] = "p"
+    text = state.score_file_to_jsonc(sf)
+    sf2, ctx = state.load_config_only(text)
+    assert ctx["config_only"] is True
+    sf2["expression"] = "p * 2"
+    assert state.validate_score_file(sf2) == []
+    assert "p * 2" in state.score_file_to_jsonc(sf2)
+
+
+def test_config_only_skeleton_measure_requires_input():
+    """設定のみ編集の雛形: Measure は候補が無いので value 未入力の filter になり、
+    番号を入れるまで検証エラーで促される（mean だと測定が静かに混ざるため）。"""
+    catalog = {"Measure": None, "State": None, "Board": None}
+    part = state.part_skeleton("p", "X", catalog)
+    assert part["aggregations"]["Measure"] == {"op": "filter", "value": None}
+    problems = state.validate_part(part)
+    assert any("filter" in p and "value" in p for p in problems)
+
+
 # --------------------------------------------------- readable error messages
 
 def test_validation_error_names_the_part(sf):
