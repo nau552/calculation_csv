@@ -137,6 +137,10 @@ git config core.hooksPath scripts/hooks         # push前テストのフック�
 5. **タグの状態から** `scorelib_param/` + `custom_parts.py` を SVN のスクリプト領域へ
    同期する（タグ = SVN 側で動いている版の git 上の対応点。版ズレ調査・
    ロールバックは `git checkout ver.X.Y.Z`）
+6. **UI サーバも同じタグから更新する**（UI はエンジンを同梱しており、放置すると
+   UI 同梱エンジンと SVN が実際にズレる。UI に変更が無くても行う）。
+   なおエンジンと UI が同時に変わったリリースは `ver.X.Y.Z` 1つでよい
+   （UI 変更もその CHANGELOG 節に書く。`ui-*` タグを重ねない）
 
 **UI のみのリリース（UI サーバ更新）** — 変更が ui/ に閉じているとき:
 
