@@ -5,7 +5,8 @@
 コード変更（機能追加・仕様変更・バグ修正）は、**以下を済ませるまで「完了」と報告しない**。
 ユーザーに指摘されてからやるのではなく、実装の一部として自発的に行う。
 
-1. **テスト**: 新機能・変更のテストを追加し、`.venv/Scripts/python -m pytest` 全件パス。
+1. **テスト**: 新機能・変更のテストを追加し、`.venv/bin/python -m pytest`（Windows は
+   `.venv/Scripts/`）全件パス。
 2. **ドキュメント追随更新**（docs/README.md の索引にある運用どおり）:
    - `docs/code_reference.md` — 関数・モジュールの追加/変更をすべて反映（追随更新が運用）
    - `docs/testing_guide.md` — テストファイルの追加/変更を反映（同上）
@@ -41,6 +42,8 @@
 
 ## 環境メモ
 
-- テスト: `.venv/Scripts/python -m pytest`（全件パスが完了条件）
-- UI 起動: `.venv/Scripts/streamlit run ui/app.py`
+- コマンド表記は Ubuntu（`.venv/bin/`）が主。Windows マシンで作業するときは
+  `.venv/Scripts/` に読み替える（README セットアップ参照）
+- テスト: `.venv/bin/python -m pytest`（全件パスが完了条件）
+- UI 起動: `.venv/bin/streamlit run ui/app.py`
 - コミット・push・タグ付けはユーザーの指示があるときだけ行う

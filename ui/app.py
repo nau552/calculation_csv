@@ -1,6 +1,6 @@
 """スコア設計UI (score_gui Phase1).
 
-起動: .venv/Scripts/streamlit run ui/app.py
+起動: .venv/bin/streamlit run ui/app.py（Windows は .venv/Scripts/）
 
 サイドバーで5画面を切り替える。判断ロジックはすべて ui/state.py と
 scorelib_param 側にあり、本ファイルはウィジェット配置と session_state の

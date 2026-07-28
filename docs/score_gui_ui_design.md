@@ -34,7 +34,7 @@ Streamlit依存のコードは一切置かない。`introspect.py` はデータ�
 （`test_introspect.py` / `test_ui_state.py` / `test_ui_app.py`）で区別する。
 UIテストが増えたら `tests/ui/` へのサブディレクトリ分割を検討する。
 
-起動: `.venv/Scripts/streamlit run ui/app.py`（依存に `streamlit` を追加）
+起動: `.venv/bin/streamlit run ui/app.py`（Windows は `.venv/Scripts/`）（依存に `streamlit` を追加）
 
 設計原則: **UIはエンジンの薄いラッパー**とする。判断ロジック（軸候補の導出、
 検証、jsonc入出力、計算）はすべて scorelib_param 側の関数として実装し、

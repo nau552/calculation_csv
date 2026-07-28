@@ -297,6 +297,14 @@ v0.4.0 の機能群（集計時重み・変換ステップ拡張・Physical 記�
   開発と本番の版ズレが消えたため **CI は 3.13 のみに簡素化**。移行で表面化した
   tarfile の 3.14 非互換予告は staging.py に filter="data" を指定して先回り
   （CHANGELOG「未リリース」）。§8 の「venv は 3.11」記載は旧情報。
+- **続報（同日）: 社内配置の具体化**。実運用トポロジ（開発=社内 Ubuntu サーバ、
+  UI=Ubuntu 実行サーバ、エンジン=SVN+miniforge）に合わせ、README のコマンド表記を
+  **Ubuntu（.venv/bin/）主体**に統一（Windows は読み替え注記でサブ扱い）。
+  「UI 実行サーバの立て方」を新設: GitLab のタグから **必要4点のみ**
+  （scorelib_param / ui / custom_parts.py / pyproject.toml）を git archive で取り出し、
+  docs 等をサーバに持ち込まない配置+ headless 起動 + systemd 常駐化の例。
+  未確認事項（ポート開放・認証の要否・python3.13 の有無・Docker の可否）は
+  README 内に「初回に確認が必要なこと」として明記。
 - **続報（同日）: 開発運用の整備**。trunk-based のブランチ方針と リリース手順
   （版上げ→CHANGELOG→タグ→SVN同期）を README に明文化。GitHub Actions
   （Python 3.11/3.13 マトリクスで pytest）、CHANGELOG.md 新設、pre-push フック

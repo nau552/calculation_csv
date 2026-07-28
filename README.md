@@ -63,14 +63,20 @@ tests/
   test_ui_state.py          # UI編集ロジック（雛形が編集なしで計算可能なこと等）
   test_ui_app.py            # Streamlit AppTestによる画面のスモークテスト
 pyproject.toml              # パッケージ定義（pip install -e . 用）
-.venv/                      # ローカルvenv（Python 3.11 + polars/pydantic/simpleeval/pytest）
+.venv/                      # ローカルvenv（Python 3.13 + polars/pydantic/simpleeval/pytest 等）
 ```
 
-## セットアップ
+## セットアップ（開発環境）
+
+本書のコマンドはすべて **Ubuntu（bash）表記**。Windows（サブ環境）では
+`.venv/bin/` を `.venv/Scripts/` に読み替える。
 
 ```bash
-python -m venv .venv
-.venv/Scripts/python -m pip install -e ".[dev]"
+git clone <社内GitLabのURL> scorelib && cd scorelib
+python3.13 -m venv .venv                        # 3.13 が無ければ miniforge: conda create -n dev python=3.13
+.venv/bin/python -m pip install -e ".[dev]"
+.venv/bin/python -m pytest                      # 264件パスすること
+git config core.hooksPath scripts/hooks         # push前テストのフック有効化（clone ごとに1回）
 ```
 
 ※ 開発環境も本番エンジン環境（miniforge）も Python 3.13（2026-07-28 に開発機を
@@ -130,8 +136,8 @@ python -m venv .venv
 
 | 設置先 | 置くもの | インストールするもの |
 |---|---|---|
-| **開発PC**（コードの正） | リポジトリ全体（git clone） | `pip install -e ".[dev]"`（venv） |
-| **UIサーバ / UI起動PC** | リポジトリ全体（clone か zip 展開。最低限は `scorelib_param/` + `ui/` + `custom_parts.py` + `pyproject.toml`） | `pip install -e ".[ui]"` → `streamlit run ui/app.py` |
+| **開発環境（社内 Ubuntu サーバ）**（コードの正） | リポジトリ全体（社内 GitLab から git clone） | `pip install -e ".[dev]"`（venv） |
+| **UI 実行サーバ（Ubuntu）** | **必要4点のみ**: `scorelib_param/` + `ui/` + `custom_parts.py` + `pyproject.toml`（docs/ tests/ 等は置かない — 取り出し方は下記「UI 実行サーバの立て方」） | `pip install -e ".[ui]"` → `streamlit run ui/app.py`（常駐化も下記） |
 | **最適化サーバ（SVN kicOpt）** | `scorelib_param/`（パッケージ丸ごと）→ **kicOpt/scorelib_param/**、`custom_parts.py` → **kicOpt/custom_parts.py**、ブリッジ関数 → **kicOpt/optlib/turbo.py** に貼る | エンジン用 python 環境に `polars` `pydantic` `simpleeval` の3つだけ（下記）。**scorelib_param 自体は pip install しない**（ブリッジが PYTHONPATH で解決） |
 
 補足:
@@ -147,6 +153,67 @@ python -m venv .venv
   `scripts/benchmark_batch.py` だけは実測に使うなら置いてもよい（任意）。
 - `custom_parts.py` の探索位置は「scorelib_param/ の親」= kicOpt/ 直下
   （コードの固定規約。custom パーツ未使用なら無くても動く）。
+
+### UI 実行サーバの立て方（Ubuntu）
+
+方針: **サーバに置くのは必要4点だけ**（docs/ tests/ scripts/ 等のドキュメント・
+開発物は持ち込まない）。UIサーバは社内 GitLab に到達できるので、タグから
+必要部分だけを取り出して配置する:
+
+```bash
+# 配置（初回・更新とも同じ。ver.X.Y.Z はリリースタグ）
+git clone --depth 1 --branch ver.X.Y.Z <社内GitLabのURL> /tmp/scorelib-src
+mkdir -p /opt/scorelib_ui
+git -C /tmp/scorelib-src archive HEAD scorelib_param ui custom_parts.py pyproject.toml \
+    | tar -x -C /opt/scorelib_ui
+rm -rf /tmp/scorelib-src        # clone は一時利用のみ（docs等をサーバに残さない）
+
+# 初回のみ: venv と依存（python3.13 が無ければ miniforge で用意）
+cd /opt/scorelib_ui
+python3.13 -m venv .venv
+.venv/bin/python -m pip install -e ".[ui]"
+
+# 起動（サーバ上にブラウザは無いので headless、他PCから届くよう 0.0.0.0）
+.venv/bin/streamlit run ui/app.py \
+    --server.address 0.0.0.0 --server.port 8501 --server.headless true
+```
+
+利用者は自分の PC のブラウザで `http://<UIサーバ>:8501` を開く。
+常駐化する場合は systemd（例）:
+
+```ini
+# /etc/systemd/system/scorelib-ui.service
+[Unit]
+Description=scorelib score design UI
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/scorelib_ui
+ExecStart=/opt/scorelib_ui/.venv/bin/streamlit run ui/app.py --server.address 0.0.0.0 --server.port 8501 --server.headless true
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+（`systemctl enable --now scorelib-ui` で起動・自動起動。
+更新時は配置コマンド再実行 → `systemctl restart scorelib-ui`）
+
+**初回に社内で確認が必要なこと**（未確認事項。判明したらここを更新する）:
+
+1. 利用者の PC から UIサーバの 8501 番（または選んだポート）に届くか
+   （ファイアウォール・社内NWポリシー）
+2. 認証の要否: **Streamlit 自体に認証機能は無い**。社内NW内・認証なしで
+   許容されるか。必要ならリバースプロキシ等の別対応になる
+3. UIサーバの python3.13 の有無（無ければ miniforge:
+   `conda create -n ui python=3.13` → venv の代わりにその環境へ pip install）
+4. pip の到達性（開発サーバで普段どおり pip install できているなら
+   同じ設定で通る見込み）
+
+Docker 化（イメージに4点+依存を焼き込み、サーバにはイメージだけ置く形）は
+上記が動いた後の選択肢: 環境をイメージに固定でき、更新が「イメージ差し替え」の
+1操作になる。docker build の可否・base イメージの取得経路（閉域網の場合は
+社内レジストリ）の確認が取れたら移行を検討する。
 
 ### 最適化サーバのエンジン用 python 環境（miniforge）
 
@@ -224,7 +291,7 @@ python scripts/convert_dvtbudget_coef.py sample.py dvtbudget_coef.jsonc
 ## スコア設計UI（Streamlit）
 
 ```bash
-.venv/Scripts/streamlit run ui/app.py
+.venv/bin/streamlit run ui/app.py
 ```
 
 **配置方針**（詳細は `docs/score_gui_ui_design.md` 2.1節）: コードの正は git（本リポジトリ、
@@ -305,7 +372,7 @@ CLI（stderr / `--version`）に表示される — SVN側エンジンとの版�
 ダミー一式が手元に無い開発・検証時は、正データから疑似ダミーを作れる:
 
 ```bash
-.venv/Scripts/python scripts/make_pseudo_dummy.py result_tmp dummy_bundle
+.venv/bin/python scripts/make_pseudo_dummy.py result_tmp dummy_bundle
 ```
 
 **ドラッグ&ドロップ並べ替え**: `streamlit-sortables` が入っていると（`pip install -e ".[ui]"` で入る）、
@@ -712,7 +779,7 @@ Board/Stateを相対化より後に集計すること。
 ## テスト
 
 ```bash
-.venv/Scripts/python -m pytest tests/ -q     # 258件、全パス
+.venv/bin/python -m pytest tests/ -q     # 264件、全パス
 ```
 
 ### 何をどう検証しているか
@@ -871,7 +938,7 @@ FBCに無い軸でもエンジン側の変更なしで扱える）。
 そのまま実行できるスコア設計例として `config_mini.jsonc` をリポジトリ直下に用意した:
 
 ```bash
-.venv/Scripts/python -m scorelib_param.cli \
+.venv/bin/python -m scorelib_param.cli \
     --config config_mini.jsonc \
     --data-dir tests/data/result_tmp_mini \
     --dvtbudget-coef dvtbudget_coef.jsonc \
