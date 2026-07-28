@@ -111,7 +111,8 @@ python -m venv .venv
 2. `scorelib_param/__init__.py` の `__version__` を上げる（上記の判断基準）
 3. `CHANGELOG.md` にこの版の変更点を追記する
 4. コミットして **タグを打つ**: `git tag -a ver.X.Y.Z -m "変更の要旨"` →
-   `git push && git push --tags`
+   `git push --follow-tags`（コミットと注釈付きタグを1コマンドで push。
+   PowerShell 5.1 では `&&` が使えないため連結しない）
 5. **タグの状態から** `scorelib_param/` + `custom_parts.py` を SVN のスクリプト領域へ
    同期する（タグ = SVN 側で動いている版の git 上の対応点。版ズレ調査・
    ロールバックは `git checkout ver.X.Y.Z`）
