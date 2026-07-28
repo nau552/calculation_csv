@@ -661,6 +661,14 @@ def test_load_config_only_from_score_jsonc(sf, catalog):
     assert "p * 2" in state.score_file_to_jsonc(sf2)
 
 
+def test_is_run_config_text(fixtures_dir, sf, catalog):
+    """①の設定を build_context の config として渡せる形式かの判定。"""
+    assert state.is_run_config_text((fixtures_dir / "config.jsonc").read_text(encoding="utf-8"))
+    sf["score_parts"].append(state.part_skeleton("p", "FBC", catalog))
+    assert not state.is_run_config_text(state.score_file_to_jsonc(sf))  # ScoreFile 形式
+    assert not state.is_run_config_text("not json at all")
+
+
 def test_config_only_skeleton_measure_requires_input():
     """設定のみ編集の雛形: Measure は候補が無いので value 未入力の filter になり、
     番号を入れるまで検証エラーで促される（mean だと測定が静かに混ざるため）。"""
@@ -669,6 +677,41 @@ def test_config_only_skeleton_measure_requires_input():
     assert part["aggregations"]["Measure"] == {"op": "filter", "value": None}
     problems = state.validate_part(part)
     assert any("filter" in p and "value" in p for p in problems)
+
+
+# ----------------------------------------------------- アップロード入力経路
+
+def test_save_upload():
+    from pathlib import Path
+
+    p = Path(state.save_upload("config.jsonc", b"{}"))
+    assert p.is_file()
+    assert p.name == "config.jsonc"
+    assert p.read_bytes() == b"{}"
+    # パス成分は捨てられる（アップロード名による書き込み先操作の防止）
+    p2 = Path(state.save_upload("../evil.py", b"x"))
+    assert p2.name == "evil.py"
+
+
+def test_dummy_zip_upload_flow(tmp_path, data_dir_mini):
+    """ダミー一式を zip でアップロードする経路（画面1）: 展開 → Board/Chip
+    複製 → 通常読み込み、が通しで動くこと。フォルダごと圧縮された zip の
+    「トップに1フォルダ」形も extract_bundle_zip が吸収する。"""
+    import io
+    import zipfile
+
+    from scorelib_param.dummy import make_pseudo_dummy
+
+    pseudo = make_pseudo_dummy(data_dir_mini, tmp_path / "pseudo")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for f in pseudo.iterdir():
+            z.write(f, f"dummy_bundle/{f.name}")
+    src = state.extract_bundle_zip(buf.getvalue())
+    expanded = state.expand_dummy_bundle(src, [2, 2])
+    ctx = state.build_context(expanded)
+    assert ctx["catalogs"]["FBC"]["Board"] == [0, 1]
+    assert ctx["catalogs"]["FBC"]["Measure"] == [0, 1, 2, 3]
 
 
 # --------------------------------------------------- readable error messages

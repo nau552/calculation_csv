@@ -18,6 +18,10 @@ def at(tmp_path, monkeypatch):
     apptest = pytest.importorskip("streamlit.testing.v1").AppTest
     # ユーザの実際の下書きファイルに触れないよう保存先を差し替える
     monkeypatch.setattr(state, "DRAFT_PATH", tmp_path / "draft.jsonc")
+    # AppTest は file_uploader を操作できないため、開発者モード
+    # （パス指定トグル）でテストする。一般ユーザ表示のテストは
+    # test_paths_hidden_without_dev_option が env を消して確認する
+    monkeypatch.setenv("SCORELIB_UI_DEV", "1")
     t = apptest.from_file(APP, default_timeout=60)
     t.run()
     assert not t.exception
@@ -25,6 +29,8 @@ def at(tmp_path, monkeypatch):
 
 
 def _load_data(at, data_dir):
+    # アップロードは AppTest から操作できないため「サーバ上のパスで指定」を使う
+    at.toggle(key="paths_mode").set_value(True).run()
     at.text_input(key="data_dir_input").set_value(str(data_dir))
     at.button(key="load_btn").click().run()
     assert not at.exception
@@ -35,13 +41,31 @@ def test_app_starts(at):
     assert at.sidebar.radio(key="screen").value == "1. データ読み込み"
 
 
-def test_load_empty_dir_shows_error(at):
+def test_load_without_inputs_shows_error(at):
+    """アップロードモード（既定）で何も入れずに読み込み → zip を促すエラー。
+    パスモードではパス入力を促すエラー。"""
+    at.button(key="load_btn").click().run()
+    assert not at.exception
+    assert any("アップロードしてください" in e.value for e in at.error)
+    at.toggle(key="paths_mode").set_value(True).run()
     at.button(key="load_btn").click().run()
     assert not at.exception
     assert any("入力してください" in e.value for e in at.error)
 
 
+def test_paths_hidden_without_dev_option(at, monkeypatch):
+    """一般ユーザ向けの起動（--dev / SCORELIB_UI_DEV 無し）ではパス指定の
+    トグル自体が存在せず、画面はアップロードのみ。"""
+    monkeypatch.delenv("SCORELIB_UI_DEV", raising=False)
+    at.run()
+    assert not at.exception
+    assert len(at.toggle) == 0
+    at.button(key="load_btn").click().run()
+    assert any("アップロードしてください" in e.value for e in at.error)
+
+
 def test_load_bad_dir_shows_error(at):
+    at.toggle(key="paths_mode").set_value(True).run()
     at.text_input(key="data_dir_input").set_value("no/such/dir")
     at.button(key="load_btn").click().run()
     assert not at.exception
@@ -105,6 +129,7 @@ def test_load_warns_when_groups_exceed_axis_count(at, data_dir_mini, fixtures_di
     """config.jsonc は WL 20 までのグループを定義しているが、mini データの WL は
     0..5（6本）: 世代情報 json 無しでも、データ由来の本数で読み込み直後に警告が
     出ること（本数はデータから導出 — 世代情報の入力欄は廃止済み）。"""
+    at.toggle(key="paths_mode").set_value(True).run()
     at.text_input(key="data_dir_input").set_value(str(data_dir_mini))
     at.text_input(key="config_path_input").set_value(str(fixtures_dir / "config.jsonc"))
     at.button(key="load_btn").click().run()
@@ -113,6 +138,7 @@ def test_load_warns_when_groups_exceed_axis_count(at, data_dir_mini, fixtures_di
 
 
 def test_config_wlgroup_imported_as_group_def(at, data_dir_mini, fixtures_dir):
+    at.toggle(key="paths_mode").set_value(True).run()
     at.text_input(key="data_dir_input").set_value(str(data_dir_mini))
     at.text_input(key="config_path_input").set_value(str(fixtures_dir / "config.jsonc"))
     at.button(key="load_btn").click().run()
@@ -188,22 +214,27 @@ def test_relative_off_removes_explicit_step_via_ui(at, data_dir_mini):
     assert not at.error
 
 
-def test_dummy_expand_flow_end_to_end(at, tmp_path, data_dir_mini):
+def test_dummy_expand_flow_end_to_end(at, tmp_path, data_dir_mini, dvtbudget_coef_path):
     """画面1のダミー展開 → 雛形作成 → 相対化ON（Measure 分割の既定値と
     labels 注記）→ テスト計算、まで一気通貫（docs/spec_change_dataname_measure.md
     プラン4の実体）。"""
     from scorelib_param.dummy import make_pseudo_dummy
 
     pseudo = make_pseudo_dummy(data_dir_mini, tmp_path / "pseudo")
+    at.toggle(key="paths_mode").set_value(True).run()
+    at.radio(key="data_mode").set_value("ダミー（測定前）").run()
     at.text_input(key="dummy_dir_input").set_value(str(pseudo))
     at.number_input(key="dummy_boards").set_value(2)
     at.text_input(key="dummy_chips").set_value("2,3")
-    at.button(key="dummy_btn").click().run()
+    # ダミーでも係数を渡せる（実測パスモードと同じ2欄 — dVtBudget の構造テスト用）
+    at.text_input(key="coef_path_input").set_value(str(dvtbudget_coef_path))
+    at.button(key="load_btn").click().run()
     assert not at.exception
     ctx = at.session_state["context"]
     assert ctx["dummy_source"] == str(pseudo)
     assert ctx["catalogs"]["FBC"]["Board"] == [0, 1]
     assert ctx["catalogs"]["FBC"]["Measure"] == [0, 1, 2, 3]
+    assert "dVtBudget" in ctx["part_types"]
 
     at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
     at.button(key="add_part_btn").click().run()
@@ -250,6 +281,7 @@ def test_config_only_editing_flow(at, fixtures_dir):
 
 def test_custom_part_end_to_end(at, data_dir_mini, fixtures_dir):
     """custom_parts.py 付きで読み込み、type=custom パーツを作成して計算する。"""
+    at.toggle(key="paths_mode").set_value(True).run()
     at.text_input(key="data_dir_input").set_value(str(data_dir_mini))
     at.text_input(key="custom_path_input").set_value(str(fixtures_dir / "custom_parts.py"))
     at.button(key="load_btn").click().run()
@@ -289,6 +321,7 @@ def test_undo_reverts_last_action(at, data_dir_mini):
 
 
 def test_draft_autosaved_and_restored(at, data_dir_mini, dvtbudget_coef_path, tmp_path):
+    at.toggle(key="paths_mode").set_value(True).run()
     at.text_input(key="data_dir_input").set_value(str(data_dir_mini))
     at.text_input(key="coef_path_input").set_value(str(dvtbudget_coef_path))
     at.button(key="load_btn").click().run()
@@ -302,7 +335,7 @@ def test_draft_autosaved_and_restored(at, data_dir_mini, dvtbudget_coef_path, tm
     assert draft["context_inputs"]["coef_path"] == str(dvtbudget_coef_path.resolve())
 
     # 別セッション（同じ下書きパス）: 復元で score file・データ読み込み
-    # コンテキスト・**画面1の見えている入力欄**まで戻ること（入力欄が空だと
+    # コンテキスト・**パスモードの入力欄**まで戻ること（入力欄が空だと
     # 読み込みボタンの再押下で係数パスの指定が外れてしまう）
     apptest = pytest.importorskip("streamlit.testing.v1").AppTest
     at2 = apptest.from_file(APP, default_timeout=60)
@@ -312,5 +345,6 @@ def test_draft_autosaved_and_restored(at, data_dir_mini, dvtbudget_coef_path, tm
     assert [p["name"] for p in at2.session_state["score_file"]["score_parts"]] == ["part_1"]
     assert at2.session_state["context"]["types"] == ["FBC", "tR"]
     assert "dVtBudget" in at2.session_state["context"]["part_types"]
+    at2.toggle(key="paths_mode").set_value(True).run()
     assert at2.text_input(key="data_dir_input").value == str(data_dir_mini.resolve())
     assert at2.text_input(key="coef_path_input").value == str(dvtbudget_coef_path.resolve())

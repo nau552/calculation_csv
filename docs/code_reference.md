@@ -216,9 +216,10 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `_resolve_optional_file(explicit, discover, label)` | 「明示指定優先・無ければ自動検出・**候補複数はエラー**」の共通ルール |
 | `build_context(data_dir, config, coef, geninfo, custom)` | 画面1の読み込み本体。空パス拒否、type/カタログ導出（Measure→dataName 対応の `measure_labels` 含む）、同梱ファイル解決、custom関数一覧化。ctx dict を返す。世代情報json の UI 入力欄は廃止 — UI は geninfo に None を渡し、`{Generation}.json` がディレクトリ内にあれば自動検出して診断にだけ使う |
 | `parse_chip_counts(text, n_boards)` | 「Board ごとの Chip 数」入力のパース（数1つ=全Board共通、カンマ区切り=Board別） |
-| `load_config_only(text)` / `config_only_context(sf)` | **設定だけ編集モード**: 設定 jsonc（score.jsonc / RunConfig 形式）だけから (score_file, context) を作る。カタログは設定が言及する軸名（値候補無し=自由入力）、measure_labels は labels 注記から回収（`_config_measure_labels`）。RunConfig なら旧 WLgroup も定義として取り込む。テスト計算以外の全機能がデータ無しで動く |
+| `load_config_only(text)` / `config_only_context(sf)` / `is_run_config_text(text)` | **設定だけ編集モード**: 設定 jsonc（score.jsonc / RunConfig 形式）だけから (score_file, context) を作る。カタログは設定が言及する軸名（値候補無し=自由入力）、measure_labels は labels 注記から回収（`_config_measure_labels`）。RunConfig なら旧 WLgroup も定義として取り込む。テスト計算以外の全機能がデータ無しで動く。is_run_config_text は①の設定を build_context の config として渡せる形式かの判定 |
 | `expand_dummy_bundle(dir, chip_counts)` | ダミー一式を一時ディレクトリへ Board/Chip 展開（scorelib_param.dummy を呼ぶ。展開先は通常の build_context がそのまま読む） |
-| `extract_bundle_zip(bytes)` | 一式zipを一時ディレクトリへ展開（zip-slip対策、単一トップフォルダ降下） |
+| `extract_bundle_zip(bytes)` | 一式zipを一時ディレクトリへ展開（zip-slip対策、単一トップフォルダ降下）。ダミー一式の zip アップロードにも使う |
+| `save_upload(filename, data)` | アップロード1ファイルを一時ディレクトリへ保存してパスを返す（パス欄への自動反映用。ファイル名のパス成分は捨てる） |
 | `locate_bundle_inputs(dir)` | 展開後ツリーを探索（深さ4）して測定ディレクトリ+同梱ファイルを特定。曖昧ならエラー |
 
 **表示用ラベル（純関数にしてある理由: D&D部品の描画はAppTestから見えないため）**
@@ -254,7 +255,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `_snapshot` / `_track_history` / `_undo` | JSON文字列スナップショットによる undo（20件）。undo 時はウィジェット状態も破棄 |
 | `_offer_draft_restore` / `_autosave` | 起動時の下書き復元（データ読み込み・画面1入力欄も復元）/ 設定が変わった settled run ごとに自動保存 |
 | `_merged_catalog` / `_catalog_for_part` / `_with_group_axes` | カタログの合成（パーツtype用+グループ派生軸の追加） |
-| `screen_data` | 画面1。一式zip（`locate_bundle_inputs`）/ **設定だけ編集**（設定jsoncアップロード → `load_config_only`。データ無しで編集・エクスポート）/ **ダミー一式の Board/Chip 展開**（Board数・BoardごとのChip数入力 → `expand_dummy_bundle` → 展開先を通常読み込み。ctx に dummy_source を記録）/ パス入力3+1（世代情報json 欄は廃止 — 本数はデータ由来）/ 認識結果（データ由来の軸本数と世代情報json の食い違い診断警告を含む）/ 本数警告 / 既存スコア設定の取り込み |
+| `screen_data` / `_handle_load` / `_DEV_MODE` | 画面1。**「① スコア設定（設定jsoncアップロード = 編集の出発点。両形式対応・編集状態を置き換え）+ ② データ（実測一式zip / ダミー一式+Board・Chip数 / なし の radio）」の2段 + 読み込みボタン1つ**。係数・custom の追加は「係数・自作関数を追加する」expander（パスモードではパス欄 — 実測・ダミー共通の2欄）。**一般ユーザの画面はアップロードのみ**で、パス指定は開発者モード（`-- --dev` / `SCORELIB_UI_DEV=1`）のトグルでのみ現れ、オン時は各アップローダがパス欄に置き換わる（併記しない）。優先順位: 個別アップロード > ①の設定（RunConfig 形式なら config_path としても使用 — `is_run_config_text`）> zip 内・パス指定。②なし+①あり = `load_config_only`（設定のみ編集）。認識結果（データ由来の軸本数と世代情報json の食い違い診断警告を含む）は共通で下部に表示 |
 | `_order_entry_label` / `_order_editor` | orderの1行ラベル / 常時ドラッグ可能リスト+「編集するエントリ」プルダウン+常時表示エディタ（削除ボタン内蔵）。フォールバックは ✎/↑↓/✕ 行 |
 | `_add_entry_controls` | 軸追加・複合軸束ね・`__offset__`・仮想ステップ配置 |
 | `_custom_part_editor` | customパーツ用（関数プルダウン+params行エディタ） |

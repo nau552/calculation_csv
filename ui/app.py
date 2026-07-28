@@ -9,6 +9,7 @@ scorelib_param 側にあり、本ファイルはウィジェット配置と sess
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -28,6 +29,12 @@ SCREENS = [
     "5. テスト実行・エクスポート",
 ]
 VIRTUAL_FIXED = ("__relative__", "__dvtbudget__")
+
+# 開発者モード: `streamlit run ui/app.py -- --dev` または環境変数
+# SCORELIB_UI_DEV=1 で起動したときだけ「サーバ上のパスで指定する」トグルを出す。
+# 一般ユーザはブラウザから使う（UIサーバ上で実行することは無い）ため、
+# パス指定は UI と同じマシンにファイルがある開発者・管理者専用の入力手段
+_DEV_MODE = "--dev" in sys.argv or os.environ.get("SCORELIB_UI_DEV") == "1"
 
 
 HISTORY_LIMIT = 20
@@ -127,6 +134,7 @@ def _offer_draft_restore() -> None:
             # データ無しで編集していたセッション（設定のみ編集）: 設定から
             # コンテキストを再導出して画面2以降を開けるようにする
             ss.context = state.config_only_context(ss.score_file)
+            ss["data_mode"] = _DATA_MODES[2]
         ss.draft_prompt_done = True
         st.rerun()
     if c2.button("破棄して新規に始める", key="discard_btn"):
@@ -176,133 +184,223 @@ def _with_group_axes(catalog: dict, sf: dict) -> dict:
 
 
 # ------------------------------------------------------------ 画面1: 読み込み
+#
+# 構成方針（docs/score_gui_ui_design.md 画面1）:
+# - 入力は「① スコア設定（編集の出発点）+ ② データ（実測 / ダミー / なし）」の
+#   2段 + 読み込みボタン1つ
+# - **入力手段は併記しない**: 同じものを2通りの枠（アップロードとパス）で同時に
+#   見せると、どちらを使えばよいかで必ず迷う。一般ユーザの画面はアップロードのみで、
+#   パス指定は開発者モード（_DEV_MODE）のトグルでのみ現れ、オンにすると各
+#   アップローダが**パス欄に置き換わる**（並ばない）
+# - UI 文言は動作の説明だけを書く（「普段は〜」のようなメタ語りは書かない）
+
+_DATA_MODES = ["実測データ", "ダミー（測定前）", "なし"]
+
+
+def _import_wlgroup_toast(ss) -> None:
+    if state.import_config_group_defs(
+        ss.score_file, ss.context["wlgroup"],
+        ss.context.get("wlgroup_defin_logical", True),
+        ss.context.get("wlgroup_weight"),
+    ):
+        st.toast("設定jsoncの WLgroup をグループ定義として取り込みました（画面3で編集できます）")
+
+
+def _handle_load(ss, paths_mode, data_mode, up_start, config_in,
+                 up_zip, up_dummy, up_coef, up_custom, paths, n_boards, chips_text) -> None:
+    """「読み込み」ボタンの本体。①（設定）と②（データ）を組み合わせて
+    context / score_file を作る。①の設定が RunConfig 形式なら config としても
+    最優先で使う（zip 内の設定より優先）。"""
+    try:
+        # ① の設定テキスト（アップロード or パス）
+        start_text = None
+        start_path = None
+        if up_start is not None:
+            start_text = up_start.getvalue().decode("utf-8")
+            start_path = state.save_upload(up_start.name, up_start.getvalue())
+        elif paths_mode and str(config_in or "").strip():
+            p = Path(str(config_in).strip())
+            if not p.is_file():
+                raise ValueError(f"設定 jsonc が見つかりません: {p}")
+            start_text = p.read_text(encoding="utf-8")
+            start_path = str(p)
+
+        if data_mode == _DATA_MODES[2]:  # データなし = 設定のみ編集
+            if start_text is None:
+                raise ValueError("① に設定 jsonc を入れてください（データを使う場合は ② で選択）")
+            sf, cfg_ctx = state.load_config_only(start_text)
+            ss.score_file = sf
+            state.ensure_uids(ss.score_file)
+            ss.context = cfg_ctx
+            ss.selected_part = 0
+            st.toast("設定を読み込みました（設定のみ編集）")
+            st.rerun()
+            return
+
+        dummy_source = None
+        if data_mode == _DATA_MODES[0]:  # 実測データ
+            if up_zip is not None:
+                extracted = state.extract_bundle_zip(up_zip.getvalue())
+                found = state.locate_bundle_inputs(extracted)
+            elif paths_mode and str(paths.get("data_dir") or "").strip():
+                found = {
+                    "data_dir": paths["data_dir"],
+                    "config_path": None,
+                    "coef_path": paths.get("coef") or None,
+                    "geninfo_path": None,
+                    "custom_path": paths.get("custom") or None,
+                }
+            elif paths_mode:
+                raise ValueError("測定結果ディレクトリのパスを入力してください")
+            else:
+                raise ValueError("一式 zip をアップロードしてください")
+        else:  # ダミー
+            counts = state.parse_chip_counts(chips_text, int(n_boards))
+            if up_dummy is not None:
+                src = state.extract_bundle_zip(up_dummy.getvalue())
+                dummy_source = up_dummy.name
+            elif paths_mode and str(paths.get("dummy_dir") or "").strip():
+                src = paths["dummy_dir"]
+                dummy_source = str(paths["dummy_dir"]).strip()
+            elif paths_mode:
+                raise ValueError("ダミー一式ディレクトリのパスを入力してください")
+            else:
+                raise ValueError("ダミー一式 zip をアップロードしてください")
+            found = {
+                "data_dir": state.expand_dummy_bundle(src, counts),
+                "config_path": None,
+                "coef_path": paths.get("coef") or None,
+                "geninfo_path": None,
+                "custom_path": paths.get("custom") or None,
+            }
+
+        # ① の設定が RunConfig 形式なら config としても使う（zip 内の設定より優先）
+        sf_new = None
+        if start_text is not None:
+            sf_new, _ = state.load_config_only(start_text)
+            if state.is_run_config_text(start_text):
+                found["config_path"] = start_path
+        # 係数・自作関数の追加アップロードは zip 内・パス指定より優先
+        if up_coef is not None:
+            found["coef_path"] = state.save_upload(up_coef.name, up_coef.getvalue())
+        if up_custom is not None:
+            found["custom_path"] = state.save_upload(up_custom.name, up_custom.getvalue())
+
+        # 世代情報 json の入力は無い: WL/STR 本数はデータから導出する
+        # （zip 内で見つかった場合のみ食い違いの診断警告に使う）
+        ss.context = state.build_context(
+            found["data_dir"], found.get("config_path"), found.get("coef_path"),
+            found.get("geninfo_path"), found.get("custom_path"),
+        )
+        if dummy_source is not None:
+            ss.context["dummy_source"] = dummy_source
+        if sf_new is not None:
+            # ① を編集の出発点にする（既存の編集内容は置き換え。↩ で戻せる）
+            ss.score_file = sf_new
+            state.ensure_uids(ss.score_file)
+            ss.selected_part = 0
+        _import_wlgroup_toast(ss)
+        st.toast("読み込みました")
+        st.rerun()
+    except Exception as err:
+        st.error(str(err))
+
 
 def screen_data() -> None:
     ss = st.session_state
     st.header("データ読み込み")
-    st.caption(
-        "**同系統の過去実験の測定結果ディレクトリ**（result_tmp 相当）を指定してください。"
-        "測定前の実験には定義ファイルが存在しないため、前回出力から type・軸・値候補を読み取ります。"
-    )
-    with st.expander("📦 一式zipから読み込む（アップロード）"):
-        st.caption(
-            "GUIからダウンロードした一式zip（測定結果 + 設定jsonc + 係数jsonc + 世代情報json + "
-            "custom_parts.py）を展開して読み込みます。zip内のサブディレクトリも探索し、"
-            "見つかった各ファイルのパスは下の入力欄に自動で入ります（候補が複数あると"
-            "エラーになるので、その場合は該当欄にパスを明示指定してください）。"
+    paths_mode = False
+    if _DEV_MODE:
+        paths_mode = st.toggle(
+            "サーバ上のパスで指定する", key="paths_mode",
+            help="アップロードの代わりに、UI と同じマシンにあるファイル・ディレクトリの"
+                 "パスを直接指定します（--dev / SCORELIB_UI_DEV=1 で起動したときのみ表示）",
         )
-        up_zip = st.file_uploader("一式zip", type=["zip"], key="bundle_zip")
-        if up_zip is not None and st.button("展開して読み込み", type="primary", key="bundle_btn"):
-            try:
-                extracted = state.extract_bundle_zip(up_zip.getvalue())
-                found = state.locate_bundle_inputs(extracted)
-                # パス入力欄はこの expander より下で描画されるため、
-                # この実行中でもキー付き状態への書き込みが間に合う
-                ss["data_dir_input"] = found["data_dir"]
-                ss["config_path_input"] = found.get("config_path") or ""
-                ss["coef_path_input"] = found.get("coef_path") or ""
-                ss["custom_path_input"] = found.get("custom_path") or ""
-                ss.context = state.build_context(
-                    found["data_dir"], found.get("config_path"), found.get("coef_path"),
-                    found.get("geninfo_path"), found.get("custom_path"),
-                )
-                if state.import_config_group_defs(
-                    ss.score_file, ss.context["wlgroup"],
-                    ss.context.get("wlgroup_defin_logical", True),
-                    ss.context.get("wlgroup_weight"),
-                ):
-                    st.toast("設定jsoncの WLgroup をグループ定義として取り込みました")
-                st.toast("zipを展開して読み込みました")
-                st.rerun()
-            except Exception as err:
-                st.error(str(err))
 
-    with st.expander("🧪 ダミー一式から設計を始める（Board/Chip 展開）"):
-        st.caption(
-            "測定フローが出力するダミー一式（Board/Chip は1つ）を、この実験の "
-            "Board 数・Board ごとの Chip 数で複製展開して読み込みます。"
-            "測定値はダミーのため、テスト計算の数値に意味はありません（構造検証のみ）。"
+    st.subheader("① スコア設定")
+    up_start = None
+    config_in = ""
+    if paths_mode:
+        config_in = st.text_input(
+            "設定 jsonc のパス", key="config_path_input",
+            help="既存の設定（score.jsonc / optimization設定）から編集を始める場合に指定。"
+                 "未指定なら新規作成。読み込むと現在の編集内容は置き換わります（↩ で戻せます）",
         )
-        dummy_dir = st.text_input("ダミー一式ディレクトリのパス", key="dummy_dir_input")
+    else:
+        up_start = st.file_uploader(
+            "設定 jsonc", type=["jsonc", "json"], key="config_start_up",
+            help="既存の設定（score.jsonc / optimization設定）から編集を始める場合にアップロード。"
+                 "未指定なら新規作成。読み込むと現在の編集内容は置き換わります（↩ で戻せます）",
+        )
+
+    st.subheader("② データ")
+    data_mode = st.radio(
+        "データ", _DATA_MODES, key="data_mode", horizontal=True,
+        label_visibility="collapsed",
+        captions=[
+            "過去実験の測定結果一式",
+            "Board/Chip を展開して構造検証",
+            "設定だけ編集する",
+        ],
+    )
+
+    up_zip = up_dummy = up_coef = up_custom = None
+    paths = {}
+    n_boards = chips_text = None
+    if data_mode == _DATA_MODES[0]:
+        if paths_mode:
+            paths["data_dir"] = st.text_input("測定結果ディレクトリのパス", key="data_dir_input")
+            c1, c2 = st.columns(2)
+            paths["coef"] = c1.text_input(
+                "dVtBudget係数jsonc のパス（任意）", key="coef_path_input",
+                help="ディレクトリ内にあれば自動検出されます。係数が無い場合は dVtBudget タイプが選択肢に出ません",
+            )
+            paths["custom"] = c2.text_input(
+                "custom_parts.py のパス（任意）", key="custom_path_input",
+                help="Python関数をスコアパーツ（type=custom）として使う場合のみ。ディレクトリ内にあれば自動検出",
+            )
+        else:
+            up_zip = st.file_uploader(
+                "一式 zip", type=["zip"], key="bundle_zip",
+                help="測定結果に設定・係数・custom_parts.py を同梱できます（サブディレクトリも探索）",
+            )
+            with st.expander("係数・自作関数を追加する（zip に入っていない場合）"):
+                up_coef = st.file_uploader("dVtBudget係数jsonc", type=["jsonc", "json"], key="up_coef")
+                up_custom = st.file_uploader("custom_parts.py", type=["py"], key="up_custom")
+    elif data_mode == _DATA_MODES[1]:
+        st.caption("測定値はダミーのため、テスト計算は構造検証のみです")
+        if paths_mode:
+            paths["dummy_dir"] = st.text_input("ダミー一式ディレクトリのパス", key="dummy_dir_input")
+        else:
+            up_dummy = st.file_uploader(
+                "ダミー一式 zip", type=["zip"], key="dummy_zip",
+                help="測定フローが出力する、Board/Chip が1つのダミー一式",
+            )
         cd1, cd2 = st.columns(2)
         n_boards = cd1.number_input("Board 数", min_value=1, value=2, step=1, key="dummy_boards")
         chips_text = cd2.text_input(
             "Board ごとの Chip 数", value="2", key="dummy_chips",
-            help="全 Board 共通なら数1つ（例: 4）、Board ごとに違うならカンマ区切りで Board 数ぶん（例: 4,4,2,2）",
+            help="全 Board 共通なら数1つ（例: 4）。Board ごとに違う場合はカンマ区切りで Board の数と同じ個数（例: 4,4,2,2）",
         )
-        if st.button("展開して読み込み", type="primary", key="dummy_btn"):
-            try:
-                counts = state.parse_chip_counts(chips_text, int(n_boards))
-                expanded = state.expand_dummy_bundle(dummy_dir, counts)
-                # パス入力欄はこの expander より下で描画されるため、
-                # この実行中でもキー付き状態への書き込みが間に合う
-                ss["data_dir_input"] = expanded
-                ss.context = state.build_context(expanded)
-                ss.context["dummy_source"] = str(dummy_dir).strip()
-                st.toast("ダミー一式を展開して読み込みました")
-                st.rerun()
-            except Exception as err:
-                st.error(str(err))
+        if paths_mode:
+            # 実測モードのパス欄と同じ2欄（手段が変わっても同じことができるように）
+            c1, c2 = st.columns(2)
+            paths["coef"] = c1.text_input(
+                "dVtBudget係数jsonc のパス（任意）", key="coef_path_input",
+                help="係数が無い場合は dVtBudget タイプが選択肢に出ません",
+            )
+            paths["custom"] = c2.text_input(
+                "custom_parts.py のパス（任意）", key="custom_path_input",
+                help="Python関数をスコアパーツ（type=custom）として使う場合のみ",
+            )
+        else:
+            with st.expander("係数・自作関数を追加する（任意）"):
+                up_coef = st.file_uploader("dVtBudget係数jsonc", type=["jsonc", "json"], key="up_coef")
+                up_custom = st.file_uploader("custom_parts.py", type=["py"], key="up_custom")
 
-    with st.expander("⚙ 設定だけを編集する（データ不要）"):
-        st.caption(
-            "既存のスコア設定（score.jsonc / optimization設定jsonc）を読み込んで、"
-            "式・グループ定義・パーツの修正とエクスポートだけを行います。"
-            "値の候補表示とテスト計算にはデータかダミー一式の読み込みが必要です。"
-        )
-        up_cfg = st.file_uploader("設定 jsonc", type=["jsonc", "json"], key="cfgonly_up")
-        if up_cfg is not None and st.button(
-            "読み込んで編集（現在の編集内容を置き換え）", type="primary", key="cfgonly_btn"
-        ):
-            try:
-                sf, cfg_ctx = state.load_config_only(up_cfg.getvalue().decode("utf-8"))
-                ss.score_file = sf
-                state.ensure_uids(ss.score_file)
-                ss.context = cfg_ctx
-                ss.selected_part = 0
-                st.toast("設定を読み込みました（設定のみ編集）")
-                st.rerun()
-            except Exception as err:
-                st.error(str(err))
-
-    default = (ss.context.get("data_dir") or "") if ss.context else ""
-    path = st.text_input("測定結果ディレクトリのパス（必須）", value=default, key="data_dir_input")
-    st.caption(
-        "optimization設定jsonc と dVtBudget係数jsonc は通常 result_tmp には含まれないため、"
-        "使う場合は個別にパスを指定してください（ディレクトリ内に置いてあれば自動検出もされます）。"
-        "initial_temperature.csv は測定結果としてディレクトリ内から読み取ります。"
-    )
-    c1, c2 = st.columns(2)
-    config_in = c1.text_input(
-        "optimization設定jsonc のパス（任意）", key="config_path_input",
-        help="Generation / WLgroup / selectionSets / 既存スコア設定の取り込み元。未指定でも設計は始められます",
-    )
-    coef_in = c2.text_input(
-        "dVtBudget係数jsonc のパス（任意）", key="coef_path_input",
-        help="未指定の場合は dVtBudget タイプが選択肢に出ません",
-    )
-    custom_in = st.text_input(
-        "自作関数ファイル custom_parts.py のパス（任意）", key="custom_path_input",
-        help="Python関数をスコアパーツ（type=custom）として使う場合のみ。"
-             "SVNリポジトリ直下の custom_parts.py と同じ内容を指定してください"
-             "（実行側ではリポジトリ内のファイルが使われます）。ディレクトリ内にあれば自動検出",
-    )
     if st.button("読み込み", type="primary", key="load_btn"):
-        try:
-            # 世代情報 json は入力欄を出さない: WL/STR 本数はデータから導出できる
-            # ため（state.data_axis_counts）。{Generation}.json がディレクトリ内に
-            # あれば自動検出し、食い違いの診断警告にだけ使う
-            ss.context = state.build_context(path, config_in, coef_in, None, custom_in)
-            if state.import_config_group_defs(
-                ss.score_file, ss.context["wlgroup"],
-                ss.context.get("wlgroup_defin_logical", True),
-                ss.context.get("wlgroup_weight"),
-            ):
-                st.toast("設定jsoncの WLgroup をグループ定義として取り込みました（画面3で編集できます）")
-            st.toast("読み込みました")
-        except Exception as err:
-            st.error(str(err))
-            return
+        _handle_load(ss, paths_mode, data_mode, up_start, config_in,
+                     up_zip, up_dummy, up_coef, up_custom, paths, n_boards, chips_text)
 
     ctx = ss.context
     if not ctx:

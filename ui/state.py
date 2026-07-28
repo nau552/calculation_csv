@@ -675,6 +675,19 @@ def expand_dummy_bundle(dummy_dir: str, chip_counts: List[int]) -> str:
     return str(dest)
 
 
+def save_upload(filename: str, data: bytes) -> str:
+    """アップロードされた1ファイルを一時ディレクトリへ保存してパスを返す
+    （画面1: パス入力欄の代わりにアップロードで指定する経路。保存先のパスが
+    そのままパス欄に入り、以降は通常のパス指定と同じに扱われる）。"""
+    import tempfile
+
+    name = Path(filename).name or "uploaded"  # パス成分は捨てる（zip-slip と同種の対策）
+    d = Path(tempfile.mkdtemp(prefix="scorelib_upload_"))
+    p = d / name
+    p.write_bytes(data)
+    return str(p)
+
+
 def extract_bundle_zip(data: bytes) -> str:
     """アップロードされた一式zip（result_tmp のファイル群 + 設定jsonc +
     係数jsonc + 世代情報json + custom_parts.py）を一時ディレクトリへ展開し、
@@ -1153,6 +1166,17 @@ def load_config_only(text: str) -> tuple:
             rc.optimization.WLgroupWeight,
         )
     return sf, config_only_context(sf, generation)
+
+
+def is_run_config_text(text: str) -> bool:
+    """設定テキストが RunConfig 形式（トップに optimization{}）かどうか。
+    画面1の①でアップロードされた設定を build_context の config_path として
+    渡せるか（Generation / WLgroup 等を持つか）の判定に使う。"""
+    try:
+        raw = jsonc.loads(text)
+    except Exception:
+        return False
+    return isinstance(raw, dict) and "optimization" in raw
 
 
 def import_score_file(text: str) -> Dict[str, Any]:
