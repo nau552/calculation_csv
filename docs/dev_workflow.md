@@ -1,0 +1,142 @@
+# 開発運用ガイド（git・CI に馴染みのない開発者向け）
+
+2026-07-28 に導入した開発運用の仕組みの解説。**手順の正は
+[`../README.md`](../README.md) の「開発の進め方」「リリース手順」**で、
+このガイドは「それぞれが何者で、なぜあるのか」を説明する（testing_guide.md の
+git 運用版）。
+
+## 全体像 — 何のためにあるのか
+
+やりたいことは3つだけ:
+
+1. **main ブランチを常に「テスト全パス・いつでも SVN 同期できる」状態に保つ**
+2. **「どのコードを出荷したか」を後から特定できるようにする**（タグ・CHANGELOG）
+3. **テストの実行を人の記憶に頼らず自動化する**（フック・CI）
+
+以下の各ファイルはすべてこの3つのどれかに対応する。
+
+## 各ファイル・ディレクトリの正体
+
+### `scripts/hooks/` と `pre-push` — git フック
+
+**git フック**とは「git の特定の操作の直前/直後に自動実行されるスクリプト」。
+`pre-push` は **push の直前**に走り、スクリプトが失敗（exit 非0）すると
+**push 自体が中止される**。中身は `.venv` の pytest を全実行するだけ —
+つまり「テストが落ちる状態のコードは push できない」を物理的に保証する保険。
+
+- フックは通常 `.git/hooks/`（git 管理外）に置くものだが、それだとリポジトリを
+  clone し直すと消える。そこでリポジトリ管理内の `scripts/hooks/` に置き、
+  `git config core.hooksPath scripts/hooks` で「フックはここを見ろ」と設定する
+  （**clone したマシンごとに1回この設定が必要**）
+- 緊急時は `git push --no-verify` でスキップできるが、CI が同じテストで
+  落ちるだけなので基本使わない
+
+### `.gitattributes` — ファイルごとの git の扱いの指定
+
+git はテキストファイルの**改行コード**を OS に合わせて自動変換する
+（Windows では checkout 時に LF → CRLF）。普段は便利だが、**シェルスクリプトは
+CRLF だと実行時に壊れる**（`\r` が命令の一部として解釈される）。
+`.gitattributes` の `scripts/hooks/* text eol=lf` は「この場所のファイルは
+常に LF のままにしろ」という指定で、フックが Windows で checkout されても
+壊れないようにしている。それ以外の用途では今のところ使っていない。
+
+### `CHANGELOG.md` — 版数ごとの変更履歴
+
+「エンジンを 0.4.0 から 0.5.1 に上げると何が変わるのか」に答える文書。
+読者は**SVN 側でエンジンを使う人**（自分含む）。開発の時系列メモ
+（docs/score_gui_progress.md）との違いは、**版数を軸に「追加/変更/互換性」だけを
+整理してある**こと。版を上げたら必ず追記する（リリース手順の一部）。
+
+### `.github/workflows/test.yml` — GitHub Actions（CI）
+
+**CI（継続的インテグレーション）**とは「リポジトリに変更が届くたび、クリーンな
+環境で自動的にテストを走らせる仕組み」。GitHub Actions は GitHub 内蔵の CI で、
+`.github/workflows/` に置いた yaml が設定ファイル。
+
+- push または Pull Request のたびに、GitHub のサーバが Ubuntu 上で
+  **Python 3.11 と 3.13 の両方**で `pip install → pytest` を実行する
+  （開発機は 3.11・本番エンジン環境は 3.13 のため、両方で回すことに意味がある）
+- 結果は GitHub リポジトリページの **Actions タブ**で見る（✓ green / ✗ red）。
+  ローカルで通っても CI で落ちることがある（venv に偶然入っていたものへの依存、
+  OS 差など）— それを検出するのが目的
+- ローカルの pre-push フックと役割が重なるが、フックは「push 前の即時の保険」、
+  CI は「独立環境での事後検証+記録」で補完関係
+
+### タグ（`ver.X.Y.Z`）
+
+タグは「このコミットが版 X.Y.Z だった」という**動かない印**。ブランチと違って
+後から進まない。`scorelib_param/__init__.py` の `__version__` はファイルの中の
+値なので「0.5.1 のコードはどれ?」に即答できないが、タグがあれば
+`git checkout ver.0.5.1` で当時のコード全体を再現できる。
+**SVN 側で動いているエンジンの版数 → git のコード**を特定する用途
+（版ズレ調査・ロールバック）が本命。
+
+## 日々の開発フロー
+
+- **小さな修正・ドキュメント**: main に直接コミットしてよい。
+  ただしコミット前にテスト全パス（CLAUDE.md の「変更完了の定義」）
+- **数日がかりの機能**（途中状態が main に乗ると困るもの）:
+
+  ```
+  git switch -c feature/pair-suggestion   # ブランチを切って作業
+  ...（コミットを重ねる）...
+  # テスト全パスを確認してから
+  git switch main
+  git merge feature/pair-suggestion
+  git branch -d feature/pair-suggestion
+  ```
+
+- push すると pre-push フック（ローカル）→ GitHub Actions（サーバ）の
+  2段でテストが走る
+
+## リリース（SVN 同期）
+
+手順は README「リリース手順」を参照。要点は
+**「テスト green → 版上げ → CHANGELOG 追記 → コミット → タグ →
+`git push --follow-tags` → タグの状態から SVN 同期」**の順を崩さないこと。
+こうすると「SVN にあるエンジン = タグ = CHANGELOG の該当節」が常に一対一になる。
+
+## 社内 GitLab での CI（実運用先）
+
+実運用は社内 GitLab。**運用の考え方（ブランチ・タグ・フック・CHANGELOG・
+リリース手順）はプラットフォーム非依存でそのまま使える**が、CI の設定ファイル
+だけは別物になる:
+
+- `.github/workflows/test.yml` は GitHub Actions 専用で GitLab は読まない。
+  GitLab 用は**リポジトリ直下の `.gitlab-ci.yml`**（同じ内容の下書きを作成済み。
+  両ファイルは共存でき、各プラットフォームは自分のぶんだけを読む）
+- Pull Request は GitLab では **Merge Request（MR）** と呼ぶ。使い方は同じ
+
+### 社内環境で実地確認が必要なこと（机上では判断できない）
+
+GitLab CI は yaml を置くだけでは動かず、**Runner（ジョブを実行するマシン）が
+登録されていて、必要なものに手が届く**必要がある。初回パイプラインを回して、
+以下のどこで止まるかを順に確認する（`.gitlab-ci.yml` の TODO と対応）:
+
+1. **Runner の有無と種類**: Settings → CI/CD → Runners に利用可能な Runner が
+   いるか。docker executor か shell executor かで yaml の書き方が変わる
+2. **Docker イメージの取得可否**: `python:3.13` を Docker Hub から引けるか。
+   閉域網では社内レジストリのミラー経由になることが多く、イメージ名の指定が変わる
+3. **pip が PyPI に届くか**: 外に出られない環境では社内 PyPI ミラーの URL
+   （`PIP_INDEX_URL`）指定が必要。**社内 CI の一番典型的なつまずきどころ**
+4. **main の保護設定**: GitLab は既定で main が protected branch。権限によっては
+   直 push が弾かれるため、「小さな修正は main 直コミット」運用を続けるなら
+   自分のロールで push できるか確認する（または「すべて MR 経由」に寄せる）
+5. **Python の用意**: shell executor の場合は Runner マシンに入っている
+   Python しか使えない（3.11 / 3.13 があるか確認）
+
+止まった箇所のエラーメッセージが分かれば、yaml の該当 TODO を埋めるだけで
+直ることがほとんど。
+
+## FAQ・つまずきどころ
+
+- **PowerShell で `&&` が使えない**: `git push && git push --tags` は bash の
+  書き方。PowerShell 5.1 では `git push --follow-tags` の1コマンドを使う
+  （コミットと注釈付きタグをまとめて push する）
+- **clone し直したらフックが動かない**: `git config core.hooksPath scripts/hooks`
+  を1回実行する（README セットアップ参照）
+- **CI が落ちた**: Actions タブ → 落ちたジョブ → ログで pytest の失敗箇所を
+  確認。ローカルで再現・修正して push し直せばよい（main が落ちた状態を
+  放置しないことだけ守る）
+- **タグを打ち間違えた**: push 前なら `git tag -d ver.X.Y.Z` で消してやり直し。
+  push 済みタグの打ち直しは混乱のもとなので、新しい版数で打ち直す

@@ -1,0 +1,37 @@
+# 社内 GitLab 用の CI 設定（下書き — 社内環境でしか確認できない箇所に
+# TODO を付けてある。初回パイプラインを回して止まった箇所から直すこと。
+# 確認手順の解説は docs/dev_workflow.md「社内 GitLab での CI」）。
+#
+# 内容は GitHub 用の .github/workflows/test.yml と同じ
+# 「クリーンな環境で pip install → 全テスト」。両ファイルは共存できる
+# （GitLab はこのファイルだけを、GitHub は .github/ だけを読む）。
+
+# TODO(社内確認1): docker executor の Runner がいるか（Settings > CI/CD > Runners）。
+#   shell executor しか無い場合は image: 行を削除し、Runner マシンに入っている
+#   python を直接使う（バージョンは script 冒頭の python --version で確認）
+# TODO(社内確認2): Docker Hub に届かない閉域網では、社内レジストリの
+#   ミラーパスへ変える（例: registry.社内.example/dockerhub/python:3.13）
+image: python:3.13
+
+# TODO(社内確認3): pip が PyPI に届かない場合は社内 PyPI ミラーを指定する
+#   （URL は社内のミラー管理者に確認。コメントを外して使う）
+# variables:
+#   PIP_INDEX_URL: "https://pypi.社内.example/simple"
+
+test:
+  # TODO(社内確認4): Runner がタグ運用（特定タグ付きジョブのみ実行）の場合は指定が必要
+  # tags:
+  #   - docker
+  script:
+    - python --version
+    - python -m pip install -e ".[dev]"
+    - python -m pytest -q
+
+# 本番エンジン環境は 3.13、開発機は 3.11 のため、可能なら 3.11 でも回す
+# （イメージ取得が確認できたらコメントを外す）
+# test-py311:
+#   image: python:3.11
+#   script:
+#     - python --version
+#     - python -m pip install -e ".[dev]"
+#     - python -m pytest -q

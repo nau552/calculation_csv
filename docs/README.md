@@ -8,6 +8,7 @@
 | [`../CHANGELOG.md`](../CHANGELOG.md) | SVN 側の利用者・全員 | エンジン版数ごとの変更点（同期で何が変わるか） |
 | [`code_reference.md`](code_reference.md) | チーム報告・引き継ぎ | **今のコードに何があるか**: 全ファイル・全関数の解説（コード変更時に追随更新） |
 | [`testing_guide.md`](testing_guide.md) | テストに馴染みのない開発者 | テストの考え方入門+全テストファイルの解説（テスト変更時に追随更新） |
+| [`dev_workflow.md`](dev_workflow.md) | git・CI に馴染みのない開発者 | 開発運用の解説: フック / .gitattributes / CHANGELOG / CI（GitHub Actions・社内 GitLab）/ タグの正体と日々のフロー・FAQ |
 | [`score_gui_design.md`](score_gui_design.md) | 開発者 | エンジンの設計書: **なぜこの設計にしたか**の意思決定記録 |
 | [`score_gui_ui_design.md`](score_gui_ui_design.md) | 開発者 | UIの設計書: 画面構成・状態管理・配置/デプロイ方針の意思決定記録 |
 | [`batch_design.md`](batch_design.md) | 開発者 | バッチスコア計算（scorelib_param/batch）の設計書 |

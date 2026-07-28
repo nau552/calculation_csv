@@ -96,12 +96,18 @@ python -m venv .venv
 
 ## 開発の進め方（ブランチ・タグ・CI）
 
+各仕組み（フック / .gitattributes / CHANGELOG / GitHub Actions / タグ）が
+何者かの解説と FAQ は `docs/dev_workflow.md` を参照。
+
 - **main は常に「テスト全パス・いつでも SVN 同期できる」状態を保つ**（唯一のルール）。
   数日がかりの機能（途中状態が main に乗ると困るもの）は `feature/<名前>` ブランチで
   作業し、テスト全パスを確認してから main へマージする。小さな修正・ドキュメントは
   main 直コミットでよい
 - **CI**: push / PR のたびに GitHub Actions（`.github/workflows/test.yml`）が
-  Python 3.11 / 3.13 の両方で全テストを実行する（本番エンジン環境は 3.13）
+  Python 3.11 / 3.13 の両方で全テストを実行する（本番エンジン環境は 3.13）。
+  **社内 GitLab で運用する場合は `.gitlab-ci.yml`**（同内容の下書き作成済み。
+  Runner・イメージ・pip ミラー等の実地確認手順は docs/dev_workflow.md
+  「社内 GitLab での CI」を参照）
 - **pre-push フック**: push 前にローカルでも全テストが走る。
   clone 後に1回 `git config core.hooksPath scripts/hooks` で有効化する
 
