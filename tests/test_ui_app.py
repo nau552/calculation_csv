@@ -102,11 +102,11 @@ def test_part_reorder_buttons(at, data_dir_mini):
 
 
 def test_load_warns_when_groups_exceed_axis_count(at, data_dir_mini, fixtures_dir):
-    """config.jsonc defines WLgroups up to WL 20 but B9LS.json says numWLs=6:
-    screen 1 must warn right after loading."""
+    """config.jsonc は WL 20 までのグループを定義しているが、mini データの WL は
+    0..5（6本）: 世代情報 json 無しでも、データ由来の本数で読み込み直後に警告が
+    出ること（本数はデータから導出 — 世代情報の入力欄は廃止済み）。"""
     at.text_input(key="data_dir_input").set_value(str(data_dir_mini))
     at.text_input(key="config_path_input").set_value(str(fixtures_dir / "config.jsonc"))
-    at.text_input(key="geninfo_path_input").set_value(str(fixtures_dir / "B9LS.json"))
     at.button(key="load_btn").click().run()
     assert not at.exception
     assert any("範囲外" in w.value for w in at.warning)
@@ -133,6 +133,11 @@ def test_duplicate_then_switch_keeps_parts_independent(at, data_dir_mini):
     _load_data(at, data_dir_mini)
     at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
     at.button(key="add_part_btn").click().run()
+    uid0_pre = at.session_state["score_file"]["score_parts"][0]["_uid"]
+    # v1 の雛形は相対化プリセット無し → 元パーツで明示的に ON にしてから複製
+    at.checkbox(key=f"{uid0_pre}_rel_on").set_value(True).run()
+    assert not at.exception
+    assert at.session_state["score_file"]["score_parts"][0].get("relative") is not None
     dup = next(b for b in at.button if b.label == "このパーツを複製")
     dup.click().run()
     assert not at.exception
@@ -165,12 +170,14 @@ def test_duplicate_then_switch_keeps_parts_independent(at, data_dir_mini):
 
 
 def test_relative_off_removes_explicit_step_via_ui(at, data_dir_mini):
-    """専用ボタンで __relative__ を order に置いてから相対化をOFFにする:
-    パーツは検証OKのままであること（孤児ステップが残らない）。"""
+    """相対化を ON にし、専用ボタンで __relative__ を order に置いてから OFF に
+    する: パーツは検証OKのままであること（孤児ステップが残らない）。"""
     _load_data(at, data_dir_mini)
     at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
     at.button(key="add_part_btn").click().run()
     uid = at.session_state["score_file"]["score_parts"][0]["_uid"]
+    at.checkbox(key=f"{uid}_rel_on").set_value(True).run()
+    assert at.session_state["score_file"]["score_parts"][0].get("relative") is not None
     at.button(key=f"{uid}_addfixed_btn").click().run()
     assert "__relative__" in at.session_state["score_file"]["score_parts"][0]["order"]
     at.checkbox(key=f"{uid}_rel_on").set_value(False).run()
@@ -179,6 +186,44 @@ def test_relative_off_removes_explicit_step_via_ui(at, data_dir_mini):
     assert part.get("relative") is None
     assert "__relative__" not in part["order"]
     assert not at.error
+
+
+def test_dummy_expand_flow_end_to_end(at, tmp_path, data_dir_mini):
+    """画面1のダミー展開 → 雛形作成 → 相対化ON（Measure 分割の既定値と
+    labels 注記）→ テスト計算、まで一気通貫（docs/spec_change_dataname_measure.md
+    プラン4の実体）。"""
+    from scorelib_param.dummy import make_pseudo_dummy
+
+    pseudo = make_pseudo_dummy(data_dir_mini, tmp_path / "pseudo")
+    at.text_input(key="dummy_dir_input").set_value(str(pseudo))
+    at.number_input(key="dummy_boards").set_value(2)
+    at.text_input(key="dummy_chips").set_value("2,3")
+    at.button(key="dummy_btn").click().run()
+    assert not at.exception
+    ctx = at.session_state["context"]
+    assert ctx["dummy_source"] == str(pseudo)
+    assert ctx["catalogs"]["FBC"]["Board"] == [0, 1]
+    assert ctx["catalogs"]["FBC"]["Measure"] == [0, 1, 2, 3]
+
+    at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
+    at.button(key="add_part_btn").click().run()
+    assert not at.exception
+    uid = at.session_state["score_file"]["score_parts"][0]["_uid"]
+    at.checkbox(key=f"{uid}_rel_on").set_value(True).run()
+    assert not at.exception
+    part = at.session_state["score_file"]["score_parts"][0]
+    assert part["relative"]["split_axis"] == "Measure"
+    assert part["relative"]["numerator_when"] == 1
+    # エディタ描画時に dataName の labels 注記が付く（6.1節）
+    assert part["relative"]["labels"]["1"] == "evaluation_param_read_level_1"
+
+    at.sidebar.radio(key="screen").set_value(SCREEN_TEST).run()
+    assert any("数値に意味はありません" in w.value for w in at.warning)
+    at.session_state["score_file"]["expression"] = "part_1"
+    at.button(key="run_btn").click().run()
+    assert not at.exception
+    assert not at.error
+    assert len(at.dataframe) == 1
 
 
 def test_custom_part_end_to_end(at, data_dir_mini, fixtures_dir):

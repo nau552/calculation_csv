@@ -99,8 +99,10 @@ def resolve_axes(
             f"(not in {type_}.csv, parameterLabel_{type_}.csv, or dataName_{type_}.csv)"
         )
 
-    # Measure は結合キーとしてのみ使い、軸としては決して公開しない
-    if "Measure" in lf.collect_schema().names():
+    # Measure は結合キー。軸として要求されたときだけ残す（相対化・filter の
+    # 識別子軸 — docs/spec_change_dataname_measure.md）。要求が無ければ従来
+    # どおり落とす
+    if "Measure" not in required_axes and "Measure" in lf.collect_schema().names():
         lf = lf.drop("Measure")
 
     for axis in sorted(required_axes):

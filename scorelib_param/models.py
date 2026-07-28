@@ -19,6 +19,8 @@ COMBINED_SEP = "&"
 CUSTOM_TYPE = "custom"
 
 AggOp = Literal[
+    # filter は行の選択: スカラーで等値、リストで is_in（複数値。該当行を残して
+    # 軸列を落とし、残った行は後段集計に複製として流れ込む）
     "filter",
     # mean/sum/min/max は軸を潰す集計。任意の `value` リストを付けると、
     # 先にその選択集合へ限定してから集計する
@@ -67,8 +69,8 @@ class AggregationSpec(BaseModel):
     - 辞書 = 複合軸上の1つの組み合わせ
       （{"op": "filter", "value": {"State": "A2B", "Read_Label": "..."}}）
     - リスト = 常に選択の並び（{"op": "diff", "value": ["R2A", "B2A"]}）
-    op ごとに違うのは必要な選択の個数だけ（filter: 1、diff: 2、
-    mean/sum/min/max: 任意個または無し）。互換のため `values` も
+    op ごとに違うのは必要な選択の個数だけ（filter: 1個以上（複数は is_in）、
+    diff: 2、mean/sum/min/max: 任意個または無し）。互換のため `values` も
     `value` の別名として受ける。
     """
 
@@ -94,6 +96,11 @@ class AggregationSpec(BaseModel):
     # 場面では結果は同一
     weight: Optional[Any] = None
     weight_ref: Optional[str] = None
+    # 表示・検証用の注記（実行には不使用）: 選択値 → 表示名（例: Measure 番号 →
+    # dataName）。Measure 番号で指定した設定に人が読める名前を残すための欄で、
+    # UI と将来の validate が使う（docs/spec_change_dataname_measure.md 6.1節）。
+    # キーは JSON の制約上文字列（{"1": "evaluation_..."}）
+    labels: Optional[Dict[str, str]] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -159,13 +166,15 @@ class AggregationSpec(BaseModel):
             return self
         if op == "filter":
             if isinstance(v, list):
-                if len(v) == 1 and not isinstance(v[0], list):
-                    self.value = v[0]
-                else:
+                if not v:
+                    raise ValueError("op 'filter' requires 'value' (at least one selection)")
+                if any(isinstance(x, list) for x in v):
                     raise ValueError(
-                        "op 'filter' selects exactly one value (a scalar, or a dict for "
-                        "combined axes); to reduce over several values use mean/sum/min/max"
+                        "op 'filter': each selection must be a scalar or, for combined axes, "
+                        "a dict {axis: value} — not a nested list"
                     )
+                if len(v) == 1:
+                    self.value = v[0]
             elif v is None:
                 raise ValueError("op 'filter' requires 'value'")
         elif op in TRANSFORM_OPS:
@@ -243,6 +252,21 @@ class RelativeConfig(BaseModel):
     mode: Literal["ratio", "diff"] = "ratio"
     denominator_offset: float = 0.0
     denominator_pre_aggregation: List[AxisAggregation] = Field(default_factory=list)
+    # 表示・検証用の注記（実行には不使用）。AggregationSpec.labels と同じ形:
+    # 分子/分母の選択値 → 表示名（例: {"1": "evaluation_...", "0": "reference_..."}）
+    labels: Optional[Dict[str, str]] = None
+
+    @model_validator(mode="after")
+    def _require_both_sides(self):
+        """None の側は「値 None の行」への等値 filter になり必ず0行マッチする —
+        設定忘れをエンジンの手前で明確に検出する（UIは分子/分母未選択のまま
+        保存された設定をこのエラーで表示する）。"""
+        if self.numerator_when is None or self.denominator_when is None:
+            raise ValueError(
+                "relative requires both numerator_when and denominator_when — choose the "
+                f"values of '{self.split_axis}' that select each side"
+            )
+        return self
 
     @model_validator(mode="before")
     @classmethod

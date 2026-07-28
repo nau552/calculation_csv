@@ -264,10 +264,34 @@ def test_physical_group_def_discovers_geninfo_in_data_dir(data_dir_mini, tmp_pat
     )
 
 
-def test_physical_group_def_without_geninfo_errors(data_dir_mini):
-    _, rc_physical, _ = _logical_physical_configs(data_dir_mini)
-    with pytest.raises(ValueError, match="generation info json was not found"):
-        compute_score_file(data_dir_mini, rc_physical)
+def test_physical_group_def_without_geninfo_derives_counts_from_data(data_dir_mini):
+    """{Generation}.json が無い場合は測定csvから軸総数を導出する（本数は世代で
+    固定・フローは全数を測定するため max+1 が正確 —
+    docs/spec_change_dataname_measure.md 9節）。json ありと同じ結果になること。"""
+    rc_logical, rc_physical, _ = _logical_physical_configs(data_dir_mini)
+    assert compute_score_file(data_dir_mini, rc_physical)["p"] == pytest.approx(
+        compute_score_file(data_dir_mini, rc_logical)["p"]
+    )
+
+
+def test_physical_group_def_underivable_axis_errors(tmp_path, data_dir_mini):
+    """json も無く、データにも該当軸が無い場合は明確なエラー。"""
+    import shutil
+
+    d = tmp_path / "data"
+    shutil.copytree(data_dir_mini, d)
+    rc = RunConfig.model_validate({
+        "Generation": "B9LS",
+        "optimization": {
+            "groupDefs": {"Xgroup": {"axis": "NoSuchAxis", "groups": {"a": [0, 1]},
+                                     "definedInLogical": False}},
+            "score_parts": [{"name": "p", "type": "FBC", "order": ["WL"],
+                             "aggregations": {"WL": {"op": "mean"}}}],
+            "expression": "p",
+        },
+    })
+    with pytest.raises(ValueError, match="could not be determined"):
+        compute_score_file(d, rc)
 
 
 def test_resolve_group_defs_identity_for_logical(data_dir_mini):

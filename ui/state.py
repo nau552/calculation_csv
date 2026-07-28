@@ -21,19 +21,11 @@ from scorelib_param.models import COMBINED_SEP, TRANSFORM_OPS, ScoreFile
 
 DRAFT_PATH = Path.home() / ".scorelib_draft.jsonc"
 
-# 新規パーツの type に Read_Override 軸があるときのプリセット
-# （docs/score_gui_ui_design.md 画面2: 相対化はデフォルトON）
-DEFAULT_RELATIVE = {
-    "split_axis": "Read_Override",
-    "numerator_when": True,
-    "denominator_when": False,
-    "mode": "ratio",
-    "denominator_offset": 1,
-}
-
 # InBatchEpoch は集計対象にしない（ユーザ判断。設計書5節）。order に
-# 入れないことで、エンジンは周囲の軸と一緒に暗黙に集約する
-_EXCLUDED_AXES = {"InBatchEpoch"}
+# 入れないことで、エンジンは周囲の軸と一緒に暗黙に集約する。
+# DataName は「Measure の表示名」の位置づけ（docs/spec_change_dataname_measure.md
+# 6.4節）: 指定は Measure 軸で行うため雛形には入れない（軸としての明示追加は可能）
+_EXCLUDED_AXES = {"InBatchEpoch", "DataName"}
 _LAST_AXES = ["Board", "Chip", "Block"]
 
 
@@ -90,6 +82,8 @@ def default_axis_order(catalog: Dict[str, Optional[list]], exclude: set[str] = f
     def bucket(a: str) -> int:
         if a in _LAST_AXES:
             return 4
+        if a == "Measure":
+            return -1  # 識別子軸: 「どの測定か」の選択が先頭に来るのが自然
         if a.endswith("_Label"):
             return 0
         if a.endswith("_Override"):
@@ -105,7 +99,10 @@ def default_axis_order(catalog: Dict[str, Optional[list]], exclude: set[str] = f
 
 def default_aggregation(axis: str, candidates: Optional[list]) -> Dict[str, Any]:
     """カテゴリ/bool軸は先頭候補の filter から始める（意味があり、かつ必ず
-    計算が通る）。数値・自由入力軸は mean から。"""
+    計算が通る）。数値・自由入力軸は mean から。Measure は数値だが識別子
+    （どの測定か）なので、量として平均せず先頭番号の filter から始める。"""
+    if axis == "Measure" and candidates:
+        return {"op": "filter", "value": candidates[0]}
     if candidates and isinstance(candidates[0], (str, bool)):
         return {"op": "filter", "value": candidates[0]}
     return {"op": "mean"}
@@ -113,16 +110,21 @@ def default_aggregation(axis: str, candidates: Optional[list]) -> Dict[str, Any]
 
 def part_skeleton(name: str, type_: str, catalog: Dict[str, Optional[list]]) -> Dict[str, Any]:
     """**そのまま計算が通る**新規パーツ: 全軸をデフォルトopつきで `order` に
-    並べ、Read_Override 軸があれば相対化をプリセットON（split 軸は相対化が
-    消費するので `order` には入れない）。"""
-    relative = dict(DEFAULT_RELATIVE) if "Read_Override" in catalog else None
-    exclude = {relative["split_axis"]} if relative else set()
+    並べる。相対化のプリセットは無し — 旧仕様の「Read_Override があれば自動ON」
+    は廃止（docs/spec_change_dataname_measure.md 9節。dataName 命名ルール確定後、
+    ルールに合うペアが見つかったときの自動セットを第2弾で追加する）。
+
+    Measure 軸のある type では parameterLabel 由来の Label/Override 軸を雛形に
+    入れない（明示追加は可能）: それらは Measure 番号が一意に決める測定メタ
+    データで、Measure filter との二重指定になる上、Measure 分割の相対化では
+    ペア結合キーに残って分子/分母の行を対にできなくする（Override は基準側と
+    評価側で必ず値が異なるため）。"""
+    exclude: set = set()
+    if "Measure" in catalog:
+        exclude = {a for a in catalog if a.endswith("_Label") or a.endswith("_Override")}
     order = default_axis_order(catalog, exclude)
     aggregations = {a: default_aggregation(a, catalog.get(a)) for a in order}
-    part: Dict[str, Any] = {"name": name, "type": type_, "order": order, "aggregations": aggregations}
-    if relative:
-        part["relative"] = relative
-    return part
+    return {"name": name, "type": type_, "order": order, "aggregations": aggregations}
 
 
 def custom_part_skeleton(name: str, functions: List[str]) -> Dict[str, Any]:
@@ -179,12 +181,39 @@ def _restore_axis_to_order(part: Dict[str, Any], axis: Optional[str], catalog: D
     return True
 
 
-def enable_relative(part: Dict[str, Any], catalog: Dict[str, Optional[list]]) -> None:
+def default_split_axis(catalog: Dict[str, Optional[list]]) -> Optional[str]:
+    """相対化の既定 split 軸: Measure（識別子軸 — 新仕様の基本形） >
+    Override 系（旧仕様データ） > 先頭の軸。"""
+    if "Measure" in catalog:
+        return "Measure"
     overrides = [a for a in catalog if a.endswith("_Override")]
-    split = "Read_Override" if "Read_Override" in catalog else (overrides[0] if overrides else DEFAULT_RELATIVE["split_axis"])
-    rel = dict(DEFAULT_RELATIVE)
-    rel["split_axis"] = split
-    part["relative"] = rel
+    if "Read_Override" in overrides:
+        return "Read_Override"
+    if overrides:
+        return overrides[0]
+    return next(iter(catalog), None)
+
+
+def _positional_sides(candidates: Optional[list]) -> tuple:
+    """split 軸の値候補から分子/分母の初期値を位置で選ぶ: 先頭 = 分母（基準側。
+    Measure は基準測定が先に走る想定、Override 候補 [False, True] では旧既定の
+    分母=False と一致）、2番目 = 分子。候補が無い・足りない場合は (None, None)
+    — ユーザが入力するまで検証エラーが表示される（エンジンが None を拒否）。"""
+    if candidates and len(candidates) >= 2:
+        return candidates[1], candidates[0]
+    return None, None
+
+
+def enable_relative(part: Dict[str, Any], catalog: Dict[str, Optional[list]]) -> None:
+    split = default_split_axis(catalog)
+    numerator, denominator = _positional_sides(catalog.get(split))
+    part["relative"] = {
+        "split_axis": split,
+        "numerator_when": numerator,
+        "denominator_when": denominator,
+        "mode": "ratio",
+        "denominator_offset": 1,
+    }
     _remove_axis_from_order(part, split)
 
 
@@ -213,14 +242,37 @@ def drop_stale_virtual_steps(part: Dict[str, Any]) -> Optional[str]:
 
 
 def change_split_axis(part: Dict[str, Any], new_axis: str, catalog: Dict[str, Optional[list]]) -> None:
-    """split 軸の変更: 旧軸を `order` へ戻し、新軸を `order` から外す。"""
+    """split 軸の変更: 旧軸を `order` へ戻し、新軸を `order` から外す。
+    分子/分母は旧軸の値のままでは無意味なので、新軸の候補から位置で初期化し
+    直す（labels 注記も旧軸のものなので捨てる）。"""
     rel = part.get("relative")
     if rel is None or rel.get("split_axis") == new_axis:
         return
     old = rel.get("split_axis")
     rel["split_axis"] = new_axis
+    rel["numerator_when"], rel["denominator_when"] = _positional_sides(catalog.get(new_axis))
+    rel.pop("labels", None)
     _restore_axis_to_order(part, old, catalog)
     _remove_axis_from_order(part, new_axis)
+
+
+def annotate_measure_labels(spec: Dict[str, Any], measure_labels: Dict[int, str]) -> None:
+    """Measure 番号で指定した相対化/filter に dataName 注記（labels）を付ける
+    （docs/spec_change_dataname_measure.md 6.1節: 保存は番号、名前は注記）。
+    相対化 dict なら分子/分母の値、集計 spec なら value（リスト可）が対象。
+    名前の分かる番号だけを残し、1つも無ければ labels 自体を外す。"""
+    raw = [spec.get("numerator_when"), spec.get("denominator_when")]
+    v = spec.get("value")
+    raw += v if isinstance(v, list) else [v]
+    labels = {
+        str(x): measure_labels[x]
+        for x in raw
+        if isinstance(x, int) and not isinstance(x, bool) and x in measure_labels
+    }
+    if labels:
+        spec["labels"] = labels
+    else:
+        spec.pop("labels", None)
 
 
 def duplicate_part(score_file: Dict[str, Any], index: int) -> int:
@@ -497,12 +549,15 @@ def build_context(
     if "FBC" in types and coef_file is not None:
         part_types.append("dVtBudget")
     catalogs = {t: introspect.axis_catalog(d, t) for t in part_types}
+    # Measure 番号 → dataName（UI の複合表示「dataName (Measure N)」と labels 注記用）
+    measure_label_map = {t: introspect.measure_labels(d, t) for t in part_types}
 
     ctx: Dict[str, Any] = {
         "data_dir": str(d),
         "types": types,
         "part_types": part_types,
         "catalogs": catalogs,
+        "measure_labels": measure_label_map,
         "coef_path": str(coef_file) if coef_file else None,
         "coef_source": coef_source,
         "config_path": str(config_file) if config_file else None,
@@ -577,6 +632,45 @@ def build_context(
         # `catalogs` を作った後に足す: custom 擬似typeには軸カタログが無い
         ctx["part_types"] = ctx["part_types"] + ["custom"]
     return ctx
+
+
+def parse_chip_counts(text: str, n_boards: int) -> List[int]:
+    """「Board ごとの Chip 数」入力のパース: 数1つ = 全 Board 共通、
+    カンマ区切り = Board 別（個数は Board 数と一致すること）。"""
+    t = (text or "").strip()
+    if not t:
+        raise ValueError("Chip 数を入力してください（例: 4 または 4,4,2,2）")
+    try:
+        counts = [int(p.strip()) for p in t.split(",")]
+    except ValueError:
+        raise ValueError(f"Chip 数が数値ではありません: {text!r}")
+    if len(counts) == 1:
+        counts = counts * n_boards
+    if len(counts) != n_boards:
+        raise ValueError(
+            f"Chip 数の個数（{len(counts)}）が Board 数（{n_boards}）と一致しません"
+        )
+    if any(c < 1 for c in counts):
+        raise ValueError("Chip 数は1以上にしてください")
+    return counts
+
+
+def expand_dummy_bundle(dummy_dir: str, chip_counts: List[int]) -> str:
+    """ダミー一式（Board/Chip は1つ）を一時ディレクトリへ Board/Chip 複製展開し、
+    展開先のパスを返す（後段は通常の build_context がそのまま働く —
+    docs/spec_change_dataname_measure.md プラン4）。"""
+    import tempfile
+
+    from scorelib_param import dummy
+
+    if not str(dummy_dir or "").strip():
+        raise ValueError("ダミー一式ディレクトリのパスを入力してください")
+    src = Path(str(dummy_dir).strip()).resolve()
+    if not src.is_dir():
+        raise ValueError(f"ディレクトリが見つかりません: {src}")
+    dest = Path(tempfile.mkdtemp(prefix="scorelib_dummy_"))
+    dummy.expand_boards_chips(src, dest, chip_counts)
+    return str(dest)
 
 
 def extract_bundle_zip(data: bytes) -> str:
@@ -682,6 +776,51 @@ def axis_counts(geninfo: Optional[Dict[str, Any]]) -> Dict[str, int]:
     return counts
 
 
+def data_axis_counts(catalogs: Dict[str, Dict[str, Optional[list]]]) -> Dict[str, int]:
+    """カタログ（軸→値候補）から数値軸の本数を導出する（max+1）。
+
+    WL/STR 等の本数は世代で固定で、測定フローが一部だけ測る設定は存在しない
+    （2026-07-28 担当者確認 — docs/spec_change_dataname_measure.md 9節）ため、
+    ダミー/実データの最大値+1 が総数として正確。Measure（実験ごとの測定数）と
+    InBatchEpoch は「本数」の概念が違うため除外する。"""
+    counts: Dict[str, int] = {}
+    for cat in catalogs.values():
+        for axis, cands in cat.items():
+            if axis in ("Measure", "InBatchEpoch") or not cands:
+                continue
+            if all(isinstance(v, int) and not isinstance(v, bool) for v in cands):
+                counts[axis] = max(counts.get(axis, 0), max(cands) + 1)
+    return counts
+
+
+def validation_axis_counts(ctx: Optional[Dict[str, Any]]) -> Dict[str, int]:
+    """本数整合チェックに使う軸本数: データ由来を正とし、世代情報 json
+    （自動検出されていれば）はデータに現れない軸の補完にだけ使う（観測 > 宣言）。"""
+    if not ctx:
+        return {}
+    counts = data_axis_counts(ctx.get("catalogs") or {})
+    for axis, n in axis_counts(ctx.get("geninfo")).items():
+        counts.setdefault(axis, n)
+    return counts
+
+
+def geninfo_mismatch_warnings(ctx: Optional[Dict[str, Any]]) -> List[str]:
+    """自動検出された世代情報 json とデータ由来本数の食い違い警告（診断情報:
+    実験異常か json の古さ。検査自体はデータ由来の値で行う）。"""
+    if not ctx or not ctx.get("geninfo"):
+        return []
+    data_counts = data_axis_counts(ctx.get("catalogs") or {})
+    out: List[str] = []
+    for axis, n in axis_counts(ctx["geninfo"]).items():
+        d = data_counts.get(axis)
+        if d is not None and d != n:
+            out.append(
+                f"{axis}: データからは {d} 本ですが、世代情報 json（{ctx.get('geninfo_path')}）"
+                f"は {n} 本と宣言しています。データ由来の値で検査します"
+            )
+    return out
+
+
 def _format_value_runs(values: List[int]) -> str:
     """[0,1,2,5] → '0–2, 5'（未カバー値一覧の圧縮表示）。"""
     runs: List[str] = []
@@ -696,12 +835,12 @@ def _format_value_runs(values: List[int]) -> str:
     return ", ".join(runs)
 
 
-def group_def_warnings(score_file: Dict[str, Any], geninfo: Optional[Dict[str, Any]]) -> List[str]:
-    """グループ定義と世代の軸本数（numWLs / numStrings）の不整合を列挙する。
+def group_def_warnings(score_file: Dict[str, Any], counts: Dict[str, int]) -> List[str]:
+    """グループ定義と軸本数の不整合を列挙する。`counts` は 軸 → 本数
+    （通常は validation_axis_counts: データ由来が正、世代情報 json は補完）。
     エラーではなく警告: 計算自体は通るが、チップの WL/STR 本数と食い違う
     範囲はほぼ確実に設定ミス（joint WL をグループから除外する運用は基本
     無い、と担当者確認済みなので全値をチェックする）。"""
-    counts = axis_counts(geninfo)
     warnings: List[str] = []
     for name, gd in (score_file.get("groupDefs") or {}).items():
         n = counts.get(gd.get("axis"))

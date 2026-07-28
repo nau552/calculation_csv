@@ -93,9 +93,12 @@ def test_filter_then_mean():
 | `test_expression.py` | 単体 | 式評価（関数、変数参照、未定義参照のエラー） |
 | `test_aggregate.py` | 単体 | 各op（filter/mean/subset/diff/expr）を手計算できる数行のデータで照合。潰し残しエラー。廃止した group_reduce が移行案内つきエラーになること。グループ派生列が普通の軸として集計できること |
 | `test_axis_resolve.py` | 単体 | 必要な軸だけの結合・map解決・Override の Boolean 化 |
-| `test_relative.py` | 単体 | 分母事前集計と offset の効き方を手計算値と照合。diff モード |
+| `test_relative.py` | 単体 | 分母事前集計と offset の効き方を手計算値と照合。diff モード。分子/分母未設定（None）の明示エラー。labels 注記のラウンドトリップ |
 | `test_dvtbudget.py` | 単体 | 温度の最近傍選択（-28.2℃→"-30"等）と変換式の値 |
-| `test_introspect.py` | 単体 | type検出（予約ファイル無視）、中身の形による設定/係数jsonc検出、軸カタログ（**実データに存在する値への絞り込み**、tRにStateが漏れない等） |
+| `test_introspect.py` | 単体 | type検出（予約ファイル無視）、中身の形による設定/係数jsonc検出、軸カタログ（**実データに存在する値への絞り込み**、tRにStateが漏れない等、Measure/DataName 軸の追加と Measure 列無し type での非表示）、measure_labels（番号→dataName。dataName無しで空） |
+| `test_dummy.py` | 単体 | ダミー一式の Board/Chip 複製展開（scorelib_param/dummy.py）。行数・番号付け・Boardごとに違うChip数・initial_temperature/map の扱い・複数Board元データの拒否。**「mean 集計は複製に対して不変」という性質**で「展開は行の複製だけ」を検証し、展開一式で実計算が通ることも確認 |
+| `test_agg_weight.py` | 単体 | 集計時重み（`weight`/`weight_ref`）: 「軸を潰す直前に値ごとの重みを乗算」が変換ステップ（by+mul）を直前に置いた場合と一致すること、weightSets からの解決、形状検査 |
+| `test_transform_weights.py` | 単体 | 変換ステップの拡張（add/sub/mul/div・複数回・グループ別重み）と Physical 記法グループ定義（definedInLogical / WLgroupDefinLogical の読み替え）。`{Generation}.json` 無しでの**データ由来の軸総数導出**が json ありと同値なこと、導出不能軸の明確なエラー |
 
 ### エンジン結合テスト
 | ファイル | 内容 |
@@ -104,14 +107,16 @@ def test_filter_then_mean():
 | `test_selection_sets.py` | ref 参照の解決がインライン値と同じ結果・同じ検証エラーになる |
 | `test_pipeline_steps.py` | 仮想ステップの配置換え（`__offset__`→相対化、`__relative__` を後ろに置く等）が数学的に等価な別表現と一致 |
 | `test_shared_context.py` | 共有キャッシュあり/なしで**結果が完全一致**すること、csv読み込みが type ごとに1回だけになること、State 違いのパーツ間で相対化計算が再利用されること |
+| `test_prefilter.py` | filter 前絞り最適化（`_hoistable_prefilters`）: 前出し対象の判定（split軸・分母事前集計軸とその派生軸・複合軸の除外）、**前絞りあり/なしの同値性**（相対化・dVtBudget・明示 `__relative__` 込み）、prefix_cache の混線防止、filter で絞った State 分だけの係数で計算できる診断上の変化 |
+| `test_measure_split.py` | **新仕様（Measure 番号基準）の本丸**: Measure 1/0 分割の相対化が旧仕様（Read_Label filter + Read_Override 分割）と厳密同値、DataName 分割とも同値、labels 注記が計算に影響しないこと、Measure filter（単一・is_in）、is_in の前絞り同値性とキャッシュキー安全性。Read_Override 分割と Measure 軸が併用不可な理由（ペアキー衝突）もコメントで記録 |
 | `test_cli.py` | 本丸。fixtures の config を実データで計算し、**テスト内に独立に書いた素朴な再計算と一致**することを照合（FBCパーツ）。遅延グループ集計のユーザシナリオ。範囲外WL値のエラー。custom パーツの計算・エラー・混在拒否。**サブプロセスとして CLI を起動する完全E2E**（最適化側から呼ばれる形そのもの） |
 | `test_batch.py` | バッチ計算（scorelib_param.batch）。**最重要は等価性**: 5 epoch（2実験、値・dVtBudget温度を全 epoch で変えた摂動データ）のバッチ一括計算が epoch ごとの `compute_score_file` と全パーツ一致 — epoch 混線（相対化ペア・集計・係数選択のまたがり）はどんな形でも不一致として現れる構成。ほか: Step/Loop ラベル導出、列挙（重複ラベル・空 history・junk 無視）、csv.gz 直読み、tar.gz 展開（フラット/ネスト flatten・ビュー削除・入力元無傷・不正パス拒否）、skip-and-report / strict / filter 空振り epoch の帰属 / 全滅エラー / 予約名 `Epoch` 衝突、batch-size advisory、CLI E2E |
 
 ### UIテスト
 | ファイル | 層 | 内容 |
 |---|---|---|
-| `test_ui_state.py` | 単体〜結合 | ui/state.py の全ロジック。雛形が**そのまま計算に通る**こと（エンジンで実計算）、相対化ON/OFFの order 整合、グループ定義（取り込み/削除ガード/本数警告/エクスポート同梱）、検証エラーのパーツ名表示、build_context（空パス拒否・各ファイルの指定/自動検出/**候補複数エラー**）、一式zip（フラット/ネスト/曖昧エラー）、custom（型切替の整合・実計算）、下書きの新旧形式、ラベル純関数（⚠/編集中/同名でも一意） |
-| `test_ui_app.py` | E2E | AppTest でUIを実際に動かす。起動、エラー表示、パーツ作成→計算の一気通貫、式挿入ボタンの即時反映、並べ替え、undo、**下書き保存→別セッションで復元**（データ読み込み・入力欄まで）、config読み込みでの WLgroup 取り込み、本数警告の表示、custom パーツの作成→関数選択→計算、**複製→切替のウィジェット独立性**（回帰）、`__relative__` 残留の回帰 |
+| `test_ui_state.py` | 単体〜結合 | ui/state.py の全ロジック。雛形が**そのまま計算に通る**こと（エンジンで実計算。相対化プリセット無し・Measure filter 先頭・Label/Override 除外）、相対化ON/OFFの order 整合と既定 split（Measure > Override > 先頭軸・分子/分母の位置初期化・相対化ONのままでも実計算が通ること）、labels 注記の付与/除去、parse_chip_counts とダミー展開→build_context の通し、グループ定義（取り込み/削除ガード/本数警告 — 本数は**データ由来**が正で世代情報jsonは補完・食い違いは診断警告/エクスポート同梱）、検証エラーのパーツ名表示、build_context（空パス拒否・各ファイルの指定/自動検出/**候補複数エラー**）、一式zip（フラット/ネスト/曖昧エラー）、custom（型切替の整合・実計算）、下書きの新旧形式、ラベル純関数（⚠/編集中/同名でも一意） |
+| `test_ui_app.py` | E2E | AppTest でUIを実際に動かす。起動、エラー表示、パーツ作成→計算の一気通貫、**ダミー展開→雛形→相対化ON（Measure 分割+labels 注記）→テスト計算の一気通貫**、式挿入ボタンの即時反映、並べ替え、undo、**下書き保存→別セッションで復元**（データ読み込み・入力欄まで）、config読み込みでの WLgroup 取り込み、本数警告の表示、custom パーツの作成→関数選択→計算、**複製→切替のウィジェット独立性**（回帰）、`__relative__` 残留の回帰 |
 
 ### AppTest の限界（知っておくべきこと）
 - **D&D部品（streamlit-sortables）は描画・操作できない** → ドラッグ操作は手動確認が必要。

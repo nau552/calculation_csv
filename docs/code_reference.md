@@ -65,9 +65,9 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 | `COMBINED_SEP = "&"` | 複合軸の区切り（`"State&Read_Label"`） |
 | `CUSTOM_TYPE = "custom"` | 自作関数パーツの type 値 |
 | `MULTI_OPS` | value で対象を絞れる集計op（mean/sum/min/max）。UIと共有 |
-| `AggregationSpec` | 1エントリの集計指示。op/value/ref/expr/by + 集計時重み `weight`/`weight_ref`（mean系専用: その軸を潰す直前に値へ乗算。正規化された加重平均ではない）。before検証で旧表記（`*_subset`、`values`、廃止済み `group_reduce`）を変換/エラー化、after検証で opごとの value/weight 形状を検査 |
+| `AggregationSpec` | 1エントリの集計指示。op/value/ref/expr/by + 集計時重み `weight`/`weight_ref`（mean系専用: その軸を潰す直前に値へ乗算。正規化された加重平均ではない）+ `labels` 注記（値→表示名。実行には不使用 — Measure 番号に dataName を残す用）。filter の value はスカラー（等値）またはリスト（is_in）。before検証で旧表記（`*_subset`、`values`、廃止済み `group_reduce`）を変換/エラー化、after検証で opごとの value/weight 形状を検査 |
 | `AxisAggregation` | 上に axis 名が付いたもの（分母事前集計はリストなので軸名を自分で持つ） |
-| `RelativeConfig` | 相対化設定（split_axis / numerator_when / denominator_when / mode / denominator_offset / denominator_pre_aggregation）。廃止済み `enabled: false` は明示エラー |
+| `RelativeConfig` | 相対化設定（split_axis / numerator_when / denominator_when / mode / denominator_offset / denominator_pre_aggregation + `labels` 注記）。廃止済み `enabled: false` は明示エラー。分子/分母の None（未設定）は「必ず0行マッチになる設定忘れ」として明示エラー（UIの未入力表示の実体） |
 | `ScorePart` | 1スコアパーツ。name/type/relative/order/aggregations + custom用の function/params。custom と集計フィールドの混在を拒否。複合軸の辞書選択の形状検査。`resolve_selection_refs()` で ref を選択セットの中身に展開して再検証 |
 | `GroupDef` | グループ派生軸の定義（対象軸 + グループ名→[lo, hi]） |
 | `ScoreFile` | ユーザが作る内容一式（score_parts / expression / constraintThreshold / selectionSets / groupDefs）。自己完結でエクスポートされる単位 |
@@ -80,7 +80,7 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 | 定義 | 内容 |
 |---|---|
 | `JOIN_KEYS` | `(InBatchEpoch, Board, Chip, Block, Measure)`。測定csvとラベルcsvの結合キー |
-| `resolve_axes(data_dir, type_, required_axes)` | `{type}.csv` に、要求された軸のぶんだけ `parameterLabel_` / `dataName_` / `map_*` を lazy join し、値列+軸列の LazyFrame を返す。Override列は Boolean 正規化。要求されない列（InBatchEpoch等）は最後に落とす |
+| `resolve_axes(data_dir, type_, required_axes)` | `{type}.csv` に、要求された軸のぶんだけ `parameterLabel_` / `dataName_` / `map_*` を lazy join し、値列+軸列の LazyFrame を返す。Override列は Boolean 正規化。要求されない列（InBatchEpoch等）は最後に落とす。**Measure は結合キーだが、軸として要求されたら残す**（相対化・filter の識別子軸 — docs/spec_change_dataname_measure.md） |
 | `_map_file_for_axis` | 軸名→対応する map ファイル名の規約（`*_Label`→map_Label.csv 等） |
 
 設計: 全展開（FBC_expanded.csv 相当）を作らず、パーツが言及した軸だけを結合する。
@@ -91,7 +91,7 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 | `group_column_expr(axis, ranges)` | グループ派生列を作る polars 式（範囲→グループ名） |
 | `_per_value_operand(lf, axis, mapping, what)` | {軸の値: 定数} を行ごとの定数式へ。辞書に無い値の行は一覧つきエラー（変換の by 重みと集計時重みで共用） |
 | `apply_transform(lf, col, spec)` | 軸を潰さない行単位変換（add/sub/mul/div。`__offset__`/`__weight__` 等の仮想ステップ用） |
-| `apply_axis_op(lf, col, axis, spec, group_keys)` | 1軸を1つの指示で潰す。filter / mean系（value で対象限定可、`weight` で集計直前に重み乗算）/ diff（a−b の自己結合）/ expr（グループごとに評価） |
+| `apply_axis_op(lf, col, axis, spec, group_keys)` | 1軸を1つの指示で潰す。filter（スカラー=等値 / リスト=is_in。どちらも軸列を落とし、is_in の残行は後段集計に複製として流れる）/ mean系（value で対象限定可、`weight` で集計直前に重み乗算）/ diff（a−b の自己結合）/ expr（グループごとに評価） |
 | `apply_aggregations(lf, col, order, aggregations)` | order を上から順に適用。**残っている全列をグループキー**にするのが要（グループ派生列が自然にキーとして生き残る仕組み） |
 | `collapse` / `collapse_to_scalar` | 潰し残しの列や null（filterが0行等）を検出してエラーにし、1スカラーを返す |
 | `aggregate_score_part` | 上2つをつないだ入口 |
@@ -100,6 +100,16 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 `apply_relative(lf, col, relative)` のみ。split_axis で分子/分母に分け、分母だけ事前集計
 （denominator_pre_aggregation）してから、**その時点で残っている全列一致**で左結合し、
 ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算する。
+
+### `scorelib_param/dummy.py` — ダミー一式の Board/Chip 展開（測定前設計）
+| 関数 | 内容 |
+|---|---|
+| `expand_boards_chips(src, dest, chip_counts)` | Board/Chip 1つのダミー一式を複製展開（`chip_counts[b]` = Board b の Chip 数。Board別可）。Board列を持つ csv は行複製、initial_temperature.csv（ヘッダ無し）は Board ごとに1行、map_*/json はコピー。元が複数 Board/Chip ならエラー |
+| `make_pseudo_dummy(src, dest)` | 逆方向: 正データを Board/Chip 1つ（0 に正規化）へ削る。ダミー納品前の開発・検証用（scripts/make_pseudo_dummy.py から呼ばれる） |
+
+設計: 展開は**行の複製だけ**を行い数値を作らない（mean 集計が展開前後で不変 —
+tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一式から設計を始める」の実体
+（docs/spec_change_dataname_measure.md 9節・プラン4）。
 
 ### `scorelib_param/dvtbudget.py` — dVtBudget変換
 | 関数 | 内容 |
@@ -123,7 +133,8 @@ ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算
 | `find_run_configs(dir)` | **中身の形**（optimization{}キー）で設定jsonc候補を全列挙 |
 | `find_dvtbudget_coefs(dir)` | 中身の形（世代→温度→State→{a,b}）で係数jsonc候補を全列挙。設定jsoncとは形が排他的 |
 | `find_generation_info(dir, generation)` | これだけファイル名ベース（`{Generation}.json`） |
-| `axis_catalog(dir, type_)` | typeの軸一覧→値候補。dVtBudget は FBC のカタログ |
+| `axis_catalog(dir, type_)` | typeの軸一覧→値候補。dVtBudget は FBC のカタログ。**Measure 軸**（Measure 列を持つ type のみ・実在番号の昇順）と **DataName 軸**（dataName_{type}.csv がある場合）も出す |
+| `measure_labels(dir, type_)` | Measure 番号 → dataName の対応（UI の複合表示「dataName (Measure N)」と labels 注記用。dataName_* が無ければ空 = 番号のみ表示） |
 | `_candidates` | 値候補の導出。map系軸は**実データに存在する値だけ**（map順、失敗時は全語彙にフォールバック）、Override は [False, True]、数値軸は csv のユニーク値 |
 
 複数候補の扱い（黙って選ばずエラー）は呼び出し側（ui/state.py）の責務。
@@ -136,7 +147,8 @@ ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算
 | `_referenced_group_defs` / `_required_axes` | 派生軸名→元軸への読み替え。定義名=軸名の同名を拒否 |
 | `_with_group_columns` | 読み込み直後にグループ派生列を生成。どの範囲にも入らない値の行は値一覧つきエラー。元軸がパーツに不要なら落とす（暗黙集約と同じ扱いに戻す） |
 | `_effective_order(part)` | 明示されなかった `__relative__`（先頭）/`__dvtbudget__`（相対化直後）を補完 |
-| `_hoistable_prefilters(part, group_defs)` | order 内の位置・`__relative__` の明示/暗黙によらず、可換な filter の行絞り [(軸,値),...] をパイプライン先頭に前出しする判定。除外は split軸・分母事前集計の軸とその `by`（派生軸は元軸と双方向対応）・複合軸の構成軸。列は落とさず行だけ先に絞る純最適化（結果不変、tests/test_prefilter.py）。診断上の変化: 後段の検証（dVtBudget係数カバレッジ等）は filter 後に残る値だけが対象になる |
+| `derive_axis_counts(data_dir, axes)` / `load_axis_counts(path)` / `resolve_group_defs(...)` | Physical 記法の軸総数 N の解決: `{Generation}.json` があればそこから（互換・優先）、**無ければ測定csvの max+1 から導出**（本数は世代で固定・フローは全数測定のため正確 — spec_change ノート9節）。どちらからも決まらなければ明確なエラー |
+| `_hoistable_prefilters(part, group_defs)` | order 内の位置・`__relative__` の明示/暗黙によらず、可換な filter の行絞り [(軸,値),...] をパイプライン先頭に前出しする判定（リスト値=is_in も対象。キャッシュキーでは tuple 化）。除外は split軸・分母事前集計の軸とその `by`（派生軸は元軸と双方向対応）・複合軸の構成軸。列は落とさず行だけ先に絞る純最適化（結果不変、tests/test_prefilter.py）。診断上の変化: 後段の検証（dVtBudget係数カバレッジ等）は filter 後に残る値だけが対象になる |
 | `SharedComputeContext` | 1回の compute_score_file 内でtype単位のcsv読み込みと `__relative__`/`__dvtbudget__` 直後の中間結果を共有するキャッシュ（結果は共有なしと同一。customパーツは対象外）。前絞りが異なるパーツは共有しない（キーに prefilters を含む） |
 | `_apply_axis_step` | 複合軸なら列を `&` で融合してから aggregate に渡す |
 | `compute_score_part(...)` | 1パーツの計算。type=custom は関数呼び出しへ分岐 |
@@ -160,9 +172,9 @@ ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算
 **雛形とパーツ操作**
 | 関数 | 内容 |
 |---|---|
-| `default_axis_order(catalog)` | 雛形の軸順（Label→Override→カテゴリ→数値→Board/Chip/Block。InBatchEpoch 除外） |
-| `default_aggregation(axis, cands)` | カテゴリ/bool軸は先頭候補の filter、数値軸は mean |
-| `part_skeleton(name, type, catalog)` | **そのまま計算が通る**雛形（全軸+デフォルトop、Read_Override があれば相対化ON） |
+| `default_axis_order(catalog)` | 雛形の軸順（Measure→Label→Override→カテゴリ→数値→Board/Chip/Block。InBatchEpoch と DataName は除外 — DataName は Measure の表示名の扱い） |
+| `default_aggregation(axis, cands)` | カテゴリ/bool軸は先頭候補の filter、数値軸は mean。Measure は識別子軸なので先頭番号の filter（平均しない） |
+| `part_skeleton(name, type, catalog)` | **そのまま計算が通る**雛形（全軸+デフォルトop）。相対化プリセットは無し（旧 Read_Override 自動ONは廃止）。Measure 軸のある type では Label/Override 軸も除外（Measure が一意に決める測定メタデータで、Measure 分割のペア結合を壊すため — docs/spec_change_dataname_measure.md 4節） |
 | `custom_part_skeleton(name, functions)` | custom パーツの雛形（先頭の関数+空params） |
 | `switch_part_type(part, new_type)` | type変更時の不整合フィールド除去（custom⇔通常、dVtBudget離脱時の `__dvtbudget__` 除去） |
 | `duplicate_part(sf, i)` | 深いコピー+新しい名前。**`_uid` は必ず新規**（共有するとウィジェット状態が2パーツで混線する） |
@@ -171,7 +183,10 @@ ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算
 **相対化と order の整合**
 | 関数 | 内容 |
 |---|---|
-| `enable_relative` / `disable_relative` / `change_split_axis` | 相対化ON/OFF/split軸変更時に order との整合を自動で取る。OFF時は split軸を filter False で order へ復帰+`__relative__` を除去（エンジンは order に無い軸を暗黙集約して混ぜるため、放置すると分子分母が混ざる） |
+| `default_split_axis(catalog)` | 相対化の既定 split 軸: Measure > Read_Override > 他の Override > 先頭の軸 |
+| `_positional_sides(cands)` | split 軸の候補から分子/分母の初期値を位置で選ぶ（先頭=分母・2番目=分子。Override の [False, True] では旧既定と一致）。候補不足なら (None, None) = 入力まで検証エラー |
+| `enable_relative` / `disable_relative` / `change_split_axis` | 相対化ON/OFF/split軸変更時に order との整合を自動で取る。OFF時は split軸をデフォルトopで order へ復帰+`__relative__` を除去（エンジンは order に無い軸を暗黙集約して混ぜるため、放置すると分子分母が混ざる）。split変更時は分子/分母を新軸の候補で初期化し直し、labels 注記も捨てる |
+| `annotate_measure_labels(spec, mlabels)` | Measure 指定の相対化/filter に dataName の labels 注記を付与（名前の分かる番号のみ。無ければ注記ごと除去） |
 | `drop_stale_virtual_steps(part)` | type≠dVtBudget で残った `__dvtbudget__` を除去 |
 
 **グループ定義**
@@ -180,7 +195,10 @@ ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算
 | `import_config_group_defs(sf, wlgroup)` | 設定jsoncの WLgroup を編集可能な定義として取り込み（既存があれば触らない） |
 | `parts_referencing_group_def` / `add_group_def` / `delete_group_def` | 参照パーツ検出 / 名前衝突チェック付き作成 / 参照中は削除ガード |
 | `axis_counts(geninfo)` | 世代情報json → {WL: numWLs, STR: numStrings} |
-| `group_def_warnings(sf, geninfo)` | 定義の範囲と本数の整合警告（範囲超過・未カバー値。`_format_value_runs` で 4–5 のような圧縮表示） |
+| `data_axis_counts(catalogs)` | カタログの数値軸から本数を導出（max+1。本数は世代で固定・フローは全数測定のため正確。Measure/InBatchEpoch は除外） |
+| `validation_axis_counts(ctx)` | 本数チェックに使う軸本数: **データ由来が正**、自動検出された世代情報json はデータに無い軸の補完のみ（観測 > 宣言） |
+| `geninfo_mismatch_warnings(ctx)` | 自動検出された世代情報json とデータ由来本数の食い違い警告（診断情報。検査はデータ由来で行う） |
+| `group_def_warnings(sf, counts)` | 定義の範囲と本数の整合警告（範囲超過・未カバー値。`_format_value_runs` で 4–5 のような圧縮表示）。counts は通常 validation_axis_counts |
 
 **選択セット**
 `_part_specs`（パーツの全集計spec収集の共通ヘルパー）、`referencing_parts`、
@@ -196,7 +214,9 @@ ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算
 | 関数 | 内容 |
 |---|---|
 | `_resolve_optional_file(explicit, discover, label)` | 「明示指定優先・無ければ自動検出・**候補複数はエラー**」の共通ルール |
-| `build_context(data_dir, config, coef, geninfo, custom)` | 画面1の読み込み本体。空パス拒否、type/カタログ導出、4つの同梱ファイル解決、custom関数一覧化。ctx dict を返す |
+| `build_context(data_dir, config, coef, geninfo, custom)` | 画面1の読み込み本体。空パス拒否、type/カタログ導出（Measure→dataName 対応の `measure_labels` 含む）、同梱ファイル解決、custom関数一覧化。ctx dict を返す。世代情報json の UI 入力欄は廃止 — UI は geninfo に None を渡し、`{Generation}.json` がディレクトリ内にあれば自動検出して診断にだけ使う |
+| `parse_chip_counts(text, n_boards)` | 「Board ごとの Chip 数」入力のパース（数1つ=全Board共通、カンマ区切り=Board別） |
+| `expand_dummy_bundle(dir, chip_counts)` | ダミー一式を一時ディレクトリへ Board/Chip 展開（scorelib_param.dummy を呼ぶ。展開先は通常の build_context がそのまま読む） |
 | `extract_bundle_zip(bytes)` | 一式zipを一時ディレクトリへ展開（zip-slip対策、単一トップフォルダ降下） |
 | `locate_bundle_inputs(dir)` | 展開後ツリーを探索（深さ4）して測定ディレクトリ+同梱ファイルを特定。曖昧ならエラー |
 
@@ -221,9 +241,10 @@ ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算
 | `HAS_SORTABLES` / `sortable_list(items, key)` | streamlit-sortables のソフト依存。ラベル由来のキーで並び替え後に再マウント。失敗時 None（呼び出し側が↑↓ボタンにフォールバック） |
 | `_SORTABLE_STYLE` | D&D項目のCSS（半透明グレー・左揃え。デフォルトの赤・中央揃えの上書き） |
 | `parse_scalar(text)` | 自由入力 → bool/int/float/str |
-| `value_widget` / `dict_selection_row` / `selection_widget` / `selection_list_widget` | 値1個 / 複合軸1行 / どちらか自動 / 可変行リスト（単一軸+候補ありは multiselect） |
-| `agg_editor(entry, spec, catalog, set_names, key)` | 集計指示エディタ。**opに応じた入力欄だけを出す**（value/values の混同がUI上起きない）。op変更時は古いフィールドを掃除。mean系の単一軸エントリには集計時重み欄（`_agg_weight_editor`: なし/重みセット/値ごと/定数。値ラベルは by_value_labels 優先=グループ派生軸対応） |
-| `relative_editor(part, catalog, set_names, key)` | 相対化ブロックのエディタ。ON/OFF/split変更は state.py の整合関数を呼ぶ。分母事前集計は agg_editor をフル再利用 |
+| `measure_format(mlabels)` / `_axis_format` | Measure 値の複合表示「dataName (Measure N)」（名無しは「Measure N」）。選択・保存は常に番号 |
+| `value_widget` / `dict_selection_row` / `selection_widget` / `selection_list_widget` | 値1個 / 複合軸1行 / どちらか自動 / 可変行リスト（単一軸+候補ありは multiselect）。Measure 軸は複合表示 |
+| `agg_editor(entry, spec, catalog, set_names, key, ..., measure_labels)` | 集計指示エディタ。**opに応じた入力欄だけを出す**（value/values の混同がUI上起きない）。filter は候補のある単一軸で multiselect（複数=is_in、Measure 選択時は labels 注記も付与）。op変更時は古いフィールドを掃除。mean系の単一軸エントリには集計時重み欄（`_agg_weight_editor`: なし/重みセット/値ごと/定数。値ラベルは by_value_labels 優先=グループ派生軸対応） |
+| `relative_editor(part, catalog, set_names, key, measure_labels)` | 相対化ブロックのエディタ。split軸は**任意の軸**から選択（旧 Override 限定は廃止）、分子/分母は候補プルダウン or 自由入力、Measure 分割時は labels 注記を自動付与。ON/OFF/split変更は state.py の整合関数を呼ぶ。分母事前集計は agg_editor をフル再利用 |
 
 ### `ui/app.py` — 5画面本体（ウィジェット配置と session_state だけ）
 | 区分 | 内容 |
@@ -232,14 +253,14 @@ ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算
 | `_snapshot` / `_track_history` / `_undo` | JSON文字列スナップショットによる undo（20件）。undo 時はウィジェット状態も破棄 |
 | `_offer_draft_restore` / `_autosave` | 起動時の下書き復元（データ読み込み・画面1入力欄も復元）/ 設定が変わった settled run ごとに自動保存 |
 | `_merged_catalog` / `_catalog_for_part` / `_with_group_axes` | カタログの合成（パーツtype用+グループ派生軸の追加） |
-| `screen_data` | 画面1。一式zip（`locate_bundle_inputs`）/ パス入力4+1 / 認識結果 / 本数警告 / 既存スコア設定の取り込み |
+| `screen_data` | 画面1。一式zip（`locate_bundle_inputs`）/ **ダミー一式の Board/Chip 展開**（Board数・BoardごとのChip数入力 → `expand_dummy_bundle` → 展開先を通常読み込み。ctx に dummy_source を記録）/ パス入力3+1（世代情報json 欄は廃止 — 本数はデータ由来）/ 認識結果（データ由来の軸本数と世代情報json の食い違い診断警告を含む）/ 本数警告 / 既存スコア設定の取り込み |
 | `_order_entry_label` / `_order_editor` | orderの1行ラベル / 常時ドラッグ可能リスト+「編集するエントリ」プルダウン+常時表示エディタ（削除ボタン内蔵）。フォールバックは ✎/↑↓/✕ 行 |
 | `_add_entry_controls` | 軸追加・複合軸束ね・`__offset__`・仮想ステップ配置 |
 | `_custom_part_editor` | customパーツ用（関数プルダウン+params行エディタ） |
 | `screen_parts` | 画面2。**パーツ選択は _uid をキー付き状態("part_sel")で保持**（run開始時に選択が確定=マーカー即時追従。追加/複製は part_sel_pending で次runに予約）。検証NGは ⚠ |
 | `screen_sets` / `_selection_sets_section` / `_group_defs_section` | 画面3。選択セットとグループ定義の管理 |
 | `screen_compose` | 画面4。expression（パーツ名クリック挿入）+ constraintThreshold 行エディタ |
-| `screen_test_export` | 画面5。テスト計算 / score.jsonc・パーツ単体エクスポート / インポート |
+| `screen_test_export` | 画面5。テスト計算（ダミー展開データ読み込み中は「数値は無意味」の警告表示）/ score.jsonc・パーツ単体エクスポート / インポート |
 | `main` | サイドバー（undo・検証件数・エンジン版）→ 復元プロンプト → 画面 → **変更検知したら即 rerun**（全画面共通。画面ごとの実装忘れを構造的に防ぐ）→ 履歴・自動保存 |
 
 ---
@@ -315,6 +336,7 @@ filter 空振りで行ごと消えた epoch は「パーツごとに全 epoch �
 | `custom_parts.py` | 自作関数の登録テンプレート（SVN登録用。書き方の説明コメント入り） |
 | `config_mini.jsonc` | UI動作確認用のサンプルスコア設定（tests/data/result_tmp_mini と組で使う） |
 | `scripts/convert_dvtbudget_coef.py` | 現行の係数Pythonファイル（`dVtBudget_coef = {...}`）を ast で安全に読み jsonc へ変換 |
+| `scripts/make_pseudo_dummy.py` | 正データ→疑似ダミー一式（Board/Chip を1つに削る。`scorelib_param.dummy.make_pseudo_dummy` の CLI 包み。担当者ダミー納品前の開発・検証用） |
 | `scripts/benchmark_batch.py` | 実運用マシンでバッチサイズごとの所要時間・ピークメモリを実測する（計測1回=子プロセス1つ。`--batch-sizes auto,10,25,50` / `--max-threads` / `--repeat`） |
 | `scripts/batch_bridge_example.py` | 最適化スクリプト（python3.7）からバッチCLIを subprocess 起動するブリッジ実装例。scorelib_param 非依存・py3.7互換で、そのまま現行スクリプトへコピーできる（stderr は `<out>.log` へ、失敗は log 末尾つき RuntimeError、`<out>.failed.csv` を failed dict として返す） |
 | `scripts/get_score_bridge_example.py` | turbo.py の get_score() に差し込む**毎epochの通常スコア計算**ブリッジ実装例（score_function="gui_score" 分岐）。`python -m scorelib_param.cli` を subprocess 起動し stdout の JSON を dict で返す。py3.7互換・scorelib非依存。initial_temperature 省略時は data_dir 内を自動使用 |

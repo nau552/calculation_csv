@@ -21,22 +21,34 @@ def sf():
 
 # ------------------------------------------------------------------- skeleton
 
-def test_skeleton_is_valid_and_relative_on(catalog):
+def test_skeleton_is_valid_without_relative_preset(catalog):
+    """v1: 相対化プリセットは無し — 旧「Read_Override があれば自動ON」は廃止
+    （docs/spec_change_dataname_measure.md 9節）。"""
     part = state.part_skeleton("p1", "FBC", catalog)
-    assert part["relative"]["split_axis"] == "Read_Override"
-    assert "Read_Override" not in part["order"]  # 相対化が消費するため order には無い
+    assert "relative" not in part
+    assert part["order"][0] == "Measure"  # 「どの測定か」の選択が先頭
     assert "InBatchEpoch" not in part["order"]
+    assert "DataName" not in part["order"]  # DataName は Measure の表示名の扱い
+    # Label/Override は Measure が一意に決める測定メタデータ → 雛形に入れない
+    assert not any(a.endswith(("_Label", "_Override")) for a in part["order"])
     assert part["order"][-3:] == ["Board", "Chip", "Block"]
-    assert part["order"][0].endswith("_Label")  # Label系が先頭
     assert state.validate_part(part) == []
 
 
 def test_skeleton_default_ops(catalog):
     part = state.part_skeleton("p1", "FBC", catalog)
     aggs = part["aggregations"]
+    assert aggs["Measure"] == {"op": "filter", "value": 0}  # 識別子軸: 平均しない
     assert aggs["State"] == {"op": "filter", "value": "R2A"}
-    assert aggs["Erase_Override"] == {"op": "filter", "value": False}
     assert aggs["WL"] == {"op": "mean"}
+
+
+def test_skeleton_keeps_label_axes_for_types_without_measure():
+    """Measure 軸の無いカタログ（集計済み type 等）では従来どおり全軸が雛形に
+    入る（Label/Override 除外は Measure がある場合だけの規則）。"""
+    catalog = {"Read_Override": [False, True], "Board": [0, 1]}
+    part = state.part_skeleton("p", "X", catalog)
+    assert "Read_Override" in part["order"]
 
 
 def test_skeleton_computes_as_is(data_dir_mini, catalog):
@@ -46,47 +58,95 @@ def test_skeleton_computes_as_is(data_dir_mini, catalog):
     assert isinstance(value, float)
 
 
-def test_skeleton_without_read_override_has_no_relative(data_dir_mini):
-    catalog_tr = axis_catalog(data_dir_mini, "tR")
-    part = state.part_skeleton("p1", "tR", catalog_tr)
-    assert "relative" not in part or part["relative"] is None or "Read_Override" in catalog_tr
-    # tR has Read_Override via parameterLabel, so relative should be ON there;
-    # 代わりに Read_Override の無いカタログを疑似的に作って確認する:
-    no_ovr = {a: c for a, c in catalog_tr.items() if a != "Read_Override"}
-    part2 = state.part_skeleton("p2", "tR", no_ovr)
-    assert "relative" not in part2
+def test_default_split_axis_priority(catalog):
+    """既定 split 軸: Measure > Read_Override > 他の Override > 先頭の軸。"""
+    assert state.default_split_axis(catalog) == "Measure"
+    no_measure = {a: c for a, c in catalog.items() if a != "Measure"}
+    assert state.default_split_axis(no_measure) == "Read_Override"
+    aggregated = {"Board": [0, 1], "Chip": [0, 1]}  # 集計済み type（4b回答の形）
+    assert state.default_split_axis(aggregated) == "Board"
 
 
 # ------------------------------------------------- relative on/off and order
 
-def test_disable_relative_restores_split_axis(catalog):
+def test_enable_relative_defaults_to_measure_split(catalog):
     part = state.part_skeleton("p", "FBC", catalog)
-    assert "Read_Override" not in part["order"]
-    restored = state.disable_relative(part, catalog)
-    assert restored == "Read_Override"
-    assert "relative" not in part
-    assert "Read_Override" in part["order"]
-    # 安全なデフォルト（基準側 = filter False）で復帰する
-    assert part["aggregations"]["Read_Override"] == {"op": "filter", "value": False}
+    state.enable_relative(part, catalog)
+    rel = part["relative"]
+    assert rel["split_axis"] == "Measure"
+    # 位置既定: 候補の先頭 = 分母（基準）、2番目 = 分子（評価）
+    assert rel["denominator_when"] == 0
+    assert rel["numerator_when"] == 1
+    assert "Measure" not in part["order"]  # 相対化が消費するため order には無い
+    assert "Measure" not in part["aggregations"]
     assert state.validate_part(part) == []
 
 
-def test_enable_relative_removes_split_axis(catalog):
+def test_enable_relative_computes_as_is(data_dir_mini, catalog):
+    """相対化ONの既定値（Measure 1/0）のまま計算が通ること。"""
     part = state.part_skeleton("p", "FBC", catalog)
-    state.disable_relative(part, catalog)
     state.enable_relative(part, catalog)
-    assert part["relative"]["split_axis"] == "Read_Override"
-    assert "Read_Override" not in part["order"]
-    assert "Read_Override" not in part["aggregations"]
+    value = compute_score_part(data_dir_mini, ScorePart.model_validate(part))
+    assert isinstance(value, float)
 
 
-def test_change_split_axis_swaps_order_membership(catalog):
+def test_enable_relative_on_aggregated_type_uses_any_axis():
+    """Measure 列の無い集計済み type: split は任意軸（先頭）から。"""
+    catalog = {"Board": [0, 1], "Chip": [0, 1, 2, 3]}
+    part = state.part_skeleton("p", "SUMMARY", catalog)
+    state.enable_relative(part, catalog)
+    rel = part["relative"]
+    assert rel["split_axis"] == "Board"
+    assert (rel["numerator_when"], rel["denominator_when"]) == (1, 0)
+
+
+def test_enable_relative_without_candidates_shows_validation_error():
+    """候補の無い軸が split になった場合、分子/分母はユーザ入力まで None →
+    エンジンの「both numerator_when and denominator_when」エラーが表示される。"""
+    catalog = {"Foo": None, "Board": [0]}
+    part = state.part_skeleton("p", "X", catalog)
+    state.enable_relative(part, catalog)
+    assert part["relative"]["numerator_when"] is None
+    problems = state.validate_part(part)
+    assert any("numerator_when" in p for p in problems)
+
+
+def test_disable_relative_restores_split_axis(catalog):
     part = state.part_skeleton("p", "FBC", catalog)
-    assert "Erase_Override" in part["order"]
-    state.change_split_axis(part, "Erase_Override", catalog)
-    assert part["relative"]["split_axis"] == "Erase_Override"
-    assert "Erase_Override" not in part["order"]
-    assert "Read_Override" in part["order"]  # 旧 split 軸は order へ戻る
+    state.enable_relative(part, catalog)
+    assert "Measure" not in part["order"]
+    restored = state.disable_relative(part, catalog)
+    assert restored == "Measure"
+    assert "relative" not in part
+    assert "Measure" in part["order"]
+    # 識別子軸の安全なデフォルト（先頭番号の filter）で復帰する
+    assert part["aggregations"]["Measure"] == {"op": "filter", "value": 0}
+    assert state.validate_part(part) == []
+
+
+def test_change_split_axis_swaps_order_membership_and_resets_sides(catalog):
+    part = state.part_skeleton("p", "FBC", catalog)
+    state.enable_relative(part, catalog)
+    state.change_split_axis(part, "Read_Override", catalog)
+    rel = part["relative"]
+    assert rel["split_axis"] == "Read_Override"
+    # 分子/分母は新しい軸の候補 [False, True] から位置で初期化し直される
+    assert rel["numerator_when"] is True
+    assert rel["denominator_when"] is False
+    assert "Read_Override" not in part["order"]
+    assert "Measure" in part["order"]  # 旧 split 軸は order へ戻る
+    # 逆へ戻すと Read_Override は order へ復帰する
+    state.change_split_axis(part, "Measure", catalog)
+    assert "Read_Override" in part["order"]
+    assert "Measure" not in part["order"]
+
+
+def test_change_split_axis_drops_stale_labels(catalog):
+    part = state.part_skeleton("p", "FBC", catalog)
+    state.enable_relative(part, catalog)
+    part["relative"]["labels"] = {"1": "evaluation_param_read_level_1"}
+    state.change_split_axis(part, "Read_Override", catalog)
+    assert "labels" not in part["relative"]
 
 
 def test_disable_relative_removes_explicit_relative_step(catalog):
@@ -94,6 +154,7 @@ def test_disable_relative_removes_explicit_relative_step(catalog):
     相対化をOFFにしたらそれも除去されること（相対化設定なしの __relative__
     は検証エラーになるため）。"""
     part = state.part_skeleton("p", "FBC", catalog)
+    state.enable_relative(part, catalog)
     part["order"].insert(0, "__relative__")
     state.disable_relative(part, catalog)
     assert "__relative__" not in part["order"]
@@ -113,10 +174,65 @@ def test_drop_stale_virtual_steps_on_type_change(catalog):
 
 def test_disable_relative_skips_axis_already_in_combined_entry(catalog):
     part = state.part_skeleton("p", "FBC", catalog)
-    part["order"].insert(0, "State&Read_Override")
+    state.enable_relative(part, catalog)  # split = Measure
+    part["order"].insert(0, "State&Measure")
     restored = state.disable_relative(part, catalog)
     assert restored is None  # 複合軸エントリがカバー済み → 再追加されない
-    assert part["order"].count("Read_Override") == 0
+    assert part["order"].count("Measure") == 0
+
+
+# ------------------------------------------------- Measure の labels 注記
+
+def test_annotate_measure_labels_relative():
+    mlabels = {0: "reference_param_read_level_1", 1: "evaluation_param_read_level_1"}
+    rel = {"split_axis": "Measure", "numerator_when": 1, "denominator_when": 0}
+    state.annotate_measure_labels(rel, mlabels)
+    assert rel["labels"] == {
+        "1": "evaluation_param_read_level_1",
+        "0": "reference_param_read_level_1",
+    }
+
+
+def test_annotate_measure_labels_filter_and_unnamed():
+    mlabels = {1: "evaluation_param_read_level_1"}
+    spec = {"op": "filter", "value": [1, 2]}
+    state.annotate_measure_labels(spec, mlabels)
+    assert spec["labels"] == {"1": "evaluation_param_read_level_1"}  # 名無し番号は入らない
+    unnamed = {"op": "filter", "value": 5}
+    state.annotate_measure_labels(unnamed, {})
+    assert "labels" not in unnamed
+    # 名前が無くなったら（ラベル無しデータへ切替等）注記ごと消える
+    spec2 = {"op": "filter", "value": 3, "labels": {"3": "old"}}
+    state.annotate_measure_labels(spec2, {})
+    assert "labels" not in spec2
+
+
+# ------------------------------------------------------- ダミー展開の入力
+
+def test_parse_chip_counts():
+    assert state.parse_chip_counts("4", 3) == [4, 4, 4]  # 数1つ = 全 Board 共通
+    assert state.parse_chip_counts("4, 4, 2, 2", 4) == [4, 4, 2, 2]
+    with pytest.raises(ValueError, match="一致しません"):
+        state.parse_chip_counts("4,4", 3)
+    with pytest.raises(ValueError, match="数値ではありません"):
+        state.parse_chip_counts("a,b", 2)
+    with pytest.raises(ValueError, match="1以上"):
+        state.parse_chip_counts("0", 2)
+    with pytest.raises(ValueError, match="入力してください"):
+        state.parse_chip_counts("", 2)
+
+
+def test_expand_dummy_bundle_roundtrip(tmp_path, data_dir_mini):
+    """疑似ダミー → expand_dummy_bundle → build_context が通しで動くこと
+    （画面1のダミー展開ボタンの中身）。"""
+    from scorelib_param.dummy import make_pseudo_dummy
+
+    pseudo = make_pseudo_dummy(data_dir_mini, tmp_path / "pseudo")
+    expanded = state.expand_dummy_bundle(str(pseudo), [2, 3])
+    ctx = state.build_context(expanded)
+    assert "FBC" in ctx["types"]
+    assert ctx["catalogs"]["FBC"]["Board"] == [0, 1]
+    assert ctx["measure_labels"]["FBC"][1] == "evaluation_param_read_level_1"
 
 
 # ------------------------------------------------------------------- editing
@@ -474,20 +590,40 @@ def test_build_context_missing_geninfo_rejected(data_dir_mini):
 
 
 def test_group_def_warnings(sf):
-    geninfo = {"numWLs": 6, "numStrings": 3}
+    counts = {"WL": 6, "STR": 3}
     sf["groupDefs"]["WLgroup"] = {"axis": "WL", "groups": {"g1": [0, 3], "g2": [4, 8]}}
-    warns = state.group_def_warnings(sf, geninfo)
+    warns = state.group_def_warnings(sf, counts)
     assert any("範囲外" in w and "g2(4–8)" in w for w in warns)
 
     sf["groupDefs"]["WLgroup"]["groups"] = {"g1": [0, 3]}
-    warns = state.group_def_warnings(sf, geninfo)
+    warns = state.group_def_warnings(sf, counts)
     assert any("4–5" in w and "どのグループにも入りません" in w for w in warns)
 
-    # 範囲が本数と合っていれば無音。json に記述のない軸はチェック対象外
+    # 範囲が本数と合っていれば無音。本数の分からない軸はチェック対象外
     sf["groupDefs"]["WLgroup"]["groups"] = {"g1": [0, 3], "g2": [4, 5]}
     sf["groupDefs"]["PageG"] = {"axis": "Page", "groups": {"x": [0, 99]}}
-    assert state.group_def_warnings(sf, geninfo) == []
-    assert state.group_def_warnings(sf, None) == []
+    assert state.group_def_warnings(sf, counts) == []
+    assert state.group_def_warnings(sf, {}) == []
+
+
+def test_data_axis_counts_and_validation_counts(data_dir_mini):
+    """本数はデータ（カタログ）由来が正。世代情報 json は補完のみで、
+    食い違いは診断警告になる。"""
+    ctx = state.build_context(str(data_dir_mini))
+    counts = state.data_axis_counts(ctx["catalogs"])
+    assert counts["WL"] == 6  # mini データの WL 最大値 5 → 6本
+    assert "Measure" not in counts  # 測定数は「本数」の概念が違うため除外
+
+    # 世代情報なし → データ由来がそのまま検証に使われる
+    assert state.validation_axis_counts(ctx)["WL"] == 6
+    assert state.geninfo_mismatch_warnings(ctx) == []
+
+    # 食い違う世代情報が自動検出された場合: データ由来が勝ち、診断警告が出る
+    ctx["geninfo"] = {"numWLs": 100}
+    ctx["geninfo_path"] = "B9LS.json"
+    assert state.validation_axis_counts(ctx)["WL"] == 6
+    warns = state.geninfo_mismatch_warnings(ctx)
+    assert len(warns) == 1 and "100" in warns[0] and "6" in warns[0]
 
 
 # --------------------------------------------------- readable error messages

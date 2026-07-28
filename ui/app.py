@@ -106,7 +106,6 @@ def _offer_draft_restore() -> None:
         ss["data_dir_input"] = ci.get("data_dir") or ""
         ss["config_path_input"] = ci.get("config_path") or ""
         ss["coef_path_input"] = ci.get("coef_path") or ""
-        ss["geninfo_path_input"] = ci.get("geninfo_path") or ""
         ss["custom_path_input"] = ci.get("custom_path") or ""
         if ci.get("data_dir"):
             try:
@@ -198,7 +197,6 @@ def screen_data() -> None:
                 ss["data_dir_input"] = found["data_dir"]
                 ss["config_path_input"] = found.get("config_path") or ""
                 ss["coef_path_input"] = found.get("coef_path") or ""
-                ss["geninfo_path_input"] = found.get("geninfo_path") or ""
                 ss["custom_path_input"] = found.get("custom_path") or ""
                 ss.context = state.build_context(
                     found["data_dir"], found.get("config_path"), found.get("coef_path"),
@@ -211,6 +209,33 @@ def screen_data() -> None:
                 ):
                     st.toast("設定jsoncの WLgroup をグループ定義として取り込みました")
                 st.toast("zipを展開して読み込みました")
+                st.rerun()
+            except Exception as err:
+                st.error(str(err))
+
+    with st.expander("🧪 ダミー一式から設計を始める（Board/Chip 展開）"):
+        st.caption(
+            "測定フローが出力するダミー一式（Board/Chip は1つ）を、この実験の "
+            "Board 数・Board ごとの Chip 数で複製展開して読み込みます。"
+            "測定値はダミーのため、テスト計算の数値に意味はありません（構造検証のみ）。"
+        )
+        dummy_dir = st.text_input("ダミー一式ディレクトリのパス", key="dummy_dir_input")
+        cd1, cd2 = st.columns(2)
+        n_boards = cd1.number_input("Board 数", min_value=1, value=2, step=1, key="dummy_boards")
+        chips_text = cd2.text_input(
+            "Board ごとの Chip 数", value="2", key="dummy_chips",
+            help="全 Board 共通なら数1つ（例: 4）、Board ごとに違うならカンマ区切りで Board 数ぶん（例: 4,4,2,2）",
+        )
+        if st.button("展開して読み込み", type="primary", key="dummy_btn"):
+            try:
+                counts = state.parse_chip_counts(chips_text, int(n_boards))
+                expanded = state.expand_dummy_bundle(dummy_dir, counts)
+                # パス入力欄はこの expander より下で描画されるため、
+                # この実行中でもキー付き状態への書き込みが間に合う
+                ss["data_dir_input"] = expanded
+                ss.context = state.build_context(expanded)
+                ss.context["dummy_source"] = str(dummy_dir).strip()
+                st.toast("ダミー一式を展開して読み込みました")
                 st.rerun()
             except Exception as err:
                 st.error(str(err))
@@ -231,14 +256,7 @@ def screen_data() -> None:
         "dVtBudget係数jsonc のパス（任意）", key="coef_path_input",
         help="未指定の場合は dVtBudget タイプが選択肢に出ません",
     )
-    c3, c4 = st.columns(2)
-    geninfo_in = c3.text_input(
-        "世代情報 json のパス（任意）", key="geninfo_path_input",
-        help="numWLs / numStrings 等が入った世代ごとのファイル（B9LS.json 等）。"
-             "WL・STR のグループ定義が本数と合っているかの事前チェックに使います。"
-             "ディレクトリ内に {Generation}.json があれば自動検出",
-    )
-    custom_in = c4.text_input(
+    custom_in = st.text_input(
         "自作関数ファイル custom_parts.py のパス（任意）", key="custom_path_input",
         help="Python関数をスコアパーツ（type=custom）として使う場合のみ。"
              "SVNリポジトリ直下の custom_parts.py と同じ内容を指定してください"
@@ -246,7 +264,10 @@ def screen_data() -> None:
     )
     if st.button("読み込み", type="primary", key="load_btn"):
         try:
-            ss.context = state.build_context(path, config_in, coef_in, geninfo_in, custom_in)
+            # 世代情報 json は入力欄を出さない: WL/STR 本数はデータから導出できる
+            # ため（state.data_axis_counts）。{Generation}.json がディレクトリ内に
+            # あれば自動検出し、食い違いの診断警告にだけ使う
+            ss.context = state.build_context(path, config_in, coef_in, None, custom_in)
             if state.import_config_group_defs(
                 ss.score_file, ss.context["wlgroup"],
                 ss.context.get("wlgroup_defin_logical", True),
@@ -264,6 +285,8 @@ def screen_data() -> None:
 
     st.subheader("認識結果")
     st.caption(f"走査したディレクトリ: `{ctx['data_dir']}`")
+    if ctx.get("dummy_source"):
+        st.info(f"ダミー一式 `{ctx['dummy_source']}` の Board/Chip 展開結果です（数値は無意味・構造検証のみ）")
     if ctx["config_path"]:
         st.success(f"optimization設定jsonc（{ctx['config_source']}）: {ctx['config_path']}")
     else:
@@ -276,12 +299,11 @@ def screen_data() -> None:
         st.success("initial_temperature.csv")
     else:
         st.warning("initial_temperature.csv: なし（dVtBudget のテスト計算に必要）")
-    if ctx["geninfo_path"]:
-        counts = state.axis_counts(ctx["geninfo"])
-        detail = " / ".join(f"{a}: {n}本" for a, n in counts.items()) or "本数情報なし"
-        st.success(f"世代情報json（{ctx['geninfo_source']}）: {ctx['geninfo_path']}（{detail}）")
-    else:
-        st.info("世代情報json: なし — グループ定義と WL/STR 本数の整合チェックはスキップされます")
+    counts = state.data_axis_counts(ctx["catalogs"])
+    if counts:
+        st.caption("軸の本数（データから導出）: " + " / ".join(f"{a} {n}" for a, n in counts.items()))
+    for w in state.geninfo_mismatch_warnings(ctx):
+        st.warning(w)
     if ctx["custom_path"]:
         st.success(
             f"自作関数ファイル（{ctx['custom_source']}）: {ctx['custom_path']}"
@@ -291,7 +313,7 @@ def screen_data() -> None:
         st.info("自作関数ファイル: なし — type=custom（Python関数パーツ）は選択肢に出ません")
     if ctx["generation"]:
         st.info(f"Generation: {ctx['generation']} / WLgroup: {list(ctx['wlgroup']) or 'なし'}")
-    for w in state.group_def_warnings(ss.score_file, ctx["geninfo"]):
+    for w in state.group_def_warnings(ss.score_file, state.validation_axis_counts(ctx)):
         st.warning(w)
 
     st.subheader(f"検出された type: {', '.join(ctx['part_types'])}")
@@ -388,7 +410,7 @@ def _add_entry_controls(part: dict, catalog: dict, uid: str) -> None:
             st.rerun()
 
 
-def _order_editor(part: dict, catalog: dict, sf: dict, uid: str) -> None:
+def _order_editor(part: dict, catalog: dict, sf: dict, uid: str, measure_labels: dict) -> None:
     """order エディタ: 一覧（並べ替え・削除）+ 選択エントリ用の常時表示
     エディタ1つ。expander はラベルが変わるたびに閉じてしまい値の編集が
     苦痛になるため使わない。"""
@@ -468,6 +490,7 @@ def _order_editor(part: dict, catalog: dict, sf: dict, uid: str) -> None:
                         **{n: list(d.get("groups", {})) for n, d in gdefs.items()},
                     },
                     weight_set_names=sorted(sf.get("weightSets", {})),
+                    measure_labels=measure_labels,
                 )
 
 
@@ -664,13 +687,15 @@ def screen_parts() -> None:
         _custom_part_editor(part, ctx, uid)
     else:
         catalog = _with_group_axes(_catalog_for_part(ctx, part), sf)
+        mlabels = (ctx.get("measure_labels") or {}).get(part.get("type"), {})
         widgets.relative_editor(
             part, catalog,
             set_names=sorted(sf["selectionSets"]),
             key=f"{uid}_rel",
+            measure_labels=mlabels,
         )
         st.divider()
-        _order_editor(part, catalog, sf, uid)
+        _order_editor(part, catalog, sf, uid, mlabels)
         _add_entry_controls(part, catalog, uid)
 
     problems = state.validate_part(part, sf["selectionSets"], sf.get("weightSets"))
@@ -777,10 +802,7 @@ def _group_defs_section(sf: dict, ctx) -> None:
         if a != "InBatchEpoch" and not (c and isinstance(c[0], (str, bool)))
     ]
 
-    geninfo = ctx["geninfo"] if ctx else None
-    if geninfo is None:
-        st.caption("世代情報json（numWLs / numStrings）が未読み込みのため、本数との整合チェックはスキップされます（画面1で指定できます）")
-    for w in state.group_def_warnings(sf, geninfo):
+    for w in state.group_def_warnings(sf, state.validation_axis_counts(ctx)):
         st.warning(w)
 
     if defs:
@@ -822,12 +844,10 @@ def _group_defs_section(sf: dict, ctx) -> None:
         "範囲を Physical 番号で記入する（現行スクリプトの WLgroupDefinLogical=False 相当）",
         value=not gd.get("definedInLogical", True),
         key=f"gdef_{name}_phys",
-        help="データの csv は Logical 番号なので、計算時に軸の総数 N（世代情報jsonの numWLs 等）を"
-             "使って N-1-p で読み替えます。世代情報jsonを画面1で読み込んでおいてください",
+        help="データの csv は Logical 番号なので、計算時に軸の総数 N を使って N-1-p で"
+             "読み替えます（N はデータから自動導出）",
     )
     gd["definedInLogical"] = not physical
-    if physical and not (ctx and ctx.get("geninfo")):
-        st.warning("世代情報json（numWLs等）が未読み込みです。Physical記法の計算には必要です（画面1で指定）")
 
     def _reset_row_widgets() -> None:
         # 行ウィジェットのキーは添字ベースなので、行の増減後は記憶された
@@ -980,6 +1000,8 @@ def screen_test_export() -> None:
 
     st.subheader("テスト計算")
     st.caption("測定データのあるディレクトリでスコアを実際に計算します（エンジン compute_score_file を直接呼びます）")
+    if ctx and ctx.get("dummy_source"):
+        st.warning("ダミー展開データを読み込んでいます。テスト計算の数値に意味はありません（構造・設定の検証のみ）")
     default_dir = ctx["data_dir"] if ctx else ""
     test_dir = st.text_input("データディレクトリ", value=default_dir, key="test_dir")
     c1, c2 = st.columns(2)

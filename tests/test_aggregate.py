@@ -51,14 +51,40 @@ def test_both_value_and_values_rejected():
         AggregationSpec.model_validate({"op": "mean", "value": [0], "values": [1]})
 
 
-def test_filter_rejects_multiple_selections():
-    with pytest.raises(Exception, match="exactly one"):
-        AggregationSpec(op="filter", value=[0, 1])
-
-
 def test_filter_accepts_single_element_list():
     spec = AggregationSpec(op="filter", value=["A2B"])
     assert spec.value == "A2B"
+
+
+def test_filter_accepts_multiple_selections_as_is_in():
+    spec = AggregationSpec(op="filter", value=[0, 1])
+    assert spec.value == [0, 1]
+
+
+def test_filter_rejects_empty_list_and_nested_list():
+    with pytest.raises(Exception, match="at least one"):
+        AggregationSpec(op="filter", value=[])
+    with pytest.raises(Exception, match="not a nested list"):
+        AggregationSpec(op="filter", value=[["A2B", "B2A"]])
+
+
+def test_filter_with_list_keeps_matching_rows_as_replicates():
+    """複数値 filter（is_in）: 該当行を残して軸列を落とす。残った行は後段の
+    集計に複製として流れ込む（sum なら選択値ぶんの行が全部足される）。"""
+    lf = pl.LazyFrame(
+        {
+            "Measure": [0, 1, 2, 0, 1, 2],
+            "Key": ["x", "x", "x", "y", "y", "y"],
+            "value": [1.0, 10.0, 100.0, 2.0, 20.0, 200.0],
+        }
+    )
+    order = ["Measure", "Key"]
+    aggregations = {
+        "Measure": AggregationSpec(op="filter", value=[0, 1]),
+        "Key": AggregationSpec(op="sum"),
+    }
+    # Measure 0,1 の行が残り、Key の sum で複製ごと畳まれる: (1+10)+(2+20)=33
+    assert aggregate_score_part(lf, "value", order, aggregations) == pytest.approx(33.0)
 
 
 def test_group_reduce_removed_with_guidance():

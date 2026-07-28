@@ -13,6 +13,7 @@ scorelib_param/                   # 本体パッケージ
   axis_resolve.py           # {type}.csv + parameterLabel/dataName/map系の遅延join
   aggregate.py              # 軸ごとの逐次集計エンジン
   relative.py               # 相対値（分子/分母）計算
+  dummy.py                  # ダミー一式のBoard/Chip複製展開・正データの疑似ダミー化
   dvtbudget.py              # dVtBudget変換
   expression.py             # 自由記述式の評価（simpleeval）
   cli.py                    # サブプロセス起動用エントリポイント
@@ -30,17 +31,33 @@ ui/                         # Streamlitスコア設計UI（エンジンとはデ
   widgets.py                # 集計指示エディタ等の画面部品
 scripts/
   convert_dvtbudget_coef.py # dVtBudget係数のPythonファイル → jsonc 変換
+  make_pseudo_dummy.py      # 正データ→疑似ダミー一式（Board/Chipを1つに削る。開発用）
+  benchmark_batch.py        # バッチサイズごとの所要時間・メモリ実測（実運用マシン用）
+  batch_bridge_example.py   # 最適化側（py3.7）からバッチCLIを呼ぶブリッジ実装例
+  get_score_bridge_example.py # 最適化側 get_score() 用の毎epoch計算ブリッジ実装例
 tests/
   conftest.py               # 共通fixture（result_tmp等へのパス）
   fixtures/
     config.jsonc            # テスト用のconfig実例（後述）
     dvtbudget_coef.jsonc    # sample.py から変換した係数ファイル
+    B9LS.json               # 世代情報jsonの実例（numWLs等）
+    custom_parts.py         # type=custom テスト用の関数ファイル
   test_axis_resolve.py      # 軸解決の正しさ（FBC_expanded.csvとの全行一致）
   test_aggregate.py         # 各集計opの単体テスト
   test_relative.py          # 相対値計算の単体テスト
+  test_measure_split.py     # Measure番号/DataNameによる相対化・filterのE2E（新仕様）
+  test_dummy.py             # ダミー一式のBoard/Chip展開・疑似ダミー化
+  test_agg_weight.py        # 集計時重み（weight/weight_ref）
+  test_transform_weights.py # 変換ステップ拡張とPhysical記法グループ定義
   test_dvtbudget.py         # 温度最近傍選択と変換式のテスト
   test_expression.py        # 式評価のテスト（サンドボックス性含む）
   test_jsonc.py             # jsonc読み書き・ラウンドトリップ
+  test_combined_axis.py     # 複合軸（State&Read_Label）の等価性
+  test_selection_sets.py    # ref参照の解決がインラインと同結果
+  test_pipeline_steps.py    # 仮想ステップの配置換えの数学的等価性
+  test_prefilter.py         # filter前絞り最適化の判定と同値性
+  test_shared_context.py    # 共有キャッシュあり/なしの結果一致
+  test_batch.py             # バッチ計算とepoch個別計算の等価性
   test_cli.py               # 実データを使ったエンドツーエンドテスト
   test_introspect.py        # type検出・軸カタログ・値候補の導出
   test_ui_state.py          # UI編集ロジック（雛形が編集なしで計算可能なこと等）
@@ -65,10 +82,17 @@ python -m venv .venv
 
 - pyproject.toml は `dynamic = ["version"]` でこの値を参照する（二重管理しない）
 - UIサイドバー・CLI（`--version` / stderr のログ）もこの値を表示する
-- 上げるタイミング: **SVN のスクリプト領域へ scorelib_param/ を同期するたび**
-  （SVN側エンジンとUI同梱エンジンの版ズレ確認が目的のため）
+- 上げるタイミング:
+  - **SVN のスクリプト領域へ scorelib_param/ を同期するたび**
+    （SVN側エンジンとUI同梱エンジンの版ズレ確認が目的のため）
+  - **設定ファイル（jsonc）の語彙・意味が変わる機能を main に入れた時点**でも上げる
+    （新フィールドや新しい値の形は旧エンジンで読み込みエラーになるため、
+    「この設定を読めるエンジンか」を版で見分けられるようにする。
+    例: 0.5.0 = Measure 相対化・filter リスト・labels 注記の導入）
 - 目安: 互換性に影響する変更（パッケージ名・出力契約・configの意味変更）で
   真ん中の数字、それ以外の機能追加・修正は最後の数字を上げる
+- **上げ忘れ防止**: 機能実装の完了報告には「版数を上げたか・上げない理由」の判断を
+  含める（AI開発時のチェックリストはリポジトリ直下の `CLAUDE.md`）
 
 ## 配置まとめ（どこに何を置くか）
 
@@ -125,7 +149,7 @@ python -m scorelib_param.cli \
     --data-dir <そのepochの測定結果ディレクトリ（result_tmp相当）> \
     --dvtbudget-coef <dVtBudget係数.jsonc> \        # dVtBudgetパーツがある場合のみ必須
     --initial-temperature <initial_temperature.csv>  # 同上
-    # --generation-info <{Generation}.json>          # Physical記法のグループ定義がある場合のみ
+    # --generation-info <{Generation}.json>          # 任意（無ければ本数はデータから導出）
     #                                                # （data-dir 内にあれば自動発見されるので省略可）
 ```
 
@@ -186,27 +210,35 @@ CLI（stderr / `--version`）に表示される — SVN側エンジンとの版�
 
 1. **データ読み込み** — **同系統の過去実験の測定結果ディレクトリ**（result_tmp相当）を
    指定して読み込み、type一覧・軸一覧・値候補を導出する。optimization設定jsonc
-   （Generation / WLgroup / 既存スコア設定）・dVtBudget係数jsonc・世代情報json
-   （`B9LS.json` 等: numWLs / numStrings）・自作関数ファイル（custom_parts.py）は
-   通常 result_tmp に含まれないため別の任意入力欄でパス指定する（ディレクトリ内に
-   あれば自動検出。世代情報は `{Generation}.json` を探す）。
+   （Generation / WLgroup / 既存スコア設定）・dVtBudget係数jsonc・自作関数ファイル
+   （custom_parts.py）は通常 result_tmp に含まれないため別の任意入力欄でパス指定する
+   （ディレクトリ内にあれば自動検出）。
    **一式zipのアップロード**にも対応: GUI からダウンロードした zip（測定結果+上記の
    同梱ファイル）を展開し、**サブディレクトリも探索して**読み込む（UIがユーザのマシン
    以外で動く場合の入力手段。result_tmp がフォルダのまま入っていてもよい）。
    自動検出は**ファイル名ではなく中身の形**で判別する: 設定jsonc = `optimization{}`
    キーを持つ jsonc、係数jsonc = 「世代→温度→State→{a,b}」の3段ネストとして検証が
-   通る jsonc（両者は形が排他的）、世代情報のみファイル名（設定jsoncの Generation から
-   `{Generation}.json`）、custom_parts.py は固定名。**同じ役割の候補が複数あると
+   通る jsonc（両者は形が排他的）、custom_parts.py は固定名。**同じ役割の候補が複数あると
    エラー**になる（黙って1つ選ばない。明示パス指定で解決）。
    値候補は map の全語彙ではなく**実データに存在する値だけ**（map順）に
-   絞られる。世代情報があると、グループ定義が WL/STR の本数と合っているかを
-   読み込み直後に警告チェックする
+   絞られる。WL/STR 等の**軸の本数はデータから導出**され（本数は世代で固定・
+   フローは全数を測定するため max+1 が総数）、グループ定義との整合を読み込み直後に
+   警告チェックする。世代情報json（`{Generation}.json`）の入力欄は廃止 —
+   ディレクトリ内にあれば自動検出し、データ由来の本数と食い違うときの診断警告にだけ使う。
+   **ダミー一式からの測定前設計**にも対応: 測定フローが出力するダミー一式
+   （Board/Chip は1つ）のパスと「Board 数・Board ごとの Chip 数」を入れて
+   展開・読み込みすると、測定前でも候補表示からテスト計算（構造検証。数値は無意味）
+   まで全機能が使える（docs/spec_change_dataname_measure.md 9節）
 2. **スコアパーツ編集** — 「追加」で**そのまま計算が通る雛形**（全軸をデフォルト順に並べ、
-   カテゴリ軸は先頭候補のfilter・数値軸はmean・相対化ON）を生成し、差分編集していく。
+   Measure は先頭番号の filter・カテゴリ軸は先頭候補のfilter・数値軸はmean）を生成し、
+   差分編集していく。相対化のプリセットは無し（チェックで ON にすると split=Measure・
+   分子/分母は候補の位置で初期セットされる）。Measure の値は常に
+   **「dataName (Measure N)」の複合表示**で、保存は番号+labels 注記。
+   filter は候補のある軸で**複数選択可**（複数 = is_in）。
    order は要約行リスト（✎で選択・上下ボタン・削除）＋選択エントリの常時表示エディタ。
    複合軸の束ね、定数演算ステップ（`__offset__` 等。加減乗除・グループ別重み）の追加、opごとに必要な入力欄だけを
    出す集計エディタ。相対化のON/OFF・split_axis変更時は order との整合を自動で取る
-   （OFFにすると split_axis が filter False で order に復帰する）。
+   （OFFにすると split_axis がデフォルトopで order に復帰する）。
    分母の事前集計にも同じ集計エディタをフルで使える。
    編集のたびにエンジンと同一の検証を実行（エラーには**パーツ名**が入り、
    検証NGのパーツは一覧・プルダウンに ⚠ が付く）。
@@ -226,6 +258,22 @@ CLI（stderr / `--version`）に表示される — SVN側エンジンとの版�
 編集内容は**操作のたび**に `~/.scorelib_draft.jsonc` へ自動保存され、次回起動時に復元を提案する
 （復元するとデータ読み込みと画面1の入力欄も前回の状態に戻る）。
 サイドバーの「↩ 元に戻す」で直近20操作までアンドゥできる。
+
+### 測定前設計（ダミー一式の Board/Chip 展開）
+
+測定フロー側は、実データと同形式・**測定値のみダミー**の一式（result_tmp 相当）を
+出力できる。ただしフローは Board/Chip を知らないため、ダミーは Board/Chip とも
+**1つだけ**で出力される（docs/spec_change_dataname_measure.md 9節）。UI 画面1の
+「ダミー一式から設計を始める」で、この実験の Board 数・Board ごとの Chip 数
+（`4` = 全Board共通、`4,4,2,2` = Board別）を入力して展開・読み込みすると、
+測定前でも通常と同じ操作でスコア設定を書き切れる。テスト計算は構造検証として
+使える（**数値は無意味** — 画面にもその旨が表示される）。
+
+ダミー一式が手元に無い開発・検証時は、正データから疑似ダミーを作れる:
+
+```bash
+.venv/Scripts/python scripts/make_pseudo_dummy.py result_tmp dummy_bundle
+```
 
 **ドラッグ&ドロップ並べ替え**: `streamlit-sortables` が入っていると（`pip install -e ".[ui]"` で入る）、
 パーツ一覧と order の一覧が**常時ドラッグ可能なリスト**になる（モード切替なし。
@@ -253,7 +301,7 @@ CLI（stderr / `--version`）に表示される — SVN側エンジンとの版�
             "WLgroup02": [4, 8]
         },
         "WLgroupDefinLogical": "True", // 既存キー。"False"なら上の範囲はPhysical番号
-                                       // （計算時にLogicalへ反転変換。{Generation}.jsonのnumWLsが必要）
+                                       // （計算時にLogicalへ反転変換。総数Nはデータから自動導出）
         "WLgroupWeight": {             // 既存キー。グループ別重み（重みセット"WLgroupWeight"になる）
             "WLgroup01": 1.0,          // 数値1つ（全グループ共通）でもよい。
             "WLgroup02": 10.0          // パーツの__weight__ステップからrefで参照（後述）
@@ -271,9 +319,13 @@ CLI（stderr / `--version`）に表示される — SVN側エンジンとの版�
     "name": "FBC_A2B_upper1_rel",   // パーツ名。expressionやconstraintThresholdから参照
     "type": "FBC",                  // 読むcsv。"dVtBudget"のときはFBC.csvを読み自動で変換
     "relative": {                   // 相対値化。しない場合は省略
-        "split_axis": "Read_Override",   // この軸の値で分子/分母を分ける
-        "numerator_when": true,          // Override=True の行が分子（提案パラ）
-        "denominator_when": false,       // Override=False の行が分母（基準パラ）
+        "split_axis": "Measure",         // この軸の値で分子/分母を分ける（基本は Measure 番号）
+        "numerator_when": 1,             // Measure 1 の行が分子（評価測定 = 提案パラ）
+        "denominator_when": 0,           // Measure 0 の行が分母（基準測定）
+        "labels": {                      // 任意: 番号の意味の注記（表示・検証用。実行には不使用）
+            "1": "evaluation_param_read_level_1",
+            "0": "reference_param_read_level_1"
+        },
         "denominator_offset": 1,         // (分子+offset)/(分母+offset)。両方に加算【確認済み】
         "denominator_pre_aggregation": [ // 比を取る前に分母だけ先に集計（省略可）
             {"axis": "WL", "op": "mean"},
@@ -318,9 +370,10 @@ CLI（stderr / `--version`）に表示される — SVN側エンジンとの版�
   現行スクリプトの `WLgroupDefinLogical: "False"` 相当で **Physical 番号**で書きたい場合は、
   `optimization.WLgroupDefinLogical` を `False` に（groupDefs 側は各定義の
   `"definedInLogical": false`）。計算時に軸の総数 N を使って `[lo, hi]` → `[N-1-hi, N-1-lo]`
-  へ読み替える。N は **`{Generation}.json`**（`numWLs` / `numStrings`）から取る —
-  データディレクトリ内にあれば自動発見、別の場所なら CLI の `--generation-info` で指定。
-  Logical 記法しか使っていなければこのファイルは不要。
+  へ読み替える。N は **測定csvから自動導出**される（max+1。本数は世代で固定・
+  フローは全数を測定するため正確）。`{Generation}.json`（`numWLs` / `numStrings`）が
+  データディレクトリ内にある・または CLI の `--generation-info` で指定された場合は
+  そちらを優先する（互換動作）。どちらも無くても Physical 記法は使える。
 - 定義名は対象軸名と同名にできない。定義名を order に置いていないパーツでは列は作られず、
   対象軸は通常どおり扱われる。
 - パーツが定義名を参照していると、そのパーツ内ではグループ列が最初から存在する扱いになる
@@ -331,7 +384,7 @@ CLI（stderr / `--version`）に表示される — SVN側エンジンとの版�
 - **範囲チェック**: どの範囲にも入らない値の行がデータにあると、値の一覧つきで
   計算エラーになる（名無しグループとして静かに混ざることはない）。逆に、データに
   該当値が無いグループは「存在しない軸の値」と同じ扱いで、単に現れないだけ。
-  さらに UI では世代情報json（numWLs / numStrings）と照合し、定義の範囲が本数を
+  さらに UI ではデータ由来の軸本数と照合し、定義の範囲が本数を
   超えていたり、0〜本数-1 に未カバーの値があると事前に警告する。
 
 #### 自作Python関数パーツ（type="custom"）
@@ -371,9 +424,10 @@ def my_score(ctx):
 
 | フィールド | 意味 |
 |---|---|
-| `split_axis` | 分子/分母を見分ける軸（読み込み系: `Read_Override`、書き込み系: `Program_Override` 想定） |
-| `numerator_when` | split_axisがこの値の行が分子（提案パラ）。例: `true` |
-| `denominator_when` | split_axisがこの値の行が分母（基準パラ）。例: `false` |
+| `split_axis` | 分子/分母を見分ける軸。**基本は `Measure`（測定番号）**。任意の軸を指定でき、旧仕様の `Read_Override` 等や、Measure 列の無い集計済み type での `Chip` 等も可（docs/spec_change_dataname_measure.md） |
+| `numerator_when` | split_axisがこの値の行が分子（評価測定 = 提案パラ）。例: `1` |
+| `denominator_when` | split_axisがこの値の行が分母（基準測定）。例: `0` |
+| `labels` | 任意: 値 → 表示名（dataName 等）の注記。**実行には使われない**（UI 表示と将来の validate 照合用） |
 | `mode` | `"ratio"`（デフォルト）: 比 `(分子+o)/(分母+o)` / `"diff"`: **delta値** `分子 - 分母` |
 | `denominator_offset` | ratio時に**分子分母両方**に加算。ゼロ割・log発散防止。diff時は差で相殺されるため無視される |
 | `denominator_pre_aggregation` | 比/差を取る前に**分母だけ**先に集計する指示のリスト（例: WL,STRを平均した値を分母にする） |
@@ -384,6 +438,12 @@ OverrideのTrueからFalseを引いたdelta値を取りたい場合は `"mode": 
 分子行と分母行は、その時点で残っている全軸の値が一致するもの同士でペアになる。
 `denominator_pre_aggregation` で分母側の軸を潰した場合は、残った軸で照合され
 分母値が分子側にブロードキャストされる。
+
+**Measure を order の軸に使う場合の注意**: Measure 軸と「Measure 以外の軸での相対化」は
+併用できない。ペア照合キーに Measure が残り、分子（評価測定の番号）と分母（基準測定の
+番号）で値が必ず異なるため0ペアになる。Measure で測定を選ぶなら分割も Measure で行う
+（新仕様の基本形）。Label/Override 軸は Measure 番号が一意に決める測定メタデータなので、
+Measure と並べて order に置く必要はない（UI の雛形にも入らない）。
 
 #### パイプラインステップ（orderへの処理の組み込み）
 
@@ -497,7 +557,7 @@ diffに1個しか書かなければ「2個必要」とエラー）。
 
 | op | 意味 | valueに書くもの |
 |---|---|---|
-| `filter` | 指定値の行だけ残す | 選択1個 |
+| `filter` | 指定値の行だけ残す。リストは is_in（該当行を全部残し、後段の集計に複製として流す） | 選択1個以上 |
 | `mean` / `sum` / `min` / `max` | 集計。`value` を付けると対象をその選択集合に限定 | なし or 選択のリスト |
 | `diff` | 2つの選択の差で潰す: a − b | 選択ちょうど2個のリスト |
 | `expr` | 自由記述式。全値のリスト `values` と、軸の値ごとの辞書 `by` が使える | なし（`expr`） |
@@ -511,6 +571,8 @@ diffに1個しか書かなければ「2個必要」とエラー）。
 "State": {"op": "diff", "value": ["R2A", "B2A"]}                 // R2A - B2A の差
 "State": {"op": "sum", "value": ["R2A", "B2A"]}                  // R2A + B2A の和
 "State": {"op": "expr", "expr": "0.5*by['R2A'] + 0.5*by['A2B']"} // 任意の重み付き合成
+"Measure": {"op": "filter", "value": [3, 4, 5]}                  // is_in: 複数測定の行を残す
+                                                                 //（同じdataNameのループ測定等）
 ```
 
 dVtBudgetパーツでは変換がState集計より前に走るため、この書き方で
@@ -617,7 +679,7 @@ Board/Stateを相対化より後に集計すること。
 ## テスト
 
 ```bash
-.venv/Scripts/python -m pytest tests/ -q     # 163件、全パス
+.venv/Scripts/python -m pytest tests/ -q     # 258件、全パス
 ```
 
 ### 何をどう検証しているか
@@ -632,6 +694,11 @@ Board/Stateを相対化より後に集計すること。
   エラーも確認。
 - **相対値** (`test_relative.py`): 分母の事前集計（WL→STRの順のmean）とoffsetが
   設計通りに効くことを手計算値と照合。
+- **Measure番号/DataName指定** (`test_measure_split.py`): 新仕様（Measure 番号での
+  相対化・filter）が旧仕様（Read_Label filter + Read_Override 分割）と厳密同値で
+  あることを mini データで照合。is_in filter の前絞り最適化・キャッシュ安全性も確認。
+- **ダミー展開** (`test_dummy.py`): Board/Chip 複製展開が行の複製「だけ」を行うことを
+  「mean 集計は複製に対して不変」という性質（展開前後で同値）で検証。
 - **dVtBudget** (`test_dvtbudget.py`): Board 0(-28.236℃)→係数キー"-30"、
   Board 1(82.934℃)→"85" の最近傍選択と、変換式の値を手計算と照合。
 - **エンドツーエンド** (`test_cli.py`): `tests/fixtures/config.jsonc`
@@ -688,7 +755,7 @@ python -m scorelib_param.batch \
     --out scores.csv \
     [--batch-size 50 | --batch-size auto] [--max-prefetch 2] \
     [--staging-dir DIR] [--strict] [--keep-staging] [--max-threads N] \
-    [--generation-info {Generation}.json]   # Physical記法のグループ定義がある場合のみ
+    [--generation-info {Generation}.json]   # 任意（無ければ本数はデータから導出）
 ```
 
 出力 CSV は 1 epoch = 1 行:

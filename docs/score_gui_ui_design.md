@@ -82,22 +82,34 @@ GUIサーバ上のSVNチェックアウトで実行される。
 - **測定結果ディレクトリ**（=**同系統の過去実験の出力一式**、result_tmp相当。
   5.1節参照）のパスをテキスト入力。画面上にもこの前提を説明文として表示する
 - **result_tmp には通常測定結果しか入らない**ため、optimization設定jsonc・
-  dVtBudget係数jsonc・**世代情報json**（`B9LS.json` 等。numWLs / numStrings /
-  jointLogicalWLs / numTiers / ROP。世代ごとに存在し現行スクリプト群でも使用）は
-  **別の任意入力欄**でパス指定する（未指定でもエラーにせず、
-  設定jsoncなし=WLgroup等なしで設計開始、係数なし=dVtBudgetタイプ非表示、
-  世代情報なし=本数整合チェックのスキップになるだけ）。
-  ディレクトリ内にたまたま置いてあれば自動検出して使う（指定/自動検出の別を認識結果に表示。
-  世代情報は設定jsoncの Generation から `{Generation}.json` を探す）。
+  dVtBudget係数jsonc は**別の任意入力欄**でパス指定する（未指定でもエラーにせず、
+  設定jsoncなし=WLgroup等なしで設計開始、係数なし=dVtBudgetタイプ非表示になるだけ）。
+  ディレクトリ内にたまたま置いてあれば自動検出して使う（指定/自動検出の別を認識結果に表示）。
   initial_temperature.csv は測定結果としてディレクトリ内から読む
-- **本数整合チェック**: 世代情報jsonがあると、グループ定義（WL=numWLs、STR=numStrings）
-  と照合し「範囲が本数を超える」「0〜本数-1に未カバーの値がある」を読み込み直後と
-  画面3のエディタで**警告**表示する（測定データからは本番の本数が分からないための仕組み。
-  jointLogicalWLs をグループから除外する運用は基本無いと確認済みのため全値をチェック）。
+- **世代情報json の入力欄は廃止（2026-07-28）**: WL/STR 等の本数は世代で固定で、
+  測定フローが一部だけ測る設定は存在しない（担当者確認 —
+  docs/spec_change_dataname_measure.md 9節）ため、**データの最大値+1 から正確に
+  導出できる**。「スコア計算を知らないユーザ向けにできる限り簡潔な UI にする。
+  使わない項目は混乱を招くので残さない」というユーザー方針により、欄ごと削除した。
+  `{Generation}.json` がディレクトリ内にあれば自動検出し、データ由来の本数と
+  食い違うときの**診断警告**（実験異常か json の古さ）にだけ使う。
+  エンジンの Physical 記法変換も同様にデータ由来へフォールバックする
+  （json があれば互換優先）
+- **本数整合チェック**: データ由来の軸本数（state.data_axis_counts）と照合し、
+  グループ定義の「範囲が本数を超える」「0〜本数-1に未カバーの値がある」を
+  読み込み直後と画面3のエディタで**警告**表示する
+  （jointLogicalWLs をグループから除外する運用は基本無いと確認済みのため全値をチェック）。
   なおエンジン側は、実データにどの範囲にも入らない値の行があれば値一覧つきの
   **エラー**にする（名無しグループとして静かに混ざる事故の防止）
 - 空パスは拒否する（Pythonでは `Path("")` がカレントディレクトリ扱いになり、
   起動場所を誤って走査してしまうため）。読み込み後は走査した絶対パスを表示する
+- **ダミー一式からの測定前設計（2026-07-28 追加）**: 測定フローが出力する
+  ダミー一式（Board/Chip は1つ。docs/spec_change_dataname_measure.md 9節）の
+  パスと「Board 数・Board ごとの Chip 数」（数1つ=共通、カンマ区切り=Board別）を
+  入力すると、`scorelib_param.dummy.expand_boards_chips` で一時ディレクトリへ
+  複製展開し、**展開先を通常の読み込み経路にそのまま通す**（モード分岐を作らない
+  — 同ノート4.5節「読み込めた情報から機能ごとに可否を導出」の実現形）。
+  ctx に dummy_source を記録し、認識結果と画面5に「数値は無意味・構造検証のみ」を表示
 - **自動検出の判別ルール**（`scorelib_param/introspect.py`。ファイル名ではなく**中身の形**で
   判別する — 係数ファイル等は世代・案件ごとに名前が変わるため）:
   - **optimization設定jsonc**: `*.jsonc` をパースし、トップレベルに `optimization{}`
@@ -142,6 +154,10 @@ GUIサーバ上のSVNチェックアウトで実行される。
 - 軸の値候補の導出ルール（`scorelib_param/introspect.py`）:
   - Label系軸: `map_Label.csv` の値一覧
   - Override系軸: true / false
+  - Measure 軸（2026-07-28 追加。Measure 列を持つ type のみ）: 実在番号の昇順。
+    表示は `measure_labels`（番号→dataName）による複合表示「dataName (Measure N)」
+  - DataName 軸（dataName_{type}.csv がある場合）: map_dataName.csv の値一覧
+    ∩ 実在値。雛形には入れない（指定は Measure 軸で行う）
   - State等 `map_{軸}.csv` がある軸: そのmapの値一覧
   - WL/STR/Board/Chip/Block等の数値軸: `{type}.csv` があれば実データのユニーク値、
     なければ「候補なし（自由入力のみ）」
@@ -163,11 +179,17 @@ GUIサーバ上のSVNチェックアウトで実行される。
 1. 名前（`part_1` 等の重複しないデフォルト）と type を選ぶ
 2. type決定時に雛形を生成:
    - `order`: そのtypeの全軸をデフォルト順
-     （Label系 → map系軸(State等) → WL, STR → Board, Chip, Block）で全て並べる
-   - `aggregations`: 各軸にデフォルトop（`mean`）
-   - `relative`: デフォルトON（仕様上、基準/提案の相対値化が一般的なため）。
-     split_axis=Read_Override, numerator_when=true, denominator_when=false,
-     denominator_offset=1 をプリセット。不要ならチェックを外す
+     （Measure → Label系 → map系軸(State等) → WL, STR → Board, Chip, Block）で並べる。
+     **（2026-07-28 変更）** Measure 軸のある type では Label/Override 軸を入れない
+     （Measure 番号が一意に決める測定メタデータ。二重指定になり、Measure 分割の
+     相対化ではペア結合を壊す — docs/spec_change_dataname_measure.md 4節）
+   - `aggregations`: 各軸にデフォルトop（数値軸 `mean`、カテゴリ軸は先頭候補の
+     filter。Measure は識別子軸なので先頭番号の filter）
+   - `relative`: **（2026-07-28 変更）プリセット無し**（旧「Read_Override があれば
+     自動ON」は Override 判定の廃止とともに撤去）。チェックで ON にすると
+     split=Measure（無ければ Override → 先頭軸）・分子/分母は候補の位置
+     （先頭=分母・2番目=分子）で初期セットされ、そのまま計算が通る。
+     dataName 命名ルール確定後は「ルールに合うペアの自動セット」を追加予定
 3. 以降は「雛形からの差分編集」（Read_Label/Stateをfilterに変える等）となり、
    どの時点でもテスト実行が通る状態を保てる（軸の潰し忘れが構造的に起きない）
 
@@ -179,14 +201,18 @@ GUIサーバ上のSVNチェックアウトで実行される。
   - **type**: 検出済みtypeのプルダウン（FBC / tR / dVtBudget / ...）
   - **relative**: 「相対化する」チェックボックス（ON=ブロックあり、OFF=省略。
     enabledフラグは無いというエンジン仕様に対応）
-    - split_axis（Override系軸のプルダウン）、numerator_when / denominator_when、
+    - split_axis（**任意の軸**のプルダウン。2026-07-28 に Override 限定を解除 —
+      基本は Measure、集計済み type では Chip 等も選べる）、
+      numerator_when / denominator_when（候補プルダウン or 自由入力。Measure は
+      「dataName (Measure N)」複合表示・保存は番号+labels 注記の自動付与）、
       mode（ratio/diff）、denominator_offset（数値）
     - denominator_pre_aggregation: 各行に通常の集計指示エディタをフルで使う
       （エンジンは事前集計でも filter / 値リスト付き sum 等を受け付けるため、UIも同等にする）
     - **split_axis と order の自動整合**: 相対化ONで split_axis を order から除去、
-      OFFで order に自動復帰（デフォルト filter False=基準側）、split_axis変更時は
-      新旧を入れ替える。orderに無い軸はエンジンが暗黙に混ぜて集計するため、
-      OFF時に Read_Override が宙に浮くと True/False の行が混ざる事故になる
+      OFFで order に自動復帰（デフォルトop）、split_axis変更時は
+      新旧を入れ替え、分子/分母を新軸の候補で初期化し直す。orderに無い軸は
+      エンジンが暗黙に混ぜて集計するため、OFF時に split 軸が宙に浮くと
+      分子/分母の行が混ざる事故になる
   - **order**: D&D部品が使える場合は「**常時ドラッグ可能な一覧リスト**＋編集エントリ選択の
     プルダウン＋常時表示エディタ（削除ボタン内蔵）」の構成（案A）。並べ替えのための
     モード切替は無い。D&D部品は文字列リストしか描画できず行内にボタンを置けないため、

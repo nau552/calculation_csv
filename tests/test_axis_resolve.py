@@ -75,3 +75,37 @@ def test_generic_type_with_generic_map_axis(data_dir_mini):
 def test_unresolvable_axis_raises(data_dir_mini):
     with pytest.raises(ValueError, match="NoSuchAxis"):
         resolve_axes(data_dir_mini, "tR", {"NoSuchAxis"})
+
+
+def test_measure_kept_when_requested(data_dir_mini):
+    """Measure は識別子軸として要求されたら残す
+    （docs/spec_change_dataname_measure.md）。"""
+    resolved = resolve_axes(data_dir_mini, "FBC", {"Measure", "Board"}).collect()
+    assert set(resolved.columns) == {"FBC", "Measure", "Board"}
+    assert resolved["Measure"].dtype == pl.Int64
+    assert set(resolved["Measure"].unique().to_list()) == {0, 1, 2, 3}
+
+
+def test_measure_dropped_when_not_requested(data_dir_mini):
+    resolved = resolve_axes(data_dir_mini, "FBC", {"Board"}).collect()
+    assert "Measure" not in resolved.columns
+
+
+def test_measure_with_label_axes(data_dir_mini):
+    """parameterLabel の join 後も Measure が生き残ること（Measure は結合キー
+    そのものなので、join に消費されても列として残る必要がある）。"""
+    resolved = resolve_axes(
+        data_dir_mini, "FBC", {"Measure", "Read_Label", "Read_Override", "DataName"}
+    ).collect()
+    assert set(resolved.columns) == {"FBC", "Measure", "Read_Label", "Read_Override", "DataName"}
+    # mini データの構造: Measure 0/1 = upper1 の 基準/評価、2/3 = lower1 の 基準/評価
+    pairs = set(
+        resolved.select(["Measure", "Read_Label", "Read_Override"])
+        .unique().iter_rows()
+    )
+    assert pairs == {
+        (0, "read_level_upper1", False),
+        (1, "read_level_upper1", True),
+        (2, "read_level_lower1", False),
+        (3, "read_level_lower1", True),
+    }

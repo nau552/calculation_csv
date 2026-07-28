@@ -244,6 +244,36 @@ def _source_type(score_part: ScorePart) -> str:
 _GENERATION_AXIS_KEYS = {"WL": "numWLs", "STR": "numStrings"}
 
 
+def derive_axis_counts(data_dir: str | Path, axes: Set[str]) -> Dict[str, int]:
+    """測定csvから軸の本数を導出する（max+1）。
+
+    WL/STR 等の本数は世代で固定であり、測定フローが一部だけ測る設定は存在しない
+    （2026-07-28 担当者確認 — docs/spec_change_dataname_measure.md 9節）。
+    したがってデータ（ダミー一式含む）の最大値+1 が軸の総数として正確で、
+    {Generation}.json が無くても Physical 記法の読み替えができる。
+    同じ軸を持つ type が複数あれば最大を取る。"""
+    from .introspect import detect_types
+
+    data_dir = Path(data_dir)
+    counts: Dict[str, int] = {}
+    for type_ in detect_types(data_dir):
+        f = axis_resolve.data_file(data_dir, f"{type_}.csv")
+        try:
+            lf = pl.scan_csv(f)
+            cols = lf.collect_schema().names()
+        except Exception:
+            continue
+        take = [a for a in axes if a in cols]
+        if not take:
+            continue
+        row = lf.select([pl.col(a).max() for a in take]).collect()
+        for a in take:
+            m = row[a][0]
+            if m is not None:
+                counts[a] = max(counts.get(a, 0), int(m) + 1)
+    return counts
+
+
 def load_axis_counts(generation_info_path: str | Path) -> Dict[str, int]:
     """世代情報 json から軸ごとの本数（{"WL": 120, "STR": 4} など）を読む。"""
     from . import jsonc
@@ -265,8 +295,9 @@ def resolve_group_defs(
     """config の全グループ定義を、Physical 記法（definedInLogical=false）の
     定義は Logical 範囲へ読み替えたうえで返す。読み替えに必要な軸総数 N は
     世代情報 json（既定: data_dir/{Generation}.json、`generation_info_path` で
-    上書き可）の numWLs / numStrings から取る。全定義が Logical ならファイルは
-    読まない。"""
+    上書き可）の numWLs / numStrings から取り、**ファイルが無ければ測定csvから
+    導出**する（derive_axis_counts。本数は世代で固定・フローは全数を測定する
+    ため、データの最大値+1 が総数として正確）。全定義が Logical なら何も読まない。"""
     defs = run_config.group_defs()
     if all(gd.definedInLogical for gd in defs.values()):
         return defs
@@ -276,13 +307,13 @@ def resolve_group_defs(
         if generation_info_path
         else Path(data_dir) / f"{run_config.Generation}.json"
     )
-    if not path.is_file():
-        raise ValueError(
-            "group defs use physical numbering (definedInLogical=false / "
-            f"WLgroupDefinLogical=False) but the generation info json was not found: {path} "
-            "— place {Generation}.json (numWLs, ...) in the data dir or pass --generation-info"
-        )
-    counts = load_axis_counts(path)
+    physical_axes = {gd.axis for gd in defs.values() if not gd.definedInLogical}
+    if path.is_file():
+        counts = load_axis_counts(path)
+        source = str(path)
+    else:
+        counts = derive_axis_counts(data_dir, physical_axes)
+        source = f"measurement csvs in {data_dir}"
     resolved: Dict[str, GroupDef] = {}
     for name, gd in defs.items():
         if gd.definedInLogical:
@@ -291,8 +322,9 @@ def resolve_group_defs(
         n = counts.get(gd.axis)
         if n is None:
             raise ValueError(
-                f"group def '{name}': axis count for '{gd.axis}' not found in {path} "
-                f"(known keys: {_GENERATION_AXIS_KEYS})"
+                f"group def '{name}' uses physical numbering but the axis count for "
+                f"'{gd.axis}' could not be determined from {source} "
+                f"(generation info keys: {_GENERATION_AXIS_KEYS})"
             )
         resolved[name] = GroupDef(
             axis=gd.axis, groups=gd.resolved_groups(n), definedInLogical=True
@@ -444,7 +476,9 @@ def compute_score_part(
     # 相対化・dVtBudget 変換の入力行数を減らす純粋な最適化で、結果は不変
     prefilters = _hoistable_prefilters(score_part, group_defs)
     for axis, value in prefilters:
-        lf = lf.filter(pl.col(axis) == value)
+        # リスト値は is_in（複数値 filter）の前絞り。行の部分集合化である点は
+        # 等値と同じなので可換性の議論は変わらない
+        lf = lf.filter(pl.col(axis).is_in(value) if isinstance(value, list) else pl.col(axis) == value)
 
     steps = _effective_order(score_part)
     sigs = [_step_signature(score_part, s) for s in steps]
@@ -460,10 +494,14 @@ def compute_score_part(
             )
         )
         # prefilters をキーに含める: 前絞りが違えばキャッシュ点のフレームの
-        # 中身が違うため、ステップ署名列が同じでも共有してはならない
+        # 中身が違うため、ステップ署名列が同じでも共有してはならない。
+        # リスト値（is_in）は辞書キーにできないので tuple 化する
+        prefilters_sig = tuple(
+            (a, tuple(v) if isinstance(v, list) else v) for a, v in prefilters
+        )
         base_sig = (
             source_type, tuple(sorted(required_axes)), defs_sig,
-            tuple(identity_axes), tuple(prefilters),
+            tuple(identity_axes), prefilters_sig,
         )
         cache_keys = {
             i: (base_sig, tuple(sigs[: i + 1]))
@@ -582,8 +620,9 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument("--custom-parts", help="custom_parts.py override (default: repository root)")
     parser.add_argument(
         "--generation-info",
-        help="{Generation}.json with numWLs etc. (default: found in --data-dir; needed "
-             "only when group defs use physical numbering)",
+        help="{Generation}.json with numWLs etc. (default: found in --data-dir; optional "
+             "even for physical-numbering group defs — axis counts are derived from the "
+             "measurement csvs when the file is absent)",
     )
     args = parser.parse_args(argv)
 

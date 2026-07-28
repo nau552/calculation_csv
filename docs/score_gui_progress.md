@@ -1,6 +1,8 @@
 # score_gui Phase1 進捗まとめ（引き継ぎ用）
 
-最終更新: 2026-07-20（別タスク・別セッションからの再開用。まずこのファイルを読む）
+最終更新: 2026-07-28（別タスク・別セッションからの再開用。まずこのファイルを読む。
+§2〜8 は 2026-07-20 時点のスナップショット。以降の変更は §9 の追記と
+docs/spec_change_dataname_measure.md を参照）
 
 ## 1. プロジェクトの目的
 
@@ -220,8 +222,10 @@ docs/                  # 全ドキュメント（README.md が索引）
 - サーバでの UI 共用ホスティング（最終形。当面は開発者のローカル起動で可）。
 
 **仕様の未確定（担当者・現行スクリプト側待ち）**
-- split_axis の型ごとのデフォルト（読み込み系=Read_Override / 書き込み系=Program_Override
-  の確定。担当者確認中）。
+- ~~split_axis の型ごとのデフォルト（読み込み系=Read_Override / 書き込み系=Program_Override
+  の確定。担当者確認中）。~~ → **解消（2026-07-28）**: Override 判定自体が使えないと
+  判明し Measure 番号基準へ仕様変更・実装済み（9節と
+  docs/spec_change_dataname_measure.md）。
 - denominator_offset の運用ルール（値の決め方）未確定。
 - python3.7 最適化側の `get_score()` ブリッジ（score_function="gui_score" で
   scorelib_param.cli をサブプロセス起動する分岐。現行スクリプト側の整備後に実装）。
@@ -247,3 +251,38 @@ docs/                  # 全ドキュメント（README.md が索引）
   `tests/fixtures/`（係数・B9LS.json・custom_parts.py）の組み合わせが便利。
 - 圧縮前の完全な会話ログ:
   `C:\Users\naugh\.claude\projects\C--Users-naugh-Desktop-dev-scorelib_param\57035457-a4ad-442d-835a-d954accd1458.jsonl`
+
+## 9. 追記: 2026-07-28 相対化仕様変更 v1 実装セッション
+
+（2026-07-20〜27 の間のセッション記録は本ファイルに追記されていない。この間の
+主な作業 = バッチスコア計算 `scorelib_param/batch` の実装（docs/batch_design.md）、
+v0.4.0 の機能群（集計時重み・変換ステップ拡張・Physical 記法）、filter 前出し
+最適化、性能調査 — 内容は各設計書・code_reference・git log を参照。）
+
+担当者ヒアリング（2026-07-23〜28）で Override 判定の廃止と Measure 番号基準への
+仕様変更が確定し、v1 を実装した。**経緯・合意・設計は
+`docs/spec_change_dataname_measure.md` が正**（本ファイルは要点のみ）。
+
+- **実装済み（同ノート4節プラン1〜4）**: エンジン（Measure 軸の条件付き公開・
+  filter の is_in・labels 注記・relative の None 拒否）、introspect
+  （Measure/DataName 軸カタログ・measure_labels）、`scorelib_param/dummy.py`
+  （ダミー一式の Board/Chip 複製展開・疑似ダミー化。`scripts/make_pseudo_dummy.py`）、
+  UI（相対化プリセット廃止・split 軸の Override 限定解除・「dataName (Measure N)」
+  複合表示・filter 複数選択・画面1のダミー展開）。
+- **テスト 258 件全パス**。新規: test_measure_split.py（新旧仕様の厳密同値）、
+  test_dummy.py（複製不変性による展開検証）。
+- 実装で確定した追加仕様: **Measure 軸と他軸分割の相対化は併用不可**
+  （ペア結合キーに Measure が残り0ペア）→ Measure のある type の雛形は
+  Label/Override 軸を除外。
+- **未着手**: 同ノートプラン5〜8（validate モード・0行マッチ時の候補列挙・
+  被覆情報表示）と、dataName 命名ルール確定後の第2弾（ペア候補提示・自動セット）。
+- ドキュメント反映済み: README / code_reference / testing_guide /
+  score_gui_design 3.3節注記 / score_gui_ui_design 画面1・2。
+- **エンジン版を 0.5.0 へ**（設定語彙の拡張: Measure 相対化・filter リスト・
+  labels は 0.4.0 以前のエンジンでは読めないため、版で見分けられるようにした）。
+- **続報（同日・0.5.1）**: 「WL/STR 本数は世代で固定・フローの部分測定は無い」の
+  確定を受け、**世代情報 json（{Generation}.json）を非必須化**。UI の入力欄を廃止
+  （簡潔 UI 優先のユーザ方針）し、本数整合チェックはデータ由来で常時実行、
+  自動検出された json は食い違い診断のみ。エンジンの Physical 記法 N も
+  データ由来へフォールバック（json があれば互換優先。cli.derive_axis_counts）。
+  spec ノート 9.1節に記録。テスト 260 件パス。

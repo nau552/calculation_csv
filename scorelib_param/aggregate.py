@@ -103,6 +103,11 @@ def apply_axis_op(
     `group_keys` + 値列だけが残る）。
     """
     if spec.op == "filter":
+        # リストは is_in（複数値選択）: 該当行を残して軸列を落とす。残った行は
+        # 後段集計に複製として流れ込む（例: 同じ dataName を持つ複数 Measure を
+        # まとめて対象にする — docs/spec_change_dataname_measure.md 6.4節）
+        if isinstance(spec.value, list):
+            return lf.filter(pl.col(axis).is_in(spec.value)).drop(axis)
         return lf.filter(pl.col(axis) == spec.value).drop(axis)
 
     if spec.op in _SIMPLE_OPS:

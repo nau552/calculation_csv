@@ -94,7 +94,12 @@ def find_run_configs(data_dir: str | Path) -> List[Path]:
 
 def axis_catalog(data_dir: str | Path, type_: str) -> Dict[str, Optional[list]]:
     """`type_` のスコアパーツで使える軸の一覧（デフォルト表示順: 測定csvの
-    ヘッダ順 → ラベル軸）を、各軸の値候補（None = 自由入力のみ）に対応付ける。
+    ヘッダ順 → ラベル軸 → DataName）を、各軸の値候補（None = 自由入力のみ）に
+    対応付ける。
+
+    Measure は識別子軸として、測定csvに Measure 列を持つ type にだけ出す
+    （集計済み type には無い — docs/spec_change_dataname_measure.md 6.4節）。
+    DataName は dataName_{type}.csv がある場合のみ。
 
     type_ == "dVtBudget" のときは FBC のカタログを返す（FBC.csv を読むため）。
     """
@@ -105,7 +110,8 @@ def axis_catalog(data_dir: str | Path, type_: str) -> Dict[str, Optional[list]]:
     tcsv = data_dir / f"{source_type}.csv"
     if tcsv.exists():
         cols = pl.scan_csv(tcsv).collect_schema().names()
-        measured = [c for c in cols if c not in ("Measure", source_type)]
+        # Measure もヘッダ位置のまま軸として出す（相対化・filter の識別子軸）
+        measured = [c for c in cols if c != source_type]
 
     label_axes: List[str] = []
     plabel = data_dir / f"parameterLabel_{source_type}.csv"
@@ -116,7 +122,32 @@ def axis_catalog(data_dir: str | Path, type_: str) -> Dict[str, Optional[list]]:
     catalog: Dict[str, Optional[list]] = {}
     for axis in measured + [a for a in label_axes if a not in measured]:
         catalog[axis] = _candidates(data_dir, source_type, axis, tcsv if axis in measured else None)
+    if (data_dir / f"dataName_{source_type}.csv").exists():
+        catalog["DataName"] = _candidates(data_dir, source_type, "DataName", None)
     return catalog
+
+
+def measure_labels(data_dir: str | Path, type_: str) -> Dict[int, str]:
+    """Measure 番号 → dataName の対応（UI の複合表示「dataName (Measure N)」用。
+    docs/spec_change_dataname_measure.md 6.4節）。dataName_{type}.csv が無い・
+    読めない場合は空 dict（番号のみ表示になる）。1:多（同じ dataName が複数
+    番号に付くループ測定）はそのまま番号ごとの対応になる。"""
+    data_dir = Path(data_dir)
+    source_type = "FBC" if type_ == "dVtBudget" else type_
+    if not (data_dir / f"dataName_{source_type}.csv").exists():
+        return {}
+    try:
+        df = (
+            resolve_axes(data_dir, source_type, {"Measure", "DataName"})
+            .select(["Measure", "DataName"]).unique().sort("Measure").collect()
+        )
+    except Exception:
+        return {}
+    return {
+        int(m): str(d)
+        for m, d in zip(df["Measure"].to_list(), df["DataName"].to_list())
+        if m is not None and d is not None
+    }
 
 
 def _candidates(data_dir: Path, source_type: str, axis: str, tcsv: Optional[Path]) -> Optional[list]:

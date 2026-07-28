@@ -66,6 +66,31 @@ def test_enabled_false_is_rejected_loudly():
         )
 
 
+def test_unset_numerator_or_denominator_rejected():
+    """分子/分母の未設定（None）は必ず0行マッチになる設定忘れ — 実行前に
+    明確なエラーで拒否する（UIの「設定完了まで検証エラー表示」の実体）。"""
+    for side in ("numerator_when", "denominator_when"):
+        cfg = {"split_axis": "Measure", "numerator_when": 1, "denominator_when": 0}
+        cfg[side] = None
+        with pytest.raises(Exception, match="both numerator_when and denominator_when"):
+            RelativeConfig.model_validate(cfg)
+
+
+def test_labels_annotation_round_trips():
+    """labels 注記（Measure 番号 → dataName の表示名）は実行に影響せず、
+    model_dump で保存内容に残ること（docs/spec_change_dataname_measure.md 6.1節）。"""
+    cfg = RelativeConfig.model_validate(
+        {
+            "split_axis": "Measure", "numerator_when": 1, "denominator_when": 0,
+            "labels": {"1": "evaluation_param_read_level_1", "0": "reference_param_read_level_1"},
+        }
+    )
+    assert cfg.model_dump()["labels"]["1"] == "evaluation_param_read_level_1"
+    lf = pl.LazyFrame({"Measure": [0, 1], "value": [10.0, 50.0]})
+    out = apply_relative(lf, "value", cfg).collect()
+    assert out["value"][0] == pytest.approx(5.0)
+
+
 def test_relative_diff_mode():
     lf = pl.LazyFrame(
         {
