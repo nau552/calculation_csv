@@ -86,6 +86,14 @@ def test_filter_then_mean():
 | `fixtures_dir` / `dvtbudget_coef_path` | `tests/fixtures/`（config.jsonc / dvtbudget_coef.jsonc / B9LS.json / custom_parts.py） |
 | `expanded_mini_dir` | **現行の展開スクリプト(reference_scripts/)をそのまま実行**して FBC_expanded.csv を生成した一時コピー。エンジンの結果を「現行方式の正解」と照合するための基準データ |
 
+**移行ガードの寿命（2026-07-28 監査時のメモ）**: 次の3件は「廃止機能の残骸」では
+なく「旧設定を読んだときに黙って誤動作せず正しい案内を出す」という現役仕様のテスト。
+**旧設定が現場（SVN・過去実験の config）から根絶されたと判断できた時点で、
+互換コードごと削除してよい**: `test_group_reduce_removed_with_guidance`（旧
+group_reduce op のエラー案内）、`test_enabled_true/false_...`（旧 relative.enabled）。
+`test_legacy_spellings_normalized`（mean_subset / values 別名）は現行スクリプトが
+まだ使う表記のため当分現役。
+
 ### エンジン単体テスト
 | ファイル | 層 | 内容 |
 |---|---|---|
