@@ -58,7 +58,9 @@ def _extract_archive(archive: Path, dest: Path) -> None:
         with tarfile.open(archive) as tf:
             for member in tf.getmembers():
                 _check_member_name(member.name, archive)
-            tf.extractall(dest)
+            # filter="data": 展開先脱出・特殊ファイル等を tarfile 側でも拒否する
+            # （上の自前チェックの多重防御 + Python 3.14 で必須になる引数の先回り）
+            tf.extractall(dest, filter="data")
     else:
         with zipfile.ZipFile(archive) as zf:
             for name in zf.namelist():

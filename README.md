@@ -73,8 +73,8 @@ python -m venv .venv
 .venv/Scripts/python -m pip install -e ".[dev]"
 ```
 
-※ 設計上はPython 3.13を想定。この開発機には3.11しかなかったため3.11で構築したが、
-コードは3.13でそのまま動作する（3.10+対応）。
+※ 開発環境も本番エンジン環境（miniforge）も Python 3.13（2026-07-28 に開発機を
+3.11 → 3.13 へ移行済み。CI も本番と同じ 3.13 で検証する）。
 
 ## バージョンの上げ方
 
@@ -104,7 +104,7 @@ python -m venv .venv
   作業し、テスト全パスを確認してから main へマージする。小さな修正・ドキュメントは
   main 直コミットでよい
 - **CI**: push / PR のたびに GitHub Actions（`.github/workflows/test.yml`）が
-  Python 3.11 / 3.13 の両方で全テストを実行する（本番エンジン環境は 3.13）。
+  本番エンジン環境と同じ Python 3.13 で全テストを実行する。
   **社内 GitLab で運用する場合は `.gitlab-ci.yml`**（同内容の下書き作成済み。
   Runner・イメージ・pip ミラー等の実地確認手順は docs/dev_workflow.md
   「社内 GitLab での CI」を参照）
