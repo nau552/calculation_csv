@@ -94,6 +94,28 @@ python -m venv .venv
 - **上げ忘れ防止**: 機能実装の完了報告には「版数を上げたか・上げない理由」の判断を
   含める（AI開発時のチェックリストはリポジトリ直下の `CLAUDE.md`）
 
+## 開発の進め方（ブランチ・タグ・CI）
+
+- **main は常に「テスト全パス・いつでも SVN 同期できる」状態を保つ**（唯一のルール）。
+  数日がかりの機能（途中状態が main に乗ると困るもの）は `feature/<名前>` ブランチで
+  作業し、テスト全パスを確認してから main へマージする。小さな修正・ドキュメントは
+  main 直コミットでよい
+- **CI**: push / PR のたびに GitHub Actions（`.github/workflows/test.yml`）が
+  Python 3.11 / 3.13 の両方で全テストを実行する（本番エンジン環境は 3.13）
+- **pre-push フック**: push 前にローカルでも全テストが走る。
+  clone 後に1回 `git config core.hooksPath scripts/hooks` で有効化する
+
+## リリース手順（SVN 同期）
+
+1. main でテスト全パス（CI が green であること）
+2. `scorelib_param/__init__.py` の `__version__` を上げる（上記の判断基準）
+3. `CHANGELOG.md` にこの版の変更点を追記する
+4. コミットして **タグを打つ**: `git tag -a ver.X.Y.Z -m "変更の要旨"` →
+   `git push && git push --tags`
+5. **タグの状態から** `scorelib_param/` + `custom_parts.py` を SVN のスクリプト領域へ
+   同期する（タグ = SVN 側で動いている版の git 上の対応点。版ズレ調査・
+   ロールバックは `git checkout ver.X.Y.Z`）
+
 ## 配置まとめ（どこに何を置くか）
 
 3つの設置先で必要なものは異なる。コードの正は git（本リポジトリ）で、

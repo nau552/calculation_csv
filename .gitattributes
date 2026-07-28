@@ -1,0 +1,2 @@
+# git フック（sh スクリプト）は CRLF になると実行できないため LF を強制する
+scripts/hooks/* text eol=lf

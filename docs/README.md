@@ -4,7 +4,8 @@
 
 | ファイル | 対象読者 | 内容 |
 |---|---|---|
-| [`../README.md`](../README.md) | **全員（まずここ）** | 使い方: セットアップ、config.jsonc の書き方、UIの起動と5画面、CLI |
+| [`../README.md`](../README.md) | **全員（まずここ）** | 使い方: セットアップ、config.jsonc の書き方、UIの起動と5画面、CLI、開発の進め方・リリース手順 |
+| [`../CHANGELOG.md`](../CHANGELOG.md) | SVN 側の利用者・全員 | エンジン版数ごとの変更点（同期で何が変わるか） |
 | [`code_reference.md`](code_reference.md) | チーム報告・引き継ぎ | **今のコードに何があるか**: 全ファイル・全関数の解説（コード変更時に追随更新） |
 | [`testing_guide.md`](testing_guide.md) | テストに馴染みのない開発者 | テストの考え方入門+全テストファイルの解説（テスト変更時に追随更新） |
 | [`score_gui_design.md`](score_gui_design.md) | 開発者 | エンジンの設計書: **なぜこの設計にしたか**の意思決定記録 |

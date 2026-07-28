@@ -31,8 +31,16 @@
   しのがず文書全体を置き換える）。
 - UI 文言は簡潔優先: 肯定形1文+代替手段の導線まで。限定句や数式は docs へ。
 
+## ブランチ・タグ・リリース（README「開発の進め方」「リリース手順」が正）
+
+- main は常に「テスト全パス・いつでも SVN 同期できる」状態を保つ。
+  数日がかりの機能は `feature/<名前>` ブランチで作業し、完成後に main へマージ
+- `__version__` を上げたら CHANGELOG.md へ追記し、コミット後に
+  `git tag -a ver.X.Y.Z` を打つ（SVN 同期はタグから行う）
+- push 前テストは pre-push フック（scripts/hooks）と GitHub Actions が担保する
+
 ## 環境メモ
 
 - テスト: `.venv/Scripts/python -m pytest`（全件パスが完了条件）
 - UI 起動: `.venv/Scripts/streamlit run ui/app.py`
-- コミットはユーザーの指示があるときだけ行う
+- コミット・push・タグ付けはユーザーの指示があるときだけ行う

@@ -292,3 +292,8 @@ v0.4.0 の機能群（集計時重み・変換ステップ拡張・Physical 記�
   （モデル検証はデータ非依存で全部働く。テスト計算のみデータ読み込みが必要 —
   ディレクトリ未入力は明確なエラー）。ユースケース: WLgroup や式だけの微修正。
   版数は 0.5.1 のまま（ui/ のみの変更でエンジン・設定語彙は不変）。テスト 264 件パス。
+- **続報（同日）: 開発運用の整備**。trunk-based のブランチ方針と リリース手順
+  （版上げ→CHANGELOG→タグ→SVN同期）を README に明文化。GitHub Actions
+  （Python 3.11/3.13 マトリクスで pytest）、CHANGELOG.md 新設、pre-push フック
+  （scripts/hooks。`git config core.hooksPath scripts/hooks` で有効化）、
+  タグ `ver.0.5.1` を付与。
