@@ -129,11 +129,11 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 ### `scorelib_param/introspect.py` — UI向けメタデータの導出
 | 関数 | 内容 |
 |---|---|
-| `detect_types(dir)` | 測定typeの検出（`parameterLabel_*`/`dataName_*` の命名 + Measure列を持つcsv） |
+| `detect_types(dir)` | 測定typeの検出（`parameterLabel_*`/`dataName_*` の命名 + **ファイル名と同名の値列を持つcsv**。0.5.3 で「Measure列を持つ」から置換 — KLD/PROGLOOP 等の Measure 無し type を拾うため。値列の無いcsvは計算できないので type にしない） |
 | `find_run_configs(dir)` | **中身の形**（optimization{}キー）で設定jsonc候補を全列挙 |
 | `find_dvtbudget_coefs(dir)` | 中身の形（世代→温度→State→{a,b}）で係数jsonc候補を全列挙。設定jsoncとは形が排他的 |
 | `find_generation_info(dir, generation)` | これだけファイル名ベース（`{Generation}.json`） |
-| `axis_catalog(dir, type_)` | typeの軸一覧→値候補。dVtBudget は FBC のカタログ。**Measure 軸**（Measure 列を持つ type のみ・実在番号の昇順）と **DataName 軸**（dataName_{type}.csv がある場合）も出す |
+| `axis_catalog(dir, type_)` | typeの軸一覧→値候補。dVtBudget は FBC のカタログ。**Measure 軸**（Measure 列を持つ type のみ・実在番号の昇順）と **DataName 軸**（dataName_{type}.csv がある場合）も出す。parameterLabel の**全行空欄の列は出さない**（0.5.3: tPROG の Read_Label のような「この type に無い設定」） |
 | `measure_labels(dir, type_)` | Measure 番号 → dataName の対応（UI の複合表示「dataName (Measure N)」と labels 注記用。dataName_* が無ければ空 = 番号のみ表示） |
 | `_candidates` | 値候補の導出。map系軸は**実データに存在する値だけ**（map順、失敗時は全語彙にフォールバック）、Override は [False, True]、数値軸は csv のユニーク値 |
 
@@ -183,7 +183,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 **相対化と order の整合**
 | 関数 | 内容 |
 |---|---|
-| `default_split_axis(catalog)` | 相対化の既定 split 軸: Measure > Read_Override > 他の Override > 先頭の軸 |
+| `default_split_axis(catalog)` | 相対化の既定 split 軸: Measure > **Param**（ROM=基準パラ/Opt=提案パラ。PROGLOOP 系の基本形 — 2026-07-29 ユーザー確認） > Read_Override > 他の Override > 先頭の軸 |
 | `_positional_sides(cands)` | split 軸の候補から分子/分母の初期値を位置で選ぶ（先頭=分母・2番目=分子。Override の [False, True] では旧既定と一致）。候補不足なら (None, None) = 入力まで検証エラー |
 | `enable_relative` / `disable_relative` / `change_split_axis` | 相対化ON/OFF/split軸変更時に order との整合を自動で取る。OFF時は split軸をデフォルトopで order へ復帰+`__relative__` を除去（エンジンは order に無い軸を暗黙集約して混ぜるため、放置すると分子分母が混ざる）。split変更時は分子/分母を新軸の候補で初期化し直し、labels 注記も捨てる |
 | `annotate_measure_labels(spec, mlabels)` | Measure 指定の相対化/filter に dataName の labels 注記を付与（名前の分かる番号のみ。無ければ注記ごと除去） |

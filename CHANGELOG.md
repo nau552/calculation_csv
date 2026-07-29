@@ -12,6 +12,26 @@
 開発の時系列記録は `docs/score_gui_progress.md`、設計判断は各設計書。
 リリース手順（README）の一部としてここに追記する。
 
+## ver.0.5.3 — 2026-07-29
+
+新計算対象（KLD / dVthSGWLD / PROGLOOP / PROGSTATUS / tPROG）の実フォーマット
+確定に伴う対応。設定 jsonc の語彙は不変（機能追加のみ = 最後の数字）。
+
+- **type 検出を値列ルールへ変更**（`introspect.detect_types`）: 「Measure 列を
+  持つ csv」から「**ファイル名と同名の値列を持つ csv**」へ。KLD / PROGLOOP など
+  Measure 無し type が検出されるようになった。値列の無い csv は計算できないため
+  type にしない（従来の Measure ルールを包含する厳密化）
+- **軸カタログ: parameterLabel の全行空欄の列を軸として出さない**
+  （`introspect.axis_catalog`）: tPROG の Read_Label のように「この type に
+  存在しない設定」が空欄列で出力されるケースに対応
+- UI 雛形: 相対化の既定 split 軸に **Param（ROM=基準パラ / Opt=提案パラ）を
+  Measure の次の優先で追加**（`ui/state.default_split_axis`）。PROGLOOP 系は
+  分母 ROM・分子 Opt が初期値になる
+- テストデータ（tests/data/result_tmp_mini）を実験の実フォーマットに追随:
+  PROGLOOP / PROGSTATUS 差し替え（SGWLD 列は実在しない・Param 列あり）、
+  dVthSGWLD / tPROG / parameterLabel_tPROG（Read_Label 空欄）を追加、
+  map_Label に要素 3, 4 を追加
+
 ## ver.0.5.2 — 2026-07-29
 
 - batch の tar.gz 展開に `filter="data"` を指定（既存の自前パス検査への多重防御 +

@@ -42,17 +42,18 @@ generate_csv(
     column_ranges={
         "InBatchEpoch": (0, 0),
         "Board": (0, 1),
-        "Chip": (0, 1),
-        "SGWLD": (0,11),
+        "Chip": (0, 7),
         "Block": (0, 1),
-        "Param": (0, 1),
-        # "Measure": (0, 3),
-        "WL": (0, 5),
-        "STR": (0, 2),
+        # "Param": (0, 1),
+        "Measure": (0, 1),
+        "WL": (0, 119),
+        "STR": (0, 5),
+        # "SGWLD": (0,11),
         # "State": (0, 13),
         # "DataName": (0, 11),
     },
-    random_column="PROGLOOP",
-    random_range=(14, 16),
-    output_file="./tests/data/result_tmp_mini/PROGLOOP.csv"
+    random_column="tPROG",
+    random_range=(750, 950),
+    # output_file="./tests/data/result_tmp_mini/dVthSGWLD.csv"
+    output_file="./result_tmp_full_2/tPROG.csv"
 )

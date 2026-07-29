@@ -23,8 +23,12 @@ _TYPE_FILE_PREFIXES = ("parameterLabel_", "dataName_", "map_")
 
 def detect_types(data_dir: str | Path) -> List[str]:
     """ディレクトリに存在する測定type。ファイル命名（parameterLabel_{t}.csv /
-    dataName_{t}.csv）と、測定出力らしい素の {t}.csv（Measure 列を持つ）から
-    検出する。"""
+    dataName_{t}.csv）と、測定出力らしい素の {t}.csv（ファイル名と同名の
+    値列を持つ）から検出する。
+
+    値列ルールは Measure 列の無い type（KLD / PROGLOOP など）も拾うために
+    2026-07-29 に「Measure 列を持つ」から置き換えた: エンジン（resolve_axes）は
+    値列 = type 名を前提とするので、値列を持たない csv は検出しても計算できない。"""
     data_dir = Path(data_dir)
     types: set[str] = set()
     for f in data_dir.glob("*.csv"):
@@ -41,7 +45,7 @@ def detect_types(data_dir: str | Path) -> List[str]:
             cols = pl.scan_csv(f).collect_schema().names()
         except Exception:
             continue
-        if "Measure" in cols:
+        if stem in cols:
             types.add(stem)
     return sorted(types)
 
@@ -116,8 +120,13 @@ def axis_catalog(data_dir: str | Path, type_: str) -> Dict[str, Optional[list]]:
     label_axes: List[str] = []
     plabel = data_dir / f"parameterLabel_{source_type}.csv"
     if plabel.exists():
-        cols = pl.scan_csv(plabel).collect_schema().names()
-        label_axes = [c for c in cols if c not in JOIN_KEYS]
+        pdf = pl.read_csv(plabel)
+        # 全行が空欄の列は「この type に存在しない設定」（例: tPROG の
+        # Read_Label は空欄で出力される）なので、選べる軸として出さない
+        label_axes = [
+            c for c in pdf.columns
+            if c not in JOIN_KEYS and pdf[c].null_count() < pdf.height
+        ]
 
     catalog: Dict[str, Optional[list]] = {}
     for axis in measured + [a for a in label_axes if a not in measured]:

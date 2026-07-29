@@ -198,9 +198,13 @@ def _restore_axis_to_order(part: Dict[str, Any], axis: Optional[str], catalog: D
 
 def default_split_axis(catalog: Dict[str, Optional[list]]) -> Optional[str]:
     """相対化の既定 split 軸: Measure（識別子軸 — 新仕様の基本形） >
+    Param（ROM=基準パラ / Opt=提案パラ。PROGLOOP 系の Measure 無し type は
+    ここで相対化するのが基本形 — 2026-07-29 ユーザー確認） >
     Override 系（旧仕様データ） > 先頭の軸。"""
     if "Measure" in catalog:
         return "Measure"
+    if "Param" in catalog:
+        return "Param"
     overrides = [a for a in catalog if a.endswith("_Override")]
     if "Read_Override" in overrides:
         return "Read_Override"

@@ -483,3 +483,31 @@ validate は名前付き = 番号↔dataName の一致まで照合、名無し =
     互換のため残る。
 - Board/Chip 数だけは引き続きデータから分からない(フローが知らない軸)ため、
   ダミー展開時の手入力が唯一の情報源のまま。
+
+## 10. 2026-07-29: Measure 無し type の実フォーマット確定と対応実装
+
+実験サンプル(result_tmp_full_2 相当)で新計算対象の実フォーマットが確定した:
+
+| type | 列構成 | 参照/提案の区別 |
+|---|---|---|
+| KLD | Board, Chip, SGWLD, KLD | なし(絶対値評価) |
+| dVthSGWLD | Board, Chip, Block, SGWLD, dVthSGWLD | なし(同上) |
+| PROGLOOP | Board, Chip, Block, **Param**, WL, STR, PROGLOOP | **Param 軸**(ROM=基準パラ / Opt=提案パラ) |
+| PROGSTATUS | PROGLOOP と同じ | 同上 |
+| tPROG | FBC 同様 Measure あり(State なし)。dataName_tPROG は無い | Measure 番号(本ノートの新仕様どおり) |
+
+実装した対応(いずれも設定 jsonc の語彙は不変):
+
+- **type 検出を値列ルールへ**(introspect.detect_types): 「Measure 列を持つ csv」
+  では上記4typeが検出できないため、「ファイル名と同名の値列を持つ csv」に変更。
+  6.4節の懸念(列構成が不明なまま緩めるリスク)は実フォーマット確定により解消。
+- **相対化の既定 split 軸に Param を追加**(Measure > Param > Override > 先頭軸)。
+  「PROGLOOP 系で相対化するなら基本的に Param」(2026-07-29 ユーザ確認)。
+  分母 ROM・分子 Opt が位置既定(map_Param の並び順)。
+- **parameterLabel の全行空欄の列は軸カタログに出さない**: tPROG の Read_Label の
+  ように「この type に存在しない設定」は空欄列で出力されると確定したため。
+- Measure 無し type の相対化は従来どおり任意軸 split(エンジンは軸汎用)。
+  KLD / dVthSGWLD は相対化の想定なし。
+
+未着手(第2弾のまま): ペア候補提示・雛形の相対化自動セット(dataName 命名ルール
+確定待ち)、プラン5〜8(validate/エラー改善/被覆表示)。

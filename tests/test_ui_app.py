@@ -7,6 +7,7 @@ import pytest
 from ui import state
 
 APP = str(Path(__file__).resolve().parent.parent / "ui" / "app.py")
+MINI_TYPES = ["FBC", "KLD", "PROGLOOP", "PROGSTATUS", "dVthSGWLD", "tPROG", "tR"]
 SCREEN_PARTS = "2. スコアパーツ編集"
 SCREEN_SETS = "3. 選択セット・グループ定義"
 SCREEN_COMPOSE = "4. スコア合成・制約"
@@ -34,7 +35,7 @@ def _load_data(at, data_dir):
     at.text_input(key="data_dir_input").set_value(str(data_dir))
     at.button(key="load_btn").click().run()
     assert not at.exception
-    assert at.session_state["context"]["types"] == ["FBC", "tR"]
+    assert at.session_state["context"]["types"] == MINI_TYPES
 
 
 def test_app_starts(at):
@@ -352,7 +353,7 @@ def test_draft_autosaved_and_restored(at, data_dir_mini, dvtbudget_coef_path, tm
     at2.button(key="restore_btn").click().run()
     assert not at2.exception
     assert [p["name"] for p in at2.session_state["score_file"]["score_parts"]] == ["part_1", "part_2"]
-    assert at2.session_state["context"]["types"] == ["FBC", "tR"]
+    assert at2.session_state["context"]["types"] == MINI_TYPES
     assert "dVtBudget" in at2.session_state["context"]["part_types"]
     at2.toggle(key="paths_mode").set_value(True).run()
     assert at2.text_input(key="data_dir_input").value == str(data_dir_mini.resolve())

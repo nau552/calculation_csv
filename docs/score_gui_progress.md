@@ -347,3 +347,22 @@ v0.4.0 の機能群（集計時重み・変換ステップ拡張・Physical 記�
   （Python 3.11/3.13 マトリクスで pytest）、CHANGELOG.md 新設、pre-push フック
   （scripts/hooks。`git config core.hooksPath scripts/hooks` で有効化）、
   タグ `ver.0.5.1` を付与。
+
+## 2026-07-29: 新計算対象の実フォーマット確定と Measure 無し type 対応
+
+- リポジトリ運用の整備: 作業ルールを AGENTS.md へ一本化（CLAUDE.md は取り込み
+  1行）。.gitignore の `result_tmp*/` がルート直下限定（`/result_tmp*/`）でなく
+  tests/data/result_tmp_mini/ まで巻き込んでいた問題を修正し、未追跡だった
+  KLD/PROGLOOP/PROGSTATUS/map_SGWLD を登録。
+- ユーザが実験相当サンプル一式（result_tmp_full_2、gitignore 下）を作成し、
+  新計算対象の実フォーマットが確定（spec ノート 10節に表）: KLD / dVthSGWLD /
+  PROGLOOP / PROGSTATUS（いずれも Measure 無し）+ tPROG（Measure あり・
+  parameterLabel の Read_Label が全行空欄・dataName 無し）。parameterLabel の
+  列順は「Measure が Label 群の間」が全サンプル共通のミスと判明 → 全ディレクトリ
+  で実順（Measure が Block の直後）に修正。
+- 実装（詳細は spec ノート 10節・CHANGELOG 未リリース節）: type 検出を値列
+  ルールへ変更、全行空欄の parameterLabel 列を軸カタログから除外、相対化の
+  既定 split 軸に Param（分母 ROM / 分子 Opt）を追加。result_tmp_mini に
+  実フォーマットの5ファイルを追加/差し替え、map_Label に要素 3,4 を追加。
+  テスト 273 件パス。同日ユーザ判断でエンジンリリースを確定: 版数 0.5.3・
+  タグ `ver.0.5.3`（CHANGELOG 参照）。

@@ -8,6 +8,9 @@ from scorelib_param.introspect import axis_catalog
 from scorelib_param.models import ScorePart
 from ui import state
 
+# mini データに実在する全 type（値列ルールで検出される。test_introspect と対）
+MINI_TYPES = ["FBC", "KLD", "PROGLOOP", "PROGSTATUS", "dVthSGWLD", "tPROG", "tR"]
+
 
 @pytest.fixture
 def catalog(data_dir_mini):
@@ -59,10 +62,12 @@ def test_skeleton_computes_as_is(data_dir_mini, catalog):
 
 
 def test_default_split_axis_priority(catalog):
-    """既定 split 軸: Measure > Read_Override > 他の Override > 先頭の軸。"""
+    """既定 split 軸: Measure > Param > Read_Override > 他の Override > 先頭の軸。"""
     assert state.default_split_axis(catalog) == "Measure"
     no_measure = {a: c for a, c in catalog.items() if a != "Measure"}
     assert state.default_split_axis(no_measure) == "Read_Override"
+    progloop = {"Board": [0, 1], "Param": ["ROM", "Opt"], "WL": [0, 1]}
+    assert state.default_split_axis(progloop) == "Param"
     aggregated = {"Board": [0, 1], "Chip": [0, 1]}  # 集計済み type（4b回答の形）
     assert state.default_split_axis(aggregated) == "Board"
 
@@ -86,6 +91,21 @@ def test_enable_relative_computes_as_is(data_dir_mini, catalog):
     """相対化ONの既定値（Measure 1/0）のまま計算が通ること。"""
     part = state.part_skeleton("p", "FBC", catalog)
     state.enable_relative(part, catalog)
+    value = compute_score_part(data_dir_mini, ScorePart.model_validate(part))
+    assert isinstance(value, float)
+
+
+def test_enable_relative_param_split_computes(data_dir_mini):
+    """Param 軸を持つ Measure 無し type（PROGLOOP）: 相対化の既定は
+    split=Param・分母 ROM（基準パラ）・分子 Opt（提案パラ）で、そのまま
+    計算が通る（2026-07-29 ユーザー確認: この系の相対化は基本 Param）。"""
+    catalog = axis_catalog(data_dir_mini, "PROGLOOP")
+    part = state.part_skeleton("p", "PROGLOOP", catalog)
+    state.enable_relative(part, catalog)
+    rel = part["relative"]
+    assert rel["split_axis"] == "Param"
+    assert rel["denominator_when"] == "ROM"
+    assert rel["numerator_when"] == "Opt"
     value = compute_score_part(data_dir_mini, ScorePart.model_validate(part))
     assert isinstance(value, float)
 
@@ -517,8 +537,8 @@ def test_validate_unknown_ref(sf, catalog):
 
 def test_build_context(data_dir_mini):
     ctx = state.build_context(str(data_dir_mini))
-    assert ctx["types"] == ["FBC", "tR"]
-    assert ctx["part_types"] == ["FBC", "tR"]  # mini ディレクトリに係数jsoncは無い
+    assert ctx["types"] == MINI_TYPES
+    assert ctx["part_types"] == MINI_TYPES  # mini ディレクトリに係数jsoncは無い
     assert "Page" in ctx["catalogs"]["tR"]
     assert ctx["has_initial_temperature"] is True
     assert ctx["config_path"] is None
@@ -540,7 +560,7 @@ def test_build_context_empty_path_rejected():
 def test_build_context_explicit_coef(data_dir_mini, dvtbudget_coef_path):
     """係数jsoncは通常 result_tmp の外にあり、独立したパスで指定される。"""
     ctx = state.build_context(str(data_dir_mini), coef_path=str(dvtbudget_coef_path))
-    assert ctx["part_types"] == ["FBC", "tR", "dVtBudget"]
+    assert ctx["part_types"] == MINI_TYPES + ["dVtBudget"]
     assert ctx["coef_source"] == "指定"
     assert "dVtBudget" in ctx["catalogs"]
 
@@ -806,7 +826,7 @@ def test_bundle_zip_flat_layout(data_dir_mini, fixtures_dir, custom_parts_path):
         found["data_dir"], found["config_path"], found["coef_path"],
         found["geninfo_path"], found["custom_path"],
     )
-    assert ctx["types"] == ["FBC", "tR"]
+    assert ctx["types"] == MINI_TYPES
     assert ctx["geninfo"]["numWLs"] == 6
     assert "custom" in ctx["part_types"]
 
@@ -822,7 +842,7 @@ def test_bundle_zip_nested_layout(data_dir_mini, fixtures_dir, custom_parts_path
         found["data_dir"], found["config_path"], found["coef_path"],
         found["geninfo_path"], found["custom_path"],
     )
-    assert ctx["types"] == ["FBC", "tR"]
+    assert ctx["types"] == MINI_TYPES
     assert "custom" in ctx["part_types"]
 
 
