@@ -1,5 +1,5 @@
 #!/bin/sh
-# push 前に全テストを実行する保険（CLAUDE.md「変更完了の定義」の物理的な担保）。
+# push 前に全テストを実行する保険（AGENTS.md「変更完了の定義」の物理的な担保）。
 # 有効化（リポジトリごとに1回）: git config core.hooksPath scripts/hooks
 # 緊急時の回避: git push --no-verify（非推奨。CI が同じテストで落ちる）
 
