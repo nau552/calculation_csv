@@ -86,7 +86,13 @@ def _find_scorelib_parent():
 
 def compute_epoch_score(
     engine_python,      # scorelib_param が入っている python 実行ファイルのパス
-    config,             # config.jsonc のパス **または** 読み込み済みの config dict
+    config,             # config.jsonc の**パス**（推奨）または読み込み済みの config dict。
+                        # 現行ローダは読み込み時に dict を加工する（Series 化・
+                        # WLgroup の範囲展開・optimization だけの抽出など）ため、
+                        # 元ファイルのパスを渡すのが正。dict 渡しは _jsonable が
+                        # dump を通せる形に救済するが、逆変換不能な加工
+                        # （範囲展開等）は元に戻せない。ファイルとメモリの
+                        # 食い違いの診断は scripts/config_vocab_diff_example.py
     data_dir,           # この epoch の測定結果ディレクトリ（result_tmp 相当）
     dvtbudget_coef=None,       # dVtBudget パーツがある場合のみ必須
     initial_temperature=None,  # 省略時: dvtbudget_coef 指定なら data_dir 内を使う

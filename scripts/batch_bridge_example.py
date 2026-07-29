@@ -89,7 +89,9 @@ def _find_scorelib_parent():
 
 def compute_batch_scores(
     engine_python,      # scorelib_param が入っている python 実行ファイルのパス
-    config,             # config.jsonc のパス **または** 読み込み済みの config dict
+    config,             # config.jsonc の**パス**（推奨）または読み込み済みの config dict。
+                        # 現行ローダは読み込み時に dict を加工するため、元ファイルの
+                        # パスを渡すのが正（詳細は get_score_bridge_example.py の同項目）
     histories,          # result_history ディレクトリのパスのリスト
     out_csv,            # 結果 CSV の書き出し先
     dvtbudget_coef=None,   # dVtBudget パーツがある場合のみ必須
