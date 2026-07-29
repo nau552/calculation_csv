@@ -21,8 +21,16 @@ git 運用版）。
 
 **git フック**とは「git の特定の操作の直前/直後に自動実行されるスクリプト」。
 `pre-push` は **push の直前**に走り、スクリプトが失敗（exit 非0）すると
-**push 自体が中止される**。中身は `.venv` の pytest を全実行するだけ —
+**push 自体が中止される**。中身は pytest の全実行 —
 つまり「テストが落ちる状態のコードは push できない」を物理的に保証する保険。
+
+- 実行に使う python は `.venv`（Windows/Unix）→ PATH 上の `python3`/`python`
+  の順で「pytest が import できるもの」を探す（docker / devcontainer 等、
+  依存がシステム python に入っている環境でも動くように — 2026-07-29）
+- 見つからなければ **push を中止する（fail-closed）**: 社内環境では CI が
+  未整備の期間があり、フックが唯一の自動テスト実行になりうるため、黙って
+  スキップして CI に委ねる旧挙動をやめた。環境を作れないマシンから意図的に
+  push する場合は `git push --no-verify`
 
 - フックは通常 `.git/hooks/`（git 管理外）に置くものだが、それだとリポジトリを
   clone し直すと消える。そこでリポジトリ管理内の `scripts/hooks/` に置き、

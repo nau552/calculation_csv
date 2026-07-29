@@ -3,16 +3,29 @@
 # 有効化（リポジトリごとに1回）: git config core.hooksPath scripts/hooks
 # 緊急時の回避: git push --no-verify（非推奨。CI が同じテストで落ちる）
 
-if [ -x ".venv/Scripts/python.exe" ]; then
-  PY=".venv/Scripts/python.exe"       # Windows venv
-elif [ -x ".venv/bin/python" ]; then
-  PY=".venv/bin/python"               # Unix venv
-else
-  echo "pre-push: .venv が見つからないためテストをスキップします（CI に委ねる）" >&2
-  exit 0
+# テストを実行できる python を探す: リポジトリの venv → PATH 上の python
+# （docker / devcontainer 等、依存がシステム python に入っている環境向け）。
+# pytest が import できるものだけを採用する
+PY=""
+for cand in ".venv/Scripts/python.exe" ".venv/bin/python" python3 python; do
+  if [ -x "$cand" ] || command -v "$cand" >/dev/null 2>&1; then
+    if "$cand" -c "import pytest" >/dev/null 2>&1; then
+      PY="$cand"
+      break
+    fi
+  fi
+done
+
+# 見つからなければ push を止める（fail-closed）: 社内環境では CI が未整備の
+# 期間があり、ここが唯一の自動テスト実行になりうるため、黙ってスキップしない
+if [ -z "$PY" ]; then
+  echo "pre-push: テストを実行できる python（pytest 入り）が見つからないため push を中止しました" >&2
+  echo "  - README のセットアップ（pip install -e \".[dev]\"）で環境を作ってください" >&2
+  echo "  - 環境を作れないマシンから意図的に push する場合: git push --no-verify" >&2
+  exit 1
 fi
 
-echo "pre-push: テスト実行中（失敗すると push は中止されます）..." >&2
+echo "pre-push: テスト実行中（$PY。失敗すると push は中止されます）..." >&2
 "$PY" -m pytest -q >&2 || {
   echo "pre-push: テスト失敗のため push を中止しました" >&2
   exit 1

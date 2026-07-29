@@ -398,3 +398,7 @@ v0.4.0 の機能群（集計時重み・変換ステップ拡張・Physical 記�
   0.7.0 で在り処を一本化: エクスポートは WL 軸の WLgroup / WLgroupWeight を
   旧形式キーだけに書き、ScoreFile が旧形式キーを吸収（設計書3.4節の訂正・
   CHANGELOG ver.0.7.0 参照）。"WLgroup" は WL 軸の予約名に。テスト299件パス。
+- 追記: pre-push フックを改良 — python 探索を PATH まで拡大（docker/devcontainer
+  対応）し、見つからないときは旧挙動の「スキップして CI に委ねる」をやめ
+  fail-closed（社内 CI 未整備の間はフックが唯一の自動テストのため。
+  逃げ道は --no-verify を案内）。dev_workflow.md 更新。
