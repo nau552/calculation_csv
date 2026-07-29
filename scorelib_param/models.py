@@ -481,6 +481,39 @@ class ScoreFile(BaseModel):
     # （全行同一の定数）か {軸の値: 数値}（by 軸の値ごとの定数）
     weightSets: Dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _absorb_legacy_wlgroup(cls, data):
+        """score.jsonc 単体形式でも旧形式キー（WLgroup / WLgroupDefinLogical /
+        WLgroupWeight）を受ける（0.7.0）。
+
+        UI のエクスポートは WL 軸の "WLgroup" 定義を**旧形式キーだけ**に書く
+        （groupDefs と二重にしない）: 合成後 config では実験スクリプトが読む
+        optimization.WLgroup がそのまま編集後の内容になり、手編集でも
+        「どちらが使われるか」の迷いが生じない（定義の在り処は常に1つ）。
+        groupDefs / weightSets に同名があればそちらが勝つ（RunConfig の
+        group_defs() / weight_sets() と同じ優先順位）。"""
+        if not isinstance(data, dict) or not any(
+            k in data for k in ("WLgroup", "WLgroupDefinLogical", "WLgroupWeight")
+        ):
+            return data
+        data = dict(data)
+        wl = data.pop("WLgroup", None)
+        din = data.pop("WLgroupDefinLogical", True)
+        ww = data.pop("WLgroupWeight", None)
+        if isinstance(din, str):
+            low = din.strip().lower()
+            if low not in ("true", "false"):
+                raise ValueError(f"WLgroupDefinLogical must be true or false, got {din!r}")
+            din = low == "true"
+        if wl:
+            defs = data.setdefault("groupDefs", {})
+            if "WLgroup" not in defs:
+                defs["WLgroup"] = {"axis": "WL", "groups": wl, "definedInLogical": bool(din)}
+        if ww is not None:
+            data.setdefault("weightSets", {}).setdefault("WLgroupWeight", ww)
+        return data
+
 
 def _is_weight(w) -> bool:
     def num(x):
@@ -575,7 +608,10 @@ class RunConfig(BaseModel):
             expression=self.optimization.expression,
             constraintThreshold=self.optimization.constraintThreshold,
             selectionSets=self.optimization.selectionSets,
-            groupDefs=self.optimization.groupDefs,
+            # 旧 WLgroup も統合した全定義（weightSets と対称 — 0.7.0 で修正。
+            # エンジンの計算は resolve_group_defs → group_defs() を使うため
+            # 挙動は不変で、UI が RunConfig を取り込む経路の取りこぼしを塞ぐ）
+            groupDefs=self.group_defs(),
             weightSets=self.weight_sets(),
         )
 

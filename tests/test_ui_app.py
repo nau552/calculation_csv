@@ -161,7 +161,8 @@ def test_config_wlgroup_imported_as_group_def(at, data_dir_mini, fixtures_dir):
     assert not at.exception
     gd = at.session_state["score_file"]["groupDefs"]["WLgroup"]
     assert gd["axis"] == "WL"
-    assert gd["groups"]["WLgroup01"] == [0, 3]
+    # 取り込み経路により list / tuple どちらもありうる（内部 dict の許容形）
+    assert list(gd["groups"]["WLgroup01"]) == [0, 3]
     # グループ定義エディタがエラーなく描画されること
     at.sidebar.radio(key="screen").set_value(SCREEN_SETS).run()
     assert not at.exception

@@ -71,9 +71,9 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 | `RelativeConfig` | 相対化設定（split_axis / numerator_when / denominator_when / mode / denominator_offset / denominator_pre_aggregation + `labels` 注記）。廃止済み `enabled: false` は明示エラー。分子/分母の None（未設定）は「必ず0行マッチになる設定忘れ」として明示エラー（UIの未入力表示の実体） |
 | `ScorePart` | 1スコアパーツ。name/type/relative/order/aggregations + custom用の function/params。custom と集計フィールドの混在を拒否。複合軸の辞書選択の形状検査。`resolve_selection_refs()` で ref を選択セットの中身に展開して再検証 |
 | `GroupDef` | グループ派生軸の定義（対象軸 + グループ名→[lo, hi]） |
-| `ScoreFile` | ユーザが作る内容一式（score_parts / expression / constraintThreshold / selectionSets / groupDefs）。自己完結でエクスポートされる単位 |
+| `ScoreFile` | ユーザが作る内容一式（score_parts / expression / constraintThreshold / selectionSets / groupDefs / weightSets）。自己完結でエクスポートされる単位。**旧形式キー（WLgroup / WLgroupDefinLogical / WLgroupWeight）も before 検証で吸収**（0.7.0 — エクスポートが WL 軸の WLgroup をこのキーだけに書くため。groupDefs / weightSets の同名が優先） |
 | `VthSkipConfig` / `VTHSKIP_TYPE_KEYS` | 実験 config の `optimization.vthSkip`（フロー側の既存項目）: epochs（エンジンは不使用）+ dummyKLDValue / dummyDVthValue。`dummy_values()` が type 名（KLD / dVthSGWLD — 対応表 VTHSKIP_TYPE_KEYS）→ ダミー値の辞書を返す（0.6.0） |
-| `OptimizationConfig` / `RunConfig` | 実行時 config（Generation + optimization{}）。`vthSkip`（上記）も持つ。`to_score_file()` で ScoreFile 部分を取り出し、`group_defs()` で旧 WLgroup（WL への定義として互換読み）と groupDefs を統合（groupDefs 優先） |
+| `OptimizationConfig` / `RunConfig` | 実行時 config（Generation + optimization{}）。`vthSkip`（上記）も持つ。`to_score_file()` で ScoreFile 部分を取り出し（0.7.0: groupDefs は `group_defs()` の統合結果 — weightSets と対称）、`group_defs()` で旧 WLgroup（WL への定義として互換読み）と groupDefs を統合（groupDefs 優先） |
 | `DvtBudgetCoefFile` | 係数表（世代→温度→State→{a, b}）のルートモデル |
 
 設計: **検証はすべてここに集約**し、UIも同じモデルで検証する（二重実装しない）。
@@ -197,7 +197,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | 関数 | 内容 |
 |---|---|
 | `import_config_group_defs(sf, wlgroup)` | 設定jsoncの WLgroup を編集可能な定義として取り込み（既存があれば触らない） |
-| `parts_referencing_group_def` / `add_group_def` / `delete_group_def` | 参照パーツ検出 / 名前衝突チェック付き作成 / 参照中は削除ガード |
+| `parts_referencing_group_def` / `add_group_def` / `delete_group_def` | 参照パーツ検出 / 名前衝突チェック付き作成（**"WLgroup" は WL 軸の予約名** — 旧形式キーで表現できないため。0.7.0）/ 参照中は削除ガード |
 | `axis_counts(geninfo)` | 世代情報json → {WL: numWLs, STR: numStrings} |
 | `data_axis_counts(catalogs)` | カタログの数値軸から本数を導出（max+1。本数は世代で固定・フローは全数測定のため正確。Measure/InBatchEpoch は除外） |
 | `validation_axis_counts(ctx)` | 本数チェックに使う軸本数: **データ由来が正**、自動検出された世代情報json はデータに無い軸の補完のみ（観測 > 宣言） |
@@ -239,7 +239,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 |---|---|
 | `save_draft` / `load_draft` / `draft_path_for(user)` | 下書きは**ユーザ名ごと**に `DRAFTS_DIR`（`~/.scorelib_drafts/<名前>.jsonc`。名前はファイル名安全に正規化 — 共用サーバで混ざらないための分離）。score_file+画面1の入力（context_inputs）を保存。旧形式も読める |
 | `export_part(sf, i)` | パーツ単体を自己完結jsoncに（参照する選択セット・グループ定義を同梱） |
-| `score_file_to_jsonc` / `import_score_file` | 全体のエクスポート/インポート（RunConfig形式も受理。エラーはパーツ名付き） |
+| `score_file_to_jsonc` / `import_score_file` | 全体のエクスポート/インポート（RunConfig形式も受理。エラーはパーツ名付き）。**エクスポートは WL 軸の "WLgroup" 定義と WLgroupWeight を旧形式キーだけに書き出す**（0.7.0 — 合成後 config で実験スクリプトが読む場所がそのまま編集後になり、定義の在り処が常に1つ。読み戻しは ScoreFile 側の吸収と対称） |
 | `run_test_compute(sf, dir, ...)` | ScoreFile dict → RunConfig を組み立てて `compute_score_file` を直接呼ぶ |
 
 ### `ui/widgets.py` — 再利用ウィジェット

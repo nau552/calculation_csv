@@ -12,6 +12,31 @@
 開発の時系列記録は `docs/score_gui_progress.md`、設計判断は各設計書。
 リリース手順（README）の一部としてここに追記する。
 
+## ver.0.7.0 — 2026-07-29
+
+**WLgroup 定義の在り処を1つにする**（score.jsonc の語彙が変わるため真ん中を
+上げる）。従来はエクスポートが編集後の WLgroup を `groupDefs` に入れるだけで
+`optimization.WLgroup`（実験スクリプトが読む場所）に書き戻さなかったため、
+合成後 config に新旧2つの定義が並び、①実験のパラメータ割り当てが編集前の
+定義のまま、②手編集時にどちらが使われるか分からず変え忘れが起きる、という
+問題があった（ユーザー指摘）。
+
+- **UI エクスポート**: WL 軸の "WLgroup" 定義（と WLgroupWeight）を旧形式キー
+  （`WLgroup` / `WLgroupDefinLogical` / `WLgroupWeight`）**だけ**に書き出し、
+  groupDefs / weightSets には残さない。合成すると実験スクリプトが読む場所が
+  そのまま編集後の内容になり、定義は常に1つ
+- **ScoreFile が旧形式キーを解釈**（score.jsonc 単体形式でも読める）。
+  groupDefs / weightSets に同名があればそちらが勝つ（RunConfig と同じ優先）
+- `RunConfig.to_score_file()` が旧 WLgroup も groupDefs へ統合（weightSets と
+  対称に。エンジン計算は従来から統合済みのため挙動不変 — UI 取り込み経路の
+  取りこぼし修正）
+- UI: グループ定義名 "WLgroup" は WL 軸の予約名に（旧形式キーで表現できない
+  ため WL 以外の軸には使えない）
+- **互換性**: 合成後 config は昔からある語彙のみなので旧エンジンでも同じに
+  動く。旧エンジンが**新しい score.jsonc 単体**を読んだ場合のみ WLgroup が
+  読み飛ばされ、参照パーツが明示エラーになる（静かな誤計算にはならない）。
+  旧形式（groupDefs に WLgroup 入り）の score.jsonc は引き続き読める
+
 ## ver.0.6.1 — 2026-07-29
 
 - **DataName の map の綴りを実出力に追随**: 実験フローの実出力は

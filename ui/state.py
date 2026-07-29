@@ -421,6 +421,10 @@ def add_group_def(score_file: Dict[str, Any], name: str, axis: str, axis_names: 
         raise ValueError(f"グループ定義 '{name}' は既に存在します")
     if name in axis_names:
         raise ValueError(f"'{name}' は軸名と衝突しています（別の名前にしてください）")
+    if name == "WLgroup" and axis != "WL":
+        # "WLgroup" は設定 jsonc の旧形式キー（optimization.WLgroup = WL への
+        # 定義）として書き出されるため、WL 以外の軸には使えない
+        raise ValueError("'WLgroup' は WL 軸の定義の予約名です（別の名前にしてください）")
     defs[name] = {"axis": axis, "groups": {}}
 
 
@@ -1030,6 +1034,24 @@ def part_summary_rows(score_file: Dict[str, Any]) -> List[Dict[str, str]]:
 
 def score_file_to_jsonc(score_file: Dict[str, Any]) -> str:
     cleaned = ScoreFile.model_validate(score_file).model_dump(exclude_none=True)
+    # WL 軸の "WLgroup" 定義と "WLgroupWeight" は**旧形式キーだけ**に書き出す
+    # （0.7.0 — 定義の在り処を1つにする）: 合成後 config では実験スクリプトが
+    # 読む optimization.WLgroup / WLgroupWeight がそのまま編集後の内容になり、
+    # 手編集時も「groupDefs とどちらが使われるか」の迷いが生じない。
+    # 読み戻しは ScoreFile._absorb_legacy_wlgroup が対称に行う
+    gd = (cleaned.get("groupDefs") or {}).get("WLgroup")
+    if gd and gd.get("axis") == "WL":
+        cleaned["groupDefs"].pop("WLgroup")
+        if not cleaned["groupDefs"]:
+            cleaned.pop("groupDefs")
+        cleaned["WLgroup"] = gd.get("groups", {})
+        # 現行 config の流儀（"True"/"False" 文字列）に合わせる
+        cleaned["WLgroupDefinLogical"] = "True" if gd.get("definedInLogical", True) else "False"
+    weights = cleaned.get("weightSets") or {}
+    if "WLgroupWeight" in weights:
+        cleaned["WLgroupWeight"] = weights.pop("WLgroupWeight")
+        if not weights:
+            cleaned.pop("weightSets", None)
     return json.dumps(cleaned, indent=2, ensure_ascii=False) + "\n"
 
 
