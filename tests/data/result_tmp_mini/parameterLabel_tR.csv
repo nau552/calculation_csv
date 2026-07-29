@@ -1,10 +1,10 @@
-InBatchEpoch,Board,Chip,Block,Erase_Label,Erase_Override,Program_Label,Program_Override,Measure,Read_Label,Read_Override
+InBatchEpoch,Board,Chip,Block,Measure,Erase_Label,Erase_Override,Program_Label,Program_Override,Read_Label,Read_Override
 0,0,0,0,0,0,0,0,0,1,0
-0,0,0,0,0,0,0,0,1,1,1
+0,0,0,0,1,0,0,0,0,1,1
 0,0,1,0,0,0,0,0,0,1,0
-0,0,1,0,0,0,0,0,1,1,1
+0,0,1,0,1,0,0,0,0,1,1
 0,1,0,0,0,0,0,0,0,1,0
-0,1,0,0,0,0,0,0,1,1,1
+0,1,0,0,1,0,0,0,0,1,1
 0,1,1,0,0,0,0,0,0,1,0
-0,1,1,0,0,0,0,0,1,1,1
-
+0,1,1,0,1,0,0,0,0,1,1
+,,,,,,,,,,
