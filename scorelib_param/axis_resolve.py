@@ -12,7 +12,8 @@
 - ``map_*.csv``: 共有の数値→テキスト対応表（2列・ヘッダなし）。
   軸に対応する map ファイルは規約で決まる: ``{Erase,Program,Read}_Label``
   → ``map_Label.csv``、``*_Override`` → ``map_Override.csv``、``DataName`` →
-  ``map_dataName.csv``、それ以外の軸 ``X`` はファイルがあれば ``map_X.csv``
+  ``map_DataName.csv``（実出力の綴り。旧 ``map_dataName.csv`` も互換で読む）、
+  それ以外の軸 ``X`` はファイルがあれば ``map_X.csv``
   （例: ``State`` → ``map_State.csv``、``Page`` → ``map_Page.csv``）。
   map ファイルの無い軸（WL, STR, Board, ...）は数値のまま。
 
@@ -45,15 +46,22 @@ def data_file(data_dir: Path, filename: str) -> Path:
 
 def _map_file_for_axis(data_dir: Path, axis: str) -> Path | None:
     if axis.endswith("_Label"):
-        name = "map_Label.csv"
+        names = ["map_Label.csv"]
     elif axis.endswith(OVERRIDE_SUFFIX):
-        name = "map_Override.csv"
+        names = ["map_Override.csv"]
     elif axis == "DataName":
-        name = "map_dataName.csv"
+        # 実験フローの実出力は map_DataName.csv（2026-07-29 実環境で判明）。
+        # 旧サンプル・過去データの map_dataName.csv も互換で受ける — Linux は
+        # ファイル名の大文字小文字を区別するため、綴り違いは実環境でだけ
+        # 「候補が出ない」形で現れる（Windows 開発機では再現しない）
+        names = ["map_DataName.csv", "map_dataName.csv"]
     else:
-        name = f"map_{axis}.csv"
-    path = data_file(data_dir, name)
-    return path if path.exists() else None
+        names = [f"map_{axis}.csv"]
+    for name in names:
+        path = data_file(data_dir, name)
+        if path.exists():
+            return path
+    return None
 
 
 def _scan_map_file(path: Path, code_col: str, text_col: str) -> pl.LazyFrame:

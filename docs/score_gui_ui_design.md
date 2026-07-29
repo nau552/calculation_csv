@@ -202,7 +202,7 @@ GUIサーバ上のSVNチェックアウトで実行される。
   - Override系軸: true / false
   - Measure 軸（2026-07-28 追加。Measure 列を持つ type のみ）: 実在番号の昇順。
     表示は `measure_labels`（番号→dataName）による複合表示「dataName (Measure N)」
-  - DataName 軸（dataName_{type}.csv がある場合）: map_dataName.csv の値一覧
+  - DataName 軸（dataName_{type}.csv がある場合）: map_DataName.csv の値一覧（旧綴り map_dataName.csv も互換で読む — 2026-07-29）
     ∩ 実在値。雛形には入れない（指定は Measure 軸で行う）
   - State等 `map_{軸}.csv` がある軸: そのmapの値一覧
   - WL/STR/Board/Chip/Block等の数値軸: `{type}.csv` があれば実データのユニーク値、

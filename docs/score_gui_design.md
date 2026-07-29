@@ -77,8 +77,13 @@ v1では「Streamlit UIがengineを直接importし、jsoncへの変換もengine�
 
 ### 3.1 map系ファイルの共有範囲（確認事項1への回答反映）
 
-map系ファイル（`map_dataName.csv`, `map_Label.csv`, `map_State.csv`, `map_Override.csv`）は
+map系ファイル（`map_DataName.csv`, `map_Label.csv`, `map_State.csv`, `map_Override.csv`）は
 **全type共通**と確認済み。type別に探索する分岐は不要、単純に共有ファイルとして1セットのみ読む。
+
+（2026-07-29 追記: DataName の map の実出力の綴りは `map_DataName.csv`（大文字D）と
+実環境で判明。旧サンプル・本書の旧記述は `map_dataName.csv` だったが、Linux は
+大文字小文字を区別するため実環境で候補が出ない不具合になった。エンジンは
+両方の綴りを読む — axis_resolve._map_file_for_axis）
 
 ### 3.2 軸の解決方式（設計を簡略化）
 

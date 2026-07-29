@@ -103,7 +103,7 @@ group_reduce op のエラー案内）、`test_enabled_true/false_...`（旧 rela
 | `test_axis_resolve.py` | 単体 | 必要な軸だけの結合・map解決・Override の Boolean 化 |
 | `test_relative.py` | 単体 | 分母事前集計と offset の効き方を手計算値と照合。diff モード。分子/分母未設定（None）の明示エラー。labels 注記のラウンドトリップ |
 | `test_dvtbudget.py` | 単体 | 温度の最近傍選択（-28.2℃→"-30"等）と変換式の値 |
-| `test_introspect.py` | 単体 | type検出（予約ファイル無視・**値列ルール**: ファイル名と同名の値列を持つcsvのみ。Measure列だけでは type にならない）、中身の形による設定/係数jsonc検出、軸カタログ（**実データに存在する値への絞り込み**、tRにStateが漏れない等、Measure/DataName 軸の追加と Measure 列無し type での非表示、Param 候補 [ROM, Opt]、**全行空欄の parameterLabel 列の非表示**）、measure_labels（番号→dataName。dataName無しで空） |
+| `test_introspect.py` | 単体 | type検出（予約ファイル無視・**値列ルール**: ファイル名と同名の値列を持つcsvのみ。Measure列だけでは type にならない）、中身の形による設定/係数jsonc検出、軸カタログ（**実データに存在する値への絞り込み**、tRにStateが漏れない等、Measure/DataName 軸の追加と Measure 列無し type での非表示、Param 候補 [ROM, Opt]、**全行空欄の parameterLabel 列の非表示**、**map_DataName.csv の両綴り対応**（実出力=大文字D。CI の ubuntu で意味を持つ検証））、measure_labels（番号→dataName。dataName無しで空） |
 | `test_dummy.py` | 単体 | ダミー一式の Board/Chip 複製展開（scorelib_param/dummy.py）。行数・番号付け・Boardごとに違うChip数・initial_temperature/map の扱い・複数Board元データの拒否。**「mean 集計は複製に対して不変」という性質**で「展開は行の複製だけ」を検証し、展開一式で実計算が通ることも確認 |
 | `test_agg_weight.py` | 単体 | 集計時重み（`weight`/`weight_ref`）: 「軸を潰す直前に値ごとの重みを乗算」が変換ステップ（by+mul）を直前に置いた場合と一致すること、weightSets からの解決、形状検査 |
 | `test_transform_weights.py` | 単体 | 変換ステップの拡張（add/sub/mul/div・複数回・グループ別重み）と**単項op abs/log**（0.6.0: KLD 標準計算の polars 手組みとの一致、floor 必須等の検証）、Physical 記法グループ定義（definedInLogical / WLgroupDefinLogical の読み替え）。`{Generation}.json` 無しでの**データ由来の軸総数導出**が json ありと同値なこと、導出不能軸の明確なエラー |

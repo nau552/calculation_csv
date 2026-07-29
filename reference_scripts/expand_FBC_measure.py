@@ -40,7 +40,7 @@ def main():
     fbc_path = os.path.join(BASE, 'FBC.csv')
     param_path = os.path.join(BASE, 'parameterLabel_FBC.csv')
     dataName_path = os.path.join(BASE, 'dataName_FBC.csv')
-    map_dataName_path = os.path.join(BASE, 'map_dataName.csv')
+    map_dataName_path = os.path.join(BASE, 'map_DataName.csv')
     map_label_path = os.path.join(BASE, 'map_Label.csv')
     map_state_path = os.path.join(BASE, 'map_State.csv')
 

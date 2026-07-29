@@ -83,7 +83,7 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 |---|---|
 | `JOIN_KEYS` | `(InBatchEpoch, Board, Chip, Block, Measure)`。測定csvとラベルcsvの結合キー |
 | `resolve_axes(data_dir, type_, required_axes)` | `{type}.csv` に、要求された軸のぶんだけ `parameterLabel_` / `dataName_` / `map_*` を lazy join し、値列+軸列の LazyFrame を返す。Override列は Boolean 正規化。要求されない列（InBatchEpoch等）は最後に落とす。**Measure は結合キーだが、軸として要求されたら残す**（相対化・filter の識別子軸 — docs/spec_change_dataname_measure.md） |
-| `_map_file_for_axis` | 軸名→対応する map ファイル名の規約（`*_Label`→map_Label.csv 等） |
+| `_map_file_for_axis` | 軸名→対応する map ファイル名の規約（`*_Label`→map_Label.csv 等）。DataName は実出力の `map_DataName.csv` が正で旧 `map_dataName.csv` も互換で読む（Linux は大文字小文字を区別 — 2026-07-29 実環境で判明） |
 
 設計: 全展開（FBC_expanded.csv 相当）を作らず、パーツが言及した軸だけを結合する。
 

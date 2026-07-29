@@ -121,6 +121,20 @@ def test_axis_catalog_without_measure_column(tmp_path):
     assert list(catalog) == ["Board", "Chip"]
 
 
+def test_dataname_map_accepts_both_spellings(tmp_path, data_dir_mini):
+    """DataName の map は実出力の map_DataName.csv（大文字D — 2026-07-29 実環境で
+    判明）が正で、旧サンプルの map_dataName.csv も互換で読む。Linux はファイル名の
+    大文字小文字を区別するため、この検証は CI（ubuntu）で意味を持つ。"""
+    d = tmp_path / "run"
+    shutil.copytree(data_dir_mini, d)
+    assert (d / "map_DataName.csv").exists()  # mini は実出力の綴り
+    assert axis_catalog(d, "FBC")["DataName"]  # 候補が出る（自由入力にならない）
+    # 旧綴りへリネームしても読める（大文字小文字を区別する FS でも安全なよう2段階）
+    (d / "map_DataName.csv").rename(d / "map_dataname.tmp")
+    (d / "map_dataname.tmp").rename(d / "map_dataName.csv")
+    assert axis_catalog(d, "FBC")["DataName"]
+
+
 def test_measure_labels_fbc(data_dir_mini):
     assert measure_labels(data_dir_mini, "FBC") == {
         0: "reference_param_read_level_1",

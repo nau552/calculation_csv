@@ -70,8 +70,8 @@ class TestExpandBoardsChips:
 
     def test_map_files_copied_verbatim(self, pseudo_dir, tmp_path):
         out = expand_boards_chips(pseudo_dir, tmp_path / "out", [2])
-        assert (out / "map_dataName.csv").read_bytes() == (
-            pseudo_dir / "map_dataName.csv"
+        assert (out / "map_DataName.csv").read_bytes() == (
+            pseudo_dir / "map_DataName.csv"
         ).read_bytes()
 
     def test_rejects_multi_board_source(self, data_dir_mini, tmp_path):
