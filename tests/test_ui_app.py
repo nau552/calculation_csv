@@ -84,6 +84,21 @@ def test_load_and_create_part(at, data_dir_mini):
     assert any("検証" in s.value and "OK" in s.value for s in at.success)
 
 
+def test_part_with_absent_type_shows_warning(at, data_dir_mini):
+    """データに無い type のパーツ（別実験の config 由来）: パーツは残し、
+    編集画面に警告を出す（黙って落とさない・テスト計算まで気づけない、の両方を回避）。"""
+    _load_data(at, data_dir_mini)
+    # config 読み込み相当: パーツ編集画面が描画される前に score_file に入っている
+    at.session_state["score_file"]["score_parts"] = [
+        {"_uid": "x1", "name": "p_gone", "type": "GONE", "order": [], "aggregations": {}},
+    ]
+    at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
+    assert not at.exception
+    assert any("測定データがありません" in w.value for w in at.warning)
+    # パーツ自体は残る（黙って落とさない）
+    assert at.session_state["score_file"]["score_parts"][0]["type"] == "GONE"
+
+
 def test_create_part_and_compute(at, data_dir_mini):
     _load_data(at, data_dir_mini)
     at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()

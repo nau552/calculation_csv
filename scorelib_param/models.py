@@ -39,6 +39,11 @@ AggOp = Literal[
     "sub",
     "mul",
     "div",
+    # 単項変換op（下の UNARY_OPS）: 定数を取らない行単位の関数。
+    # abs = |x|、log = ln(max(|x|, floor))（floor 必須 — 0 や負値で発散しない
+    # 安全な対数。KLD の標準計算 log(max(|x|, 1e-6)) がこの形）
+    "abs",
+    "log",
 ]
 
 # `value` が通常opの修飾子になる前の旧表記（読み込み時に自動変換）
@@ -59,6 +64,12 @@ MULTI_OPS = ("mean", "sum", "min", "max")
 # - `by` + 辞書: 軸の値ごとの定数（例: WLgroup 別の重み。
 #   {"op": "mul", "by": "WLgroup", "value": {"WLgroup00": 10.0, ...}}）
 TRANSFORM_OPS = ("add", "sub", "mul", "div")
+
+# 単項変換op: 定数を取らない行単位の関数（0.6.0 で追加）。value/by/ref は
+# 取らない。log は `floor` が必須: log(max(|x|, floor))。
+# 変換ステップ全体 = TRANSFORM_OPS + UNARY_OPS（STEP_OPS）
+UNARY_OPS = ("abs", "log")
+STEP_OPS = TRANSFORM_OPS + UNARY_OPS
 
 
 class AggregationSpec(BaseModel):
@@ -101,6 +112,8 @@ class AggregationSpec(BaseModel):
     # UI と将来の validate が使う（docs/spec_change_dataname_measure.md 6.1節）。
     # キーは JSON の制約上文字列（{"1": "evaluation_..."}）
     labels: Optional[Dict[str, str]] = None
+    # op="log" 専用（必須）: log(max(|x|, floor)) の床。0 や負値で発散させない
+    floor: Optional[float] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -136,6 +149,18 @@ class AggregationSpec(BaseModel):
             raise ValueError(
                 f"'by' applies only to transform ops {list(TRANSFORM_OPS)}, not op '{op}'"
             )
+        if self.floor is not None and op != "log":
+            raise ValueError(f"'floor' applies only to op 'log', not op '{op}'")
+        if op in UNARY_OPS:
+            if v is not None or self.ref is not None:
+                raise ValueError(f"op '{op}' takes no 'value'/'ref' (row-wise function)")
+            if op == "log":
+                if not _num(self.floor) or self.floor <= 0:
+                    raise ValueError(
+                        "op 'log' requires a positive 'floor' — computes log(max(|x|, floor)) "
+                        '(e.g. {"op": "log", "floor": 1e-6})'
+                    )
+            return self
         if (self.weight is not None or self.weight_ref is not None) and op not in MULTI_OPS:
             raise ValueError(
                 f"'weight'/'weight_ref' apply only to aggregation ops {list(MULTI_OPS)}, "
@@ -464,8 +489,38 @@ def _is_weight(w) -> bool:
     return num(w) or (isinstance(w, dict) and bool(w) and all(num(x) for x in w.values()))
 
 
+class VthSkipConfig(BaseModel):
+    """実験 config の `optimization.vthSkip`（測定フロー側の既存項目）。
+
+    フローは指定 epoch 数まで KLD / dVthSGWLD を測定しない（ファイルが出力
+    されない）。エンジンは epochs は使わず「パーツの type ファイルが無い」を
+    トリガーに、ここのダミー値で計算する（docs/score_gui_design.md 参照）。
+    ダミー値は「変換後の値」: 変換ステップ（__log__ 等）はスキップされ、
+    集計（選択リスト・集計時重み・sum/mean）だけが通常どおり適用される。"""
+
+    epochs: Optional[int] = None
+    dummyKLDValue: Optional[float] = None
+    dummyDVthValue: Optional[float] = None
+
+    def dummy_values(self) -> Dict[str, float]:
+        """type 名 → ダミー値（設定されているものだけ）。"""
+        out: Dict[str, float] = {}
+        for type_, key in VTHSKIP_TYPE_KEYS.items():
+            v = getattr(self, key)
+            if v is not None:
+                out[type_] = float(v)
+        return out
+
+
+# vthSkip のフロー側キー名 → 対応する測定 type（フローの命名慣習に固定で対応。
+# 他の type にもダミーが必要になったら、パーツ単位の汎用フィールドを検討する）
+VTHSKIP_TYPE_KEYS = {"KLD": "dummyKLDValue", "dVthSGWLD": "dummyDVthValue"}
+
+
 class OptimizationConfig(BaseModel):
     score_function: Optional[str] = None
+    # 測定フロー側の vthSkip 設定（あれば）: ファイル不在時のダミー値の出所
+    vthSkip: Optional[VthSkipConfig] = None
     constraintThreshold: Dict[str, ConstraintThresholdEntry] = Field(default_factory=dict)
     WLgroup: Dict[str, Tuple[int, int]] = Field(default_factory=dict)
     # WLgroup の範囲の記法: True（既定）= Logical 番号、False = Physical 番号

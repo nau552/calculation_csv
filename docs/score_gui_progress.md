@@ -366,3 +366,24 @@ v0.4.0 の機能群（集計時重み・変換ステップ拡張・Physical 記�
   実フォーマットの5ファイルを追加/差し替え、map_Label に要素 3,4 を追加。
   テスト 273 件パス。同日ユーザ判断でエンジンリリースを確定: 版数 0.5.3・
   タグ `ver.0.5.3`（CHANGELOG 参照）。
+
+## 2026-07-29(続き): KLD/dVthSGWLD 標準計算と vthSkip 対応（0.6.0）
+
+- ユーザーヒアリングで確定: KLD の一般計算は Board/Chip mean →
+  log(max(|x|,1e-6)) → 規定重み（全体0.1 or SGWLD別）→ SGWLD 総和。
+  dVthSGWLD は mean → 絶対値 → SG系4要素（SGSB/SGS/SGD/SGDT）を除く8要素の
+  総和。PROGLOOP/PROGSTATUS の相対化は Param 軸（ROM=基準/Opt=提案）が基本。
+- vthSkip: 実験 config の既存項目（epochs, dummyKLDValue, dummyDVthValue —
+  config_mini.jsonc に実例）。指定 epoch 数までファイル自体が出力されない。
+  エンジンはファイル不在をトリガーに、ダミー値=「変換後の値」（変換スキップ・
+  集計適用: ユーザは log(KLD) の値のつもりで 0 を書く）で計算。設計の経緯・
+  代替案の比較は設計書12節。
+- 実装（詳細は CHANGELOG ver.0.6.0）: 単項op abs/log（floor 必須）、
+  compute_dummy_part + compute_score_file/batch のファイル不在分岐、
+  BatchResult.dummy_used 報告、runner の事前検証免除、KLD/dVthSGWLD の
+  type 別雛形、変換ステップエディタの abs/log 対応、sample.jsonc に見本。
+  テスト 288 件パス（+15: test_vthskip.py 新設ほか）。
+  版数 0.6.0（設定語彙が増えるため main 投入時点で必ず上げる条件に該当）。
+- 追記: 別実験 config 読み込みでデータに無い type のパーツが残る挙動は維持
+  （取捨選択はユーザー）しつつ、一覧「⚠ データ無し」+編集画面の警告を追加
+  （state.part_types_without_data）。テスト291件パス。

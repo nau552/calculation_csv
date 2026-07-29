@@ -5,6 +5,16 @@
     
         "score_function": "score_function_1",
 
+        // 測定フローの vthSkip 設定（任意）: 指定 epoch 数まで KLD / dVthSGWLD が
+        // 測定されない（ファイルが出力されない）。エンジンは epochs を使わず
+        // 「ファイルが無い epoch」をダミー値で計算する（ダミー値は変換後の値。
+        // 例: KLD 0 → スコア 0、dVthSGWLD 1 → 残す要素数）
+        "vthSkip": {
+            "epochs": 100,
+            "dummyKLDValue": 0,
+            "dummyDVthValue": 1
+        },
+
         "constraintThreshold": {
             "tPROG_delta": {"value":25},
             "dVtBudget": {"value":10, "active":"True", "type":"percentile", "coef":20}

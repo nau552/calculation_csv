@@ -548,8 +548,9 @@ def _add_entry_controls(part: dict, catalog: dict, uid: str) -> None:
         part["aggregations"][entry] = {"op": "sum"}
         st.rerun()
 
-    if st.button("＋ 定数演算ステップを追加", key=f"{uid}_addvirt_btn",
-                 help="値に定数を 足す/引く/掛ける/割る ステップ（__offset__ 等）を order に追加します。"
+    if st.button("＋ 変換ステップを追加", key=f"{uid}_addvirt_btn",
+                 help="値を行単位で変換するステップ（__offset__ 等）を order に追加します: "
+                      "足す/引く/掛ける/割る・絶対値(abs)・対数(log)。"
                       "典型例: オフセットを足してから相対化、-1を掛けて正負反転、"
                       "「軸の値ごと」を選んで WLgroup 別の重み。実行位置は上下ボタンで調整してください"):
         name, n = "__offset__", 2
@@ -749,8 +750,13 @@ def screen_parts() -> None:
         p["_uid"] for p in sf["score_parts"]
         if state.validate_part(p, sf["selectionSets"], sf.get("weightSets"))
     }
+    # データに測定ファイルの無い type のパーツも ⚠ 対象（設定としては有効な
+    # ままなので検証NGとは別扱い — 編集画面に警告文が出る）
+    no_data = state.part_types_without_data(sf, ctx)
     for r, p in zip(rows, sf["score_parts"]):
-        r["検証"] = "⚠ NG" if p["_uid"] in invalid else "OK"
+        uid_ = p["_uid"]
+        r["検証"] = "⚠ NG" if uid_ in invalid else ("⚠ データ無し" if uid_ in no_data else "OK")
+    invalid = invalid | no_data
     parts_dnd = False
     if widgets.HAS_SORTABLES and len(sf["score_parts"]) > 1:
         labels = state.part_list_labels(sf, sel_uid, invalid, rows=rows)
@@ -850,6 +856,11 @@ def screen_parts() -> None:
         st.rerun()
 
     st.divider()
+    if part.get("type") != "custom" and part.get("type") not in ctx.get("catalogs", {}):
+        st.warning(
+            f"type '{part.get('type')}' の測定データがありません — このパーツは"
+            "テスト計算できません（編集・保存は可能。不要なら削除してください）"
+        )
     if part.get("type") == "custom":
         _custom_part_editor(part, ctx, uid)
     else:

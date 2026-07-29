@@ -125,6 +125,19 @@ def main(argv=None) -> None:
     result.scores.write_csv(out)
     print(f"wrote {result.scores.height} epoch scores to {out}", file=sys.stderr)
 
+    if result.dummy_used:
+        # vthSkip: ファイルが無くダミー値で計算した epoch の報告
+        # （静かに全部ダミーだった、に気づけるように）
+        print(
+            f"note: {len(result.dummy_used)} epoch(s) used vthSkip dummy values "
+            "(measurement files absent):",
+            file=sys.stderr,
+        )
+        for epoch, parts in sorted(result.dummy_used.items())[:10]:
+            print(f"  {epoch}: {', '.join(parts)}", file=sys.stderr)
+        if len(result.dummy_used) > 10:
+            print(f"  ... and {len(result.dummy_used) - 10} more", file=sys.stderr)
+
     if result.failed:
         failed_path = out.with_suffix(out.suffix + ".failed.csv")
         with open(failed_path, "w", encoding="utf-8", newline="") as f:

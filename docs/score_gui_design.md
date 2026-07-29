@@ -281,6 +281,12 @@ v1のサンプルで type="FBC" なのに `dvtbudget` フィールドが存在�
 | `mean` / `sum` / `min` / `max` + `weight` | **集計時重み**: その軸を潰す直前に、軸の値ごとの重みを値へ**乗じてから**集計する（例: `{"op": "max", "weight": {"WLgroup00": 10.0, ...}}`）。正規化された加重平均**ではない**（mean なら mean(重み×値)）。`weight` は辞書か数値1つ、`weight_ref` で重みセット（WLgroupWeight / weightSets）参照。重みを掛けるタイミングを明示的に制御したい場合（dVtBudget変換の前後で変えたい等）は従来どおり変換ステップ（`__xxx__` + `by`）を使う — 両方が適用可能な場面では結果は同一 |
 | `expr` | 自由記述式 |
 
+**2026-07-29 追記（0.6.0）**: 変換ステップ（`__xxx__`。従来は定数演算 add/sub/mul/div）に
+定数を取らない**単項op**を追加した: `abs` = \|x\|、`log` = ln(max(\|x\|, floor))
+（`floor` 必須 — 0 や負値で発散しない安全な対数。KLD の標準計算
+`np.log(np.maximum(np.fabs(x), 1e-6))` がこの1ステップで書ける）。
+KLD / dVthSGWLD の UI 雛形はこの op 入りの標準計算で生成される（12節）。
+
 **グループ集計は派生軸（groupDefs）で表現する**（`group_reduce` op は廃止。読み込み時に
 移行案内つきエラーになる）。グループ定義は「名前 + 対象軸 + 範囲一覧」で、
 score file の `groupDefs`（設定jsonc の `optimization.WLgroup` は WL に対する定義として
@@ -490,3 +496,46 @@ pytestでの動作確認を優先し、GUI上の「ダミーデータでテス�
   保持する必要はない（3.2節に追記）。
 - ~~engine出力の形式~~ → `Score` + 定義された全ScorePartの値を1行で返す
   （constraintThreshold記載の有無に関わらず全パーツを出力）。
+
+## 12. 2026-07-29: 新計算対象の標準計算と vthSkip ダミー計算（0.6.0）
+
+実フォーマット確定（spec_change ノート10節）を受けた設計判断。
+
+### 12.1 KLD / dVthSGWLD の「一般的な計算」は type 雛形として提供
+
+ユーザー確認済みの標準形（強制ではなく初期値。生成後は普通に編集できる）:
+
+- **KLD**: Board/Chip mean → `__log__`（log(max(|x|, 1e-6))）→ SGWLD sum
+  （集計時重み 0.1。SGWLD 別の重みに変えるのも同じ欄でできる）
+- **dVthSGWLD**: Board/Chip/Block mean → `__abs__` → SGWLD sum
+  （SGSB/SGS/SGD/SGDT を除く8要素の選択つき集計。除外は「これまで変更した
+  ことがない」慣習であり、map にその名前がある場合に限り雛形へ入れる）
+
+エンジンに暗黙の既定は埋め込まない: 標準計算はすべて設定 jsonc に明示され、
+担当者が設定を見れば何が起きるか分かる（雛形=初期値、という従来方針の適用）。
+
+### 12.2 vthSkip: ファイル不在 epoch のダミー計算
+
+実験 config（`optimization.vthSkip` — フロー側の既存項目）に vthSkip がある
+場合、フローは指定 epoch 数まで KLD / dVthSGWLD を測定せず**ファイル自体が
+出力されない**。エンジンの対応:
+
+- **トリガーはファイル不在のみ**（epochs はエンジンでは使わない）。epoch 数の
+  管理はフロー側の仕事のままにし、batch で過去実験を流用するときも「無いもの
+  はダミー」で自動的に正しくなる（今の実験の epochs 値は過去データと無関係）
+- **ダミー値の出所は config の `dummyKLDValue` / `dummyDVthValue`**（フローの
+  既存キーをそのまま読む。スコア設定側に重複して書かせない）。キー名 → type
+  の対応（KLD / dVthSGWLD）はエンジン固定。他 type に必要になったらパーツ単位の
+  汎用フィールドを検討する
+- **ダミー値の意味論は「変換後の値」**: SGWLD 等の軸の全組み合わせ（要素は
+  map → 他 csv の実在値 → 選択リストの順で決定）にダミー値を敷き詰め、
+  変換ステップ（__log__/__abs__ 等）は**スキップ**、集計（選択リスト・集計時
+  重み・sum/mean）は通常どおり適用する。フローの慣習（KLD のダミー 0 は
+  log 適用後の量に対する値）をそのまま受け入れるため。
+  典型: KLD ダミー 0 → 0.0、dVthSGWLD ダミー 1 → 残す8要素の総和 = 8.0
+- **報告**: 単一 epoch 計算は stderr の note、batch は BatchResult.dummy_used
+  （epoch → パーツ名）+ CLI の stderr 報告。「静かに全部ダミーだった」に
+  気づけるようにする（そもそも KLD を測っていない古い実験を batch に食わせた
+  場合も全 epoch ダミーになる — エラーではなく報告で扱う）
+- 制限: relative / dVtBudget パーツのダミー計算は非対応（明示エラー）。
+  UI は変更なし（設計時はファイルがある前提。vthSkip は実行時の機構）

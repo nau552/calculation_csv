@@ -65,13 +65,15 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 | `COMBINED_SEP = "&"` | 複合軸の区切り（`"State&Read_Label"`） |
 | `CUSTOM_TYPE = "custom"` | 自作関数パーツの type 値 |
 | `MULTI_OPS` | value で対象を絞れる集計op（mean/sum/min/max）。UIと共有 |
-| `AggregationSpec` | 1エントリの集計指示。op/value/ref/expr/by + 集計時重み `weight`/`weight_ref`（mean系専用: その軸を潰す直前に値へ乗算。正規化された加重平均ではない）+ `labels` 注記（値→表示名。実行には不使用 — Measure 番号に dataName を残す用）。filter の value はスカラー（等値）またはリスト（is_in）。before検証で旧表記（`*_subset`、`values`、廃止済み `group_reduce`）を変換/エラー化、after検証で opごとの value/weight 形状を検査 |
+| `TRANSFORM_OPS` / `UNARY_OPS` / `STEP_OPS` | 変換ステップの op。TRANSFORM = 定数演算（add/sub/mul/div）、UNARY = 定数を取らない単項関数（abs / log — 0.6.0 で追加）、STEP = 両方の和（UI のステップ op 候補） |
+| `AggregationSpec` | 1エントリの集計指示。op/value/ref/expr/by + 集計時重み `weight`/`weight_ref`（mean系専用: その軸を潰す直前に値へ乗算。正規化された加重平均ではない）+ `labels` 注記（値→表示名。実行には不使用 — Measure 番号に dataName を残す用）+ `floor`（op=log 専用・必須: log(max(\|x\|, floor))）。filter の value はスカラー（等値）またはリスト（is_in）。before検証で旧表記（`*_subset`、`values`、廃止済み `group_reduce`）を変換/エラー化、after検証で opごとの value/weight/floor 形状を検査 |
 | `AxisAggregation` | 上に axis 名が付いたもの（分母事前集計はリストなので軸名を自分で持つ） |
 | `RelativeConfig` | 相対化設定（split_axis / numerator_when / denominator_when / mode / denominator_offset / denominator_pre_aggregation + `labels` 注記）。廃止済み `enabled: false` は明示エラー。分子/分母の None（未設定）は「必ず0行マッチになる設定忘れ」として明示エラー（UIの未入力表示の実体） |
 | `ScorePart` | 1スコアパーツ。name/type/relative/order/aggregations + custom用の function/params。custom と集計フィールドの混在を拒否。複合軸の辞書選択の形状検査。`resolve_selection_refs()` で ref を選択セットの中身に展開して再検証 |
 | `GroupDef` | グループ派生軸の定義（対象軸 + グループ名→[lo, hi]） |
 | `ScoreFile` | ユーザが作る内容一式（score_parts / expression / constraintThreshold / selectionSets / groupDefs）。自己完結でエクスポートされる単位 |
-| `OptimizationConfig` / `RunConfig` | 実行時 config（Generation + optimization{}）。`to_score_file()` で ScoreFile 部分を取り出し、`group_defs()` で旧 WLgroup（WL への定義として互換読み）と groupDefs を統合（groupDefs 優先） |
+| `VthSkipConfig` / `VTHSKIP_TYPE_KEYS` | 実験 config の `optimization.vthSkip`（フロー側の既存項目）: epochs（エンジンは不使用）+ dummyKLDValue / dummyDVthValue。`dummy_values()` が type 名（KLD / dVthSGWLD — 対応表 VTHSKIP_TYPE_KEYS）→ ダミー値の辞書を返す（0.6.0） |
+| `OptimizationConfig` / `RunConfig` | 実行時 config（Generation + optimization{}）。`vthSkip`（上記）も持つ。`to_score_file()` で ScoreFile 部分を取り出し、`group_defs()` で旧 WLgroup（WL への定義として互換読み）と groupDefs を統合（groupDefs 優先） |
 | `DvtBudgetCoefFile` | 係数表（世代→温度→State→{a, b}）のルートモデル |
 
 設計: **検証はすべてここに集約**し、UIも同じモデルで検証する（二重実装しない）。
@@ -90,7 +92,7 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 |---|---|
 | `group_column_expr(axis, ranges)` | グループ派生列を作る polars 式（範囲→グループ名） |
 | `_per_value_operand(lf, axis, mapping, what)` | {軸の値: 定数} を行ごとの定数式へ。辞書に無い値の行は一覧つきエラー（変換の by 重みと集計時重みで共用） |
-| `apply_transform(lf, col, spec)` | 軸を潰さない行単位変換（add/sub/mul/div。`__offset__`/`__weight__` 等の仮想ステップ用） |
+| `apply_transform(lf, col, spec)` | 軸を潰さない行単位変換（`__offset__`/`__weight__` 等の仮想ステップ用）。定数演算（add/sub/mul/div）に加え単項関数 abs = \|x\|、log = ln(max(\|x\|, floor))（0.6.0。KLD の標準計算の形） |
 | `apply_axis_op(lf, col, axis, spec, group_keys)` | 1軸を1つの指示で潰す。filter（スカラー=等値 / リスト=is_in。どちらも軸列を落とし、is_in の残行は後段集計に複製として流れる）/ mean系（value で対象限定可、`weight` で集計直前に重み乗算）/ diff（a−b の自己結合）/ expr（グループごとに評価） |
 | `apply_aggregations(lf, col, order, aggregations)` | order を上から順に適用。**残っている全列をグループキー**にするのが要（グループ派生列が自然にキーとして生き残る仕組み） |
 | `collapse` / `collapse_to_scalar` | 潰し残しの列や null（filterが0行等）を検出してエラーにし、1スカラーを返す |
@@ -152,7 +154,8 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `SharedComputeContext` | 1回の compute_score_file 内でtype単位のcsv読み込みと `__relative__`/`__dvtbudget__` 直後の中間結果を共有するキャッシュ（結果は共有なしと同一。customパーツは対象外）。前絞りが異なるパーツは共有しない（キーに prefilters を含む） |
 | `_apply_axis_step` | 複合軸なら列を `&` で融合してから aggregate に渡す |
 | `compute_score_part(...)` | 1パーツの計算。type=custom は関数呼び出しへ分岐 |
-| `compute_score_file(dir, run_config, ...)` | 全パーツ計算+expression 評価 → `{"Score": ..., パーツ名: ...}` |
+| `_dummy_axis_values(dir, axis, spec)` / `compute_dummy_part(dir, part, dummy_value, ...)` | vthSkip のダミー計算（0.6.0）: type ファイルが無い epoch 用に、軸の全組み合わせ（要素は map → 他 csv の実在値 → 選択リスト → [0] の順で決定）へダミー値を敷き詰め、**変換ステップをスキップ**して集計だけ適用する（ダミー値=「変換後の値」の意味論 — 設計書12節）。relative / dVtBudget パーツは非対応（明示エラー） |
+| `compute_score_file(dir, run_config, ...)` | 全パーツ計算+expression 評価 → `{"Score": ..., パーツ名: ...}`。`optimization.vthSkip` があり type ファイルが無いパーツは compute_dummy_part で計算し stderr に note を出す |
 | `main()` | argparse。`--config --data-dir --dvtbudget-coef --initial-temperature --custom-parts --version`。stdout は結果JSONのみ（版は stderr） |
 
 ---
@@ -174,7 +177,8 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 |---|---|
 | `default_axis_order(catalog)` | 雛形の軸順（Measure→Label→Override→カテゴリ→数値→Board/Chip/Block。InBatchEpoch と DataName は除外 — DataName は Measure の表示名の扱い） |
 | `default_aggregation(axis, cands)` | カテゴリ/bool軸は先頭候補の filter、数値軸は mean。Measure は識別子軸なので filter（平均しない。候補が無い設定のみ編集では value 未入力の filter とし、入力まで検証エラーで促す） |
-| `part_skeleton(name, type, catalog)` | **そのまま計算が通る**雛形（全軸+デフォルトop）。相対化プリセットは無し（旧 Read_Override 自動ONは廃止）。Measure 軸のある type では Label/Override 軸も除外（Measure が一意に決める測定メタデータで、Measure 分割のペア結合を壊すため — docs/spec_change_dataname_measure.md 4節） |
+| `part_skeleton(name, type, catalog)` | **そのまま計算が通る**雛形（全軸+デフォルトop）。相対化プリセットは無し（旧 Read_Override 自動ONは廃止）。Measure 軸のある type では Label/Override 軸も除外（Measure が一意に決める測定メタデータで、Measure 分割のペア結合を壊すため — docs/spec_change_dataname_measure.md 4節）。KLD / dVthSGWLD は `_typed_skeleton` に委譲 |
+| `_typed_skeleton(name, type, catalog)` / `_DVTH_EXCLUDED_SGWLD` | type 別の標準計算入り雛形（0.6.0 — 2026-07-29 ユーザー確認の「一般的な計算」。初期値であって強制ではない）: KLD = Board/Chip mean → log(床1e-6) → SGWLD sum（集計時重み 0.1）、dVthSGWLD = Board/Chip/Block mean → abs → SGWLD sum（SGSB/SGS/SGD/SGDT を除く選択）。SGWLD 軸が無ければ None（汎用雛形へフォールバック）。重みを集計時重みで持つのは vthSkip のダミー計算でも掛かるようにするため |
 | `custom_part_skeleton(name, functions)` | custom パーツの雛形（先頭の関数+空params） |
 | `switch_part_type(part, new_type)` | type変更時の不整合フィールド除去（custom⇔通常、dVtBudget離脱時の `__dvtbudget__` 除去） |
 | `duplicate_part(sf, i)` | 深いコピー+新しい名前。**`_uid` は必ず新規**（共有するとウィジェット状態が2パーツで混線する） |
@@ -209,6 +213,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 |---|---|
 | `validate_score_file(data)` | エンジンの model_validate + 名前重複 + expression の参照チェック + 宙に浮いた constraint キー + ref 解決の再検証。**pydantic の位置表記をパーツ名に変換**（`_format_pydantic_error`） |
 | `validate_part(part)` | 単一パーツ用の包み |
+| `part_types_without_data(sf, ctx)` | データに測定ファイルの無い type を使うパーツの検出（0.6.0）。別実験の config を読むと起きる正当な状態なのでパーツは残し、一覧の ⚠（「データ無し」）と編集画面の警告に使う。custom は対象外・設定のみ編集モードでは常に空 |
 
 **コンテキスト（画面1）**
 | 関数 | 内容 |
@@ -245,7 +250,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `parse_scalar(text)` | 自由入力 → bool/int/float/str |
 | `measure_format(mlabels)` / `_axis_format` | Measure 値の複合表示「dataName (Measure N)」（名無しは「Measure N」）。選択・保存は常に番号 |
 | `value_widget` / `dict_selection_row` / `selection_widget` / `selection_list_widget` | 値1個 / 複合軸1行 / どちらか自動 / 可変行リスト（単一軸+候補ありは multiselect）。Measure 軸は複合表示 |
-| `agg_editor(entry, spec, catalog, set_names, key, ..., measure_labels)` | 集計指示エディタ。**opに応じた入力欄だけを出す**（value/values の混同がUI上起きない）。filter は候補のある単一軸で multiselect（複数=is_in、Measure 選択時は labels 注記も付与）。op変更時は古いフィールドを掃除。mean系の単一軸エントリには集計時重み欄（`_agg_weight_editor`: なし/重みセット/値ごと/定数。値ラベルは by_value_labels 優先=グループ派生軸対応） |
+| `agg_editor(entry, spec, catalog, set_names, key, ..., measure_labels)` | 集計指示エディタ。**opに応じた入力欄だけを出す**（value/values の混同がUI上起きない）。filter は候補のある単一軸で multiselect（複数=is_in、Measure 選択時は labels 注記も付与）。op変更時は古いフィールドを掃除。mean系の単一軸エントリには集計時重み欄（`_agg_weight_editor`: なし/重みセット/値ごと/定数。値ラベルは by_value_labels 優先=グループ派生軸対応）。仮想ステップの op は STEP_OPS: 定数演算は `_transform_editor`、単項op（abs/log — 0.6.0）は定数欄なし・log のみ floor 入力 |
 | `relative_editor(part, catalog, set_names, key, measure_labels)` | 相対化ブロックのエディタ。split軸は**任意の軸**から選択（旧 Override 限定は廃止）、分子/分母は候補プルダウン or 自由入力、Measure 分割時は labels 注記を自動付与。ON/OFF/split変更は state.py の整合関数を呼ぶ。分母事前集計は agg_editor をフル再利用 |
 
 ### `ui/app.py` — 5画面本体（ウィジェット配置と session_state だけ）
@@ -285,7 +290,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 |---|---|
 | `StagedEpoch` | 計算可能になった 1 epoch（data_dir / created_dir=削除対象 / error=skip理由） |
 | `stage_epoch(ref, staging_root)` | tar.gz/zip があればビューdir（展開+リンク）を作成。csv/csv.gz のみなら元dirをそのまま使う。例外は error に落とす |
-| `validate_epoch(staged, types, needs_dvt)` | config が参照する type のファイル存在チェック（固定リストではなく config 駆動） |
+| `validate_epoch(staged, types, needs_dvt)` | config が参照する type のファイル存在チェック（固定リストではなく config 駆動）。vthSkip でダミー値を持つ type は runner が必須対象から外す（無くても計算できるため — 0.6.0） |
 | `cleanup_epoch(staged)` | 自分が作ったビューdirだけ削除（入力元は絶対に触らない） |
 
 安全対策: アーカイブ内の絶対パス・`..` エントリは拒否。ディレクトリごと固めた
@@ -295,9 +300,9 @@ tar は展開後に1段持ち上げる（flatten）。symlink 不可の環境は
 | 名前 | 内容 |
 |---|---|
 | `EPOCH_COL` | 識別軸の予約名 `"Epoch"`。設計内の軸・グループ定義と衝突したらエラー |
-| `BatchComputeContext` | SharedComputeContext のバッチ版: type ごとに全 epoch を resolve → `Epoch` 列付与 → lazy concat → streaming collect。prefix_cache は親のまま共有 |
-| `compute_score_batch(epochs, config, coef)` | 1バッチ一括計算 → `BatchResult`。パーツごとに `compute_score_part(..., identity_axes=("Epoch",))`、custom は epoch ループ、expression は epoch ごとに評価 |
-| `BatchResult` | scores（Epoch/History/EpochNo/Score/全パーツの DataFrame）+ failed（{Epoch: 理由}） |
+| `BatchComputeContext` | SharedComputeContext のバッチ版: type ごとに全 epoch を resolve → `Epoch` 列付与 → lazy concat → streaming collect。prefix_cache は親のまま共有。type ファイルの無い epoch は結合対象外（vthSkip 中の epoch は compute_score_batch がダミー値で埋める — 0.6.0） |
+| `compute_score_batch(epochs, config, coef)` | 1バッチ一括計算 → `BatchResult`。パーツごとに `compute_score_part(..., identity_axes=("Epoch",))`、custom は epoch ループ、expression は epoch ごとに評価。type ファイルの無い epoch は vthSkip のダミー値（compute_dummy_part を1回計算して使い回し）で埋めて dummy_used に記録、ダミー値が無ければ failed へ |
+| `BatchResult` | scores（Epoch/History/EpochNo/Score/全パーツの DataFrame）+ failed（{Epoch: 理由}）+ dummy_used（vthSkip ダミーで計算した {Epoch: パーツ名リスト} — 0.6.0） |
 
 エラー処理: バッチ一括計算が失敗したら epoch 逐次計算（compute_score_file）に
 自動フォールバックして原因 epoch を特定・除外し、正常 epoch の値を救う。
@@ -316,7 +321,8 @@ filter 空振りで行ごと消えた epoch は「パーツごとに全 epoch �
 ### `scorelib_param/batch/__main__.py` — CLI
 `python -m scorelib_param.batch --config ... --history ... --out scores.csv`。
 `--history` は繰り返し可・`label=path` 形式可。除外 epoch は stderr と
-`<out>.failed.csv` に理由つきで出力。`--max-threads N` で計算スレッド数を
+`<out>.failed.csv` に理由つきで出力。vthSkip のダミー値で計算した epoch も
+stderr に note で報告（0.6.0）。`--max-threads N` で計算スレッド数を
 制限できる（POLARS_MAX_THREADS を polars の初回 import **前**に設定する
 必要があるため、`batch/__init__.py` は PEP 562 の遅延インポートにし、
 `__main__` は引数処理後に runner を import する構造。バッチサイズが

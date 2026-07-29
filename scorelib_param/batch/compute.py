@@ -26,6 +26,7 @@ from ..cli import (
     SharedComputeContext,
     _named_axes,
     _source_type,
+    compute_dummy_part,
     compute_score_file,
     compute_score_part,
     resolve_group_defs,
@@ -47,10 +48,13 @@ class BatchResult:
     scores: 1 epoch = 1 行。列は Epoch / History / EpochNo / Score /
             全スコアパーツ（定義順）— docs/batch_design.md 7節の表。
     failed: 除外された epoch → 理由（skip-and-report の報告部分）
+    dummy_used: vthSkip のダミー値で計算した epoch → パーツ名リスト
+            （「静かに全部ダミーだった」に気づけるようにする報告）
     """
 
     scores: pl.DataFrame
     failed: Dict[str, str] = field(default_factory=dict)
+    dummy_used: Dict[str, List[str]] = field(default_factory=dict)
 
 
 class BatchComputeContext(SharedComputeContext):
@@ -65,12 +69,17 @@ class BatchComputeContext(SharedComputeContext):
     def resolved(self, source_type: str):
         if source_type not in self._resolved:
             axes = self._union_axes[source_type]
+            # type ファイルの無い epoch は結合対象外（vthSkip 中の epoch は
+            # 呼び出し側=compute_score_batch がダミー値で埋める）
             frames = [
                 axis_resolve.resolve_axes(se.data_dir, source_type, axes).with_columns(
                     pl.lit(se.ref.epoch_id).alias(EPOCH_COL)
                 )
                 for se in self._epochs
+                if axis_resolve.data_file(se.data_dir, f"{source_type}.csv").exists()
             ]
+            if not frames:
+                raise ValueError(f"no epoch in this batch has {source_type}.csv")
             # epoch間で dtype 推論が割れる可能性に備え relaxed。collect は
             # streaming エンジンでピークメモリを抑える（結果は等価）
             lf = pl.concat(frames, how="vertical_relaxed")
@@ -212,6 +221,11 @@ def compute_score_batch(
     ctx = BatchComputeContext(epochs, score_file.score_parts, group_defs)
     epoch_ids = [se.ref.epoch_id for se in epochs]
 
+    # vthSkip: type ファイルの無い epoch はダミー値で埋める（cli.compute_dummy_part）
+    vth = run_config.optimization.vthSkip
+    dummy_values = vth.dummy_values() if vth else {}
+    dummy_used: Dict[str, List[str]] = {}
+
     # パーツごとに {epoch_id: 値} を集める
     part_values: Dict[str, Dict[str, float]] = {}
     try:
@@ -238,22 +252,49 @@ def compute_score_batch(
                 part_values[part.name] = values
                 continue
 
-            df = compute_score_part(
-                epochs[0].data_dir,  # shared_ctx 使用時は参照されない
-                part,
-                group_defs=group_defs,
-                generation=run_config.Generation,
-                dvtbudget_coef=dvtbudget_coef,
-                board_temperatures=per_epoch_temps if part.type == "dVtBudget" else None,
-                shared_ctx=ctx,
-                selection_sets=score_file.selectionSets,
-                weight_sets=score_file.weightSets,
-                identity_axes=(EPOCH_COL,),
-            )
-            value_col = _source_type(part)  # collapse 後の列は {EPOCH_COL, 値列} のみ
-            part_values[part.name] = dict(
-                zip(df[EPOCH_COL].to_list(), (float(v) for v in df[value_col].to_list()))
-            )
+            st = _source_type(part)
+            missing = [
+                se for se in epochs
+                if not axis_resolve.data_file(se.data_dir, f"{st}.csv").exists()
+            ]
+            values_map: Dict[str, float] = {}
+            if len(missing) < len(epochs):
+                df = compute_score_part(
+                    epochs[0].data_dir,  # shared_ctx 使用時は参照されない
+                    part,
+                    group_defs=group_defs,
+                    generation=run_config.Generation,
+                    dvtbudget_coef=dvtbudget_coef,
+                    board_temperatures=per_epoch_temps if part.type == "dVtBudget" else None,
+                    shared_ctx=ctx,
+                    selection_sets=score_file.selectionSets,
+                    weight_sets=score_file.weightSets,
+                    identity_axes=(EPOCH_COL,),
+                )
+                value_col = st  # collapse 後の列は {EPOCH_COL, 値列} のみ
+                values_map = dict(
+                    zip(df[EPOCH_COL].to_list(), (float(v) for v in df[value_col].to_list()))
+                )
+            if missing:
+                if st in dummy_values:
+                    # ダミー値はパーツと設定だけで決まり全 epoch で同一 —
+                    # 1回計算して使い回す（map は欠けた epoch 側から読む）
+                    dummy_val = compute_dummy_part(
+                        missing[0].data_dir, part, dummy_values[st],
+                        group_defs=group_defs,
+                        selection_sets=score_file.selectionSets,
+                        weight_sets=score_file.weightSets,
+                    )
+                    for se in missing:
+                        values_map[se.ref.epoch_id] = dummy_val
+                        dummy_used.setdefault(se.ref.epoch_id, []).append(part.name)
+                else:
+                    for se in missing:
+                        failed.setdefault(
+                            se.ref.epoch_id,
+                            f"{st}.csv not found (no vthSkip dummy value configured)",
+                        )
+            part_values[part.name] = values_map
     except Exception as err:  # noqa: BLE001 — バッチ全体エラー → epoch 逐次で切り分け
         fb = _per_epoch_fallback(
             epochs, run_config, dvtbudget_coef, custom_parts_path, err,
@@ -288,4 +329,6 @@ def compute_score_batch(
                 continue
         rows.append({**_epoch_row(se), "Score": score, **values})
 
-    return BatchResult(_result_frame(rows, part_names), failed)
+    # failed になった epoch の dummy_used は報告しない（値が結果に乗らないため）
+    dummy_used = {e: parts for e, parts in dummy_used.items() if e not in failed}
+    return BatchResult(_result_frame(rows, part_names), failed, dummy_used)

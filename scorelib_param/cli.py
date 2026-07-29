@@ -239,6 +239,76 @@ def _source_type(score_part: ScorePart) -> str:
     return "FBC" if score_part.type == "dVtBudget" else score_part.type
 
 
+def _dummy_axis_values(data_dir: str | Path, axis: str, spec) -> list:
+    """ダミー合成フレーム（compute_dummy_part）での軸の要素一覧。
+    map ファイル → 同じ epoch の他の測定csvの実在値 → 集計指示の選択リスト →
+    [0] の順で決める。sum の結果は要素数に依存するため、map のある軸
+    （SGWLD 等）は実物と同じ要素数になる。"""
+    data_dir = Path(data_dir)
+    map_path = axis_resolve._map_file_for_axis(data_dir, axis)
+    if map_path is not None:
+        m = pl.read_csv(map_path, has_header=False, new_columns=["code", "text"])
+        return m["text"].to_list()
+    from .introspect import detect_types
+
+    for type_ in detect_types(data_dir):
+        f = axis_resolve.data_file(data_dir, f"{type_}.csv")
+        if not f.exists():
+            continue
+        try:
+            lf = pl.scan_csv(f)
+            if axis in lf.collect_schema().names():
+                return lf.select(pl.col(axis).unique().sort()).collect()[axis].to_list()
+        except Exception:  # noqa: BLE001 — 読めない csv は情報源にしないだけ
+            continue
+    if spec is not None and isinstance(spec.value, list) and spec.value:
+        return list(spec.value)
+    return [0]
+
+
+def compute_dummy_part(
+    data_dir: str | Path,
+    score_part: ScorePart,
+    dummy_value: float,
+    group_defs: Optional[Dict[str, GroupDef]] = None,
+    selection_sets: Optional[Dict[str, list]] = None,
+    weight_sets: Optional[Dict[str, object]] = None,
+) -> float:
+    """type ファイルが無い epoch のダミー計算（vthSkip — models.VthSkipConfig）。
+
+    設定に書かれたダミー値を「**変換後の値**」として軸の全組み合わせに敷き詰め、
+    変換ステップ（__xxx__: log/abs/重み乗算など）は**スキップ**し、集計
+    （選択リスト・集計時重み・sum/mean 等）だけを通常どおり適用する。
+    フローの vthSkip 慣習（例: KLD のダミー 0 は log 適用後の量に対する値）を
+    そのまま受け入れるための意味論（docs/score_gui_design.md 参照）。
+    """
+    score_part = score_part.resolve_selection_refs(selection_sets or {}, weight_sets or {})
+    if score_part.relative is not None or score_part.type == "dVtBudget":
+        raise ValueError(
+            f"part '{score_part.name}': dummy computation (vthSkip) supports plain "
+            "aggregation parts only — not relative or dVtBudget"
+        )
+    source_type = _source_type(score_part)
+    axes = sorted(_required_axes(score_part, group_defs))
+    axis_values = {
+        a: _dummy_axis_values(data_dir, a, score_part.aggregations.get(a)) for a in axes
+    }
+
+    import itertools
+
+    rows = list(itertools.product(*axis_values.values())) if axes else [()]
+    data: Dict[str, list] = {a: [r[i] for r in rows] for i, a in enumerate(axis_values)}
+    data[source_type] = [float(dummy_value)] * len(rows)
+    lf = pl.LazyFrame(data)
+
+    lf = _with_group_columns(lf, score_part, group_defs)
+    for step in _effective_order(score_part):
+        if _is_virtual(step):
+            continue  # ダミー値は「変換後の値」— 変換ステップは適用しない
+        lf = _apply_axis_step(lf, source_type, step, score_part)
+    return collapse_to_scalar(lf, source_type)
+
+
 # {Generation}.json（世代ごとのチップ情報）のキー → 軸名。Physical 記法の
 # グループ定義を Logical へ読み替えるときの軸総数 N の出所
 _GENERATION_AXIS_KEYS = {"WL": "numWLs", "STR": "numStrings"}
@@ -588,9 +658,32 @@ def compute_score_file(
                 file=sys.stderr,
             )
 
+    # vthSkip（測定フロー側の設定）: 指定 type のファイルが無い epoch は
+    # ダミー値で計算する（models.VthSkipConfig / compute_dummy_part）
+    vth = run_config.optimization.vthSkip
+    dummy_values = vth.dummy_values() if vth else {}
+
     shared_ctx = SharedComputeContext(data_dir, score_file.score_parts, group_defs)
     values: Dict[str, float] = {}
     for score_part in score_file.score_parts:
+        st = _source_type(score_part)
+        if (
+            score_part.type != CUSTOM_TYPE
+            and st in dummy_values
+            and not axis_resolve.data_file(Path(data_dir), f"{st}.csv").exists()
+        ):
+            values[score_part.name] = compute_dummy_part(
+                data_dir, score_part, dummy_values[st],
+                group_defs=group_defs,
+                selection_sets=score_file.selectionSets,
+                weight_sets=score_file.weightSets,
+            )
+            print(
+                f"note: part '{score_part.name}' computed with vthSkip dummy value "
+                f"{dummy_values[st]} ({st}.csv not found in {data_dir})",
+                file=sys.stderr,
+            )
+            continue
         values[score_part.name] = compute_score_part(
             data_dir,
             score_part,

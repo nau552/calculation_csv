@@ -10,6 +10,12 @@
 
         "score_function": "gui_score",
 
+        "vthSkip": {
+            "epochs": 100,
+            "dummyKLDValue": 0,
+            "dummyDVthValue": 1
+        },
+
         "constraintThreshold": {
             "dVtBudget_A2B": {"value": 10, "active": "True", "type": "percentile", "coef": 20}
         },

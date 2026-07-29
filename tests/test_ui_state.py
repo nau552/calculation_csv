@@ -61,6 +61,38 @@ def test_skeleton_computes_as_is(data_dir_mini, catalog):
     assert isinstance(value, float)
 
 
+def test_kld_skeleton_standard_computation(data_dir_mini):
+    """KLD の type 別雛形: Board/Chip mean → log(床 1e-6) → 0.1 重みの SGWLD 総和。
+    そのまま計算が通る。"""
+    part = state.part_skeleton("p", "KLD", axis_catalog(data_dir_mini, "KLD"))
+    assert part["order"] == ["Board", "Chip", "__log__", "SGWLD"]
+    assert part["aggregations"]["__log__"] == {"op": "log", "floor": 1e-6}
+    assert part["aggregations"]["SGWLD"] == {"op": "sum", "weight": 0.1}
+    value = compute_score_part(data_dir_mini, ScorePart.model_validate(part))
+    assert isinstance(value, float)
+
+
+def test_dvth_skeleton_excludes_sg_elements(data_dir_mini):
+    """dVthSGWLD の type 別雛形: mean → abs → SG系4要素を除く8要素の総和。"""
+    catalog = axis_catalog(data_dir_mini, "dVthSGWLD")
+    part = state.part_skeleton("p", "dVthSGWLD", catalog)
+    assert part["order"] == ["Board", "Chip", "Block", "__abs__", "SGWLD"]
+    assert part["aggregations"]["__abs__"] == {"op": "abs"}
+    sgwld = part["aggregations"]["SGWLD"]
+    assert sgwld["op"] == "sum"
+    assert set(sgwld["value"]) == set(catalog["SGWLD"]) - {"SGSB", "SGS", "SGD", "SGDT"}
+    assert len(sgwld["value"]) == 8
+    value = compute_score_part(data_dir_mini, ScorePart.model_validate(part))
+    assert isinstance(value, float)
+
+
+def test_typed_skeleton_falls_back_without_sgwld():
+    """SGWLD 軸が無いデータでは KLD でも汎用雛形にフォールバックする。"""
+    part = state.part_skeleton("p", "KLD", {"Board": [0, 1], "Chip": [0, 1]})
+    assert part["order"] == ["Board", "Chip"]
+    assert "__log__" not in part["aggregations"]
+
+
 def test_default_split_axis_priority(catalog):
     """既定 split 軸: Measure > Param > Read_Override > 他の Override > 先頭の軸。"""
     assert state.default_split_axis(catalog) == "Measure"
@@ -542,6 +574,29 @@ def test_build_context(data_dir_mini):
     assert "Page" in ctx["catalogs"]["tR"]
     assert ctx["has_initial_temperature"] is True
     assert ctx["config_path"] is None
+
+
+def test_part_types_without_data(data_dir_mini):
+    """別実験の config 由来でデータに無い type のパーツを検出する（custom は対象外）。"""
+    ctx = state.build_context(str(data_dir_mini))
+    sf = state.empty_score_file()
+    sf["score_parts"] = [
+        {"_uid": "a", "name": "p1", "type": "FBC", "order": [], "aggregations": {}},
+        {"_uid": "b", "name": "p2", "type": "GONE", "order": [], "aggregations": {}},
+        {"_uid": "c", "name": "p3", "type": "custom", "function": "f", "params": {}},
+    ]
+    assert state.part_types_without_data(sf, ctx) == {"b"}
+
+
+def test_part_types_without_data_config_only_never_flags():
+    """設定のみ編集モードはカタログが設定自身から導出されるため警告しない。"""
+    sf = state.empty_score_file()
+    sf["score_parts"] = [
+        {"_uid": "a", "name": "p", "type": "tR",
+         "order": ["WL"], "aggregations": {"WL": {"op": "mean"}}},
+    ]
+    ctx = state.config_only_context(sf)
+    assert state.part_types_without_data(sf, ctx) == set()
 
 
 def test_build_context_missing_dir():

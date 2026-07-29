@@ -305,3 +305,49 @@ def test_resolved_groups_reverses_ranges():
     assert gd.resolved_groups(6) == {"a": (3, 5), "b": (0, 2)}
     with pytest.raises(ValueError, match="axis count"):
         gd.resolved_groups(None)
+
+
+# ------------------------------------------------ 単項変換op（abs / log）
+
+def test_unary_abs_step(data_dir_mini):
+    """__abs__ = |x| を行単位で適用（0.6.0 で追加）。"""
+    base = compute_score_part(data_dir_mini, _mean_part(
+        extra_order=["__neg__"], extra_aggs={"__neg__": {"op": "mul", "value": -1}}))
+    part = _mean_part(
+        extra_order=["__neg__", "__abs__"],
+        extra_aggs={"__neg__": {"op": "mul", "value": -1}, "__abs__": {"op": "abs"}},
+    )
+    assert compute_score_part(data_dir_mini, part) == pytest.approx(abs(base))
+
+
+def test_unary_log_matches_manual(data_dir_mini):
+    """KLD の標準計算の形: Board/Chip 平均 → log(max(|x|, 1e-6)) → 重み 0.1 ×
+    SGWLD 総和 が、polars で手組みした同じ計算と一致する。"""
+    import math
+
+    part = ScorePart.model_validate({
+        "name": "kld", "type": "KLD",
+        "order": ["Board", "Chip", "__log__", "SGWLD"],
+        "aggregations": {
+            "Board": {"op": "mean"}, "Chip": {"op": "mean"},
+            "__log__": {"op": "log", "floor": 1e-6},
+            "SGWLD": {"op": "sum", "weight": 0.1},
+        },
+    })
+    actual = compute_score_part(data_dir_mini, part)
+    df = pl.read_csv(data_dir_mini / "KLD.csv")
+    # mini は Board×Chip×SGWLD の全組み合わせなので逐次 mean = SGWLD ごとの単純 mean
+    per_sgwld = df.group_by("SGWLD").agg(pl.col("KLD").mean())["KLD"].to_list()
+    expected = sum(0.1 * math.log(max(abs(v), 1e-6)) for v in per_sgwld)
+    assert actual == pytest.approx(expected)
+
+
+def test_unary_op_validation():
+    with pytest.raises(ValidationError, match="floor"):
+        AggregationSpec(op="log")  # floor 必須
+    with pytest.raises(ValidationError, match="floor"):
+        AggregationSpec(op="log", floor=-1.0)  # 正の値のみ
+    with pytest.raises(ValidationError, match="value"):
+        AggregationSpec(op="abs", value=1)  # 定数は取らない
+    with pytest.raises(ValidationError, match="floor"):
+        AggregationSpec(op="mul", value=2, floor=1e-6)  # floor は log 専用

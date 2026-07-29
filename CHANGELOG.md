@@ -12,6 +12,35 @@
 開発の時系列記録は `docs/score_gui_progress.md`、設計判断は各設計書。
 リリース手順（README）の一部としてここに追記する。
 
+## ver.0.6.0 — 2026-07-29
+
+KLD / dVthSGWLD の標準計算（log・絶対値・要素選択つき総和）と、vthSkip
+（測定されない epoch のダミー値計算）への対応。**設定 jsonc の語彙が増える**
+（真ん中の数字を上げる条件）: `abs` / `log`（+`floor`）op と
+`optimization.vthSkip` の解釈が旧エンジンには無い。
+
+- **変換ステップに単項op `abs` / `log` を追加**: `abs` = \|x\|、
+  `log` = ln(max(\|x\|, floor))（`floor` 必須 — 0 や負値で発散しない安全な対数。
+  KLD の標準計算 `np.log(np.maximum(np.fabs(x), 1e-6))` が1ステップで書ける）
+- **vthSkip（実験 config の既存項目 `optimization.vthSkip`）をエンジンが解釈**:
+  スコアパーツの type ファイル（KLD.csv / dVthSGWLD.csv）が無い epoch は、
+  `dummyKLDValue` / `dummyDVthValue` を「変換後の値」として敷き詰めて計算する
+  （変換ステップはスキップ・集計は通常どおり。例: KLD 0 → 0.0、
+  dVthSGWLD 1 → 残す8要素の総和 8.0）。`epochs` は使わない（ファイル不在が
+  トリガー — batch で過去データを流用しても正しく働く）。単一 epoch 計算は
+  stderr note、batch は `BatchResult.dummy_used` + stderr で使用を報告。
+  ダミー値の設定が無い場合は従来どおり（skip-and-report / strict エラー）
+- **UI: KLD / dVthSGWLD の type 別雛形**: パーツ追加・雛形再生成で標準計算
+  （KLD = Board/Chip mean → log → 0.1 重みの SGWLD 総和、dVthSGWLD =
+  Board/Chip/Block mean → abs → SG系4要素を除く8要素の総和）が入った状態で
+  生成される（初期値であって強制ではない）。変換ステップのエディタに
+  abs / log（floor 入力）を追加
+- **UI: データに無い type のパーツに警告表示**: 別実験の config を読むと今の
+  データに無い type（例: tR）のパーツが残る — これは意図した設計（取捨選択は
+  ユーザーが行う）のまま、一覧に「⚠ データ無し」、編集画面に警告文を出して
+  テスト計算前に気づけるようにした
+- sample.jsonc に vthSkip の注釈つき見本を追加
+
 ## ver.0.5.3 — 2026-07-29
 
 新計算対象（KLD / dVthSGWLD / PROGLOOP / PROGSTATUS / tPROG）の実フォーマット

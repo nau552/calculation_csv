@@ -11,7 +11,7 @@ from typing import Dict, Mapping, Sequence, Tuple
 import polars as pl
 
 from .expression import evaluate_expression
-from .models import TRANSFORM_OPS, AggregationSpec
+from .models import TRANSFORM_OPS, UNARY_OPS, AggregationSpec
 
 _SIMPLE_OPS = {"mean", "sum", "min", "max"}
 
@@ -73,7 +73,19 @@ def apply_transform(lf: pl.LazyFrame, value_col: str, spec: AggregationSpec) -> 
     `spec.by` が指定され value が辞書のときは「by 軸の値ごとの定数」:
     各行の by 列の値に対応する定数で演算する（例: WLgroup 別の重み）。
     辞書に無い値の行が存在したらエラー（重み定義の古さの検出）。
+
+    単項op（UNARY_OPS）は定数を取らない行単位の関数:
+    abs = |x|、log = ln(max(|x|, floor))（floor は必須・モデル検証済み）。
     """
+    if spec.op in UNARY_OPS:
+        col = pl.col(value_col)
+        if spec.op == "abs":
+            return lf.with_columns(col.abs().alias(value_col))
+        # log: 0 や負値で発散しない安全な対数（KLD の標準計算の形）
+        return lf.with_columns(
+            col.abs().clip(lower_bound=spec.floor).log().alias(value_col)
+        )
+
     if spec.value is None:
         raise ValueError(f"transform op '{spec.op}' requires 'value'")
 

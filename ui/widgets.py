@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
-from scorelib_param.models import COMBINED_SEP, MULTI_OPS, TRANSFORM_OPS
+from scorelib_param.models import COMBINED_SEP, MULTI_OPS, STEP_OPS, TRANSFORM_OPS, UNARY_OPS
 
 # ドラッグ&ドロップ並べ替えはソフト依存: コミュニティ製カスタムコンポーネント
 # （streamlit-sortables）は Streamlit 本体のメジャー更新で壊れうる。
@@ -163,7 +163,10 @@ def _ref_widget(spec: Dict[str, Any], set_names: List[str], key: str) -> None:
     spec["ref"] = st.selectbox("選択セット", set_names, index=index, key=f"{key}_ref")
 
 
-_TRANSFORM_LABELS = {"add": "add（足す）", "sub": "sub（引く）", "mul": "mul（掛ける）", "div": "div（割る）"}
+_TRANSFORM_LABELS = {
+    "add": "add（足す）", "sub": "sub（引く）", "mul": "mul（掛ける）", "div": "div（割る）",
+    "abs": "abs（絶対値）", "log": "log（対数）",
+}
 
 
 def _transform_editor(
@@ -334,7 +337,7 @@ def agg_editor(
     axes = entry.split(COMBINED_SEP)
     is_virtual = entry.startswith("__")
 
-    ops = list(TRANSFORM_OPS) if is_virtual else AXIS_OPS
+    ops = list(STEP_OPS) if is_virtual else AXIS_OPS
     cur_op = spec.get("op") if spec.get("op") in ops else ops[0]
     op = st.selectbox(
         "op", ops, index=ops.index(cur_op), key=f"{key}_op",
@@ -351,6 +354,21 @@ def agg_editor(
                 spec["axis"] = axis_field
         spec["op"] = op
     spec["op"] = op
+
+    if op in UNARY_OPS:
+        # 定数を取らない行単位の関数。log は床（floor）だけを入力する
+        for k in ("value", "by", "ref"):
+            spec.pop(k, None)
+        if op == "log":
+            v = spec.get("floor")
+            spec["floor"] = st.number_input(
+                "floor", value=float(v) if isinstance(v, (int, float)) else 1e-6,
+                format="%.1e", key=f"{key}_floor",
+                help="log(max(|x|, floor)) を計算します。0 や負の値でも発散しないための床です",
+            )
+        else:
+            spec.pop("floor", None)
+        return
 
     if op in TRANSFORM_OPS:
         _transform_editor(

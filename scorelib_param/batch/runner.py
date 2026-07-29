@@ -172,7 +172,13 @@ class BatchRunner:
         from ..cli import _source_type
 
         parts = run_config.optimization.score_parts
-        self._required_types = sorted({_source_type(p) for p in parts if p.type != "custom"})
+        # vthSkip でダミー値が設定された type はファイルが無くても計算できる
+        # （compute.py が epoch ごとに埋める）ため、事前検証の必須対象から外す
+        vth = run_config.optimization.vthSkip
+        dummy_types = set(vth.dummy_values()) if vth else set()
+        self._required_types = sorted(
+            {_source_type(p) for p in parts if p.type != "custom"} - dummy_types
+        )
         self._needs_dvt = any(p.type == "dVtBudget" for p in parts)
         self._part_names = [p.name for p in parts]
 
@@ -285,9 +291,11 @@ class BatchRunner:
         """全バッチを実行して結果を1つに結合する。全滅時はエラー。"""
         frames: List[pl.DataFrame] = []
         failed: dict = {}
+        dummy_used: dict = {}
         for batch in self.run_iter():
             frames.append(batch.scores)
             failed.update(batch.failed)
+            dummy_used.update(batch.dummy_used)
         scores = (
             pl.concat(frames, how="vertical").sort(["History", "EpochNo"])
             if frames
@@ -298,4 +306,4 @@ class BatchRunner:
                 f"all {len(failed)} epochs failed — nothing to return. "
                 f"first failure: {next(iter(failed.items()))}"
             )
-        return BatchResult(scores, failed)
+        return BatchResult(scores, failed, dummy_used)

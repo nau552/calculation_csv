@@ -123,17 +123,59 @@ def default_aggregation(axis: str, candidates: Optional[list]) -> Dict[str, Any]
     return {"op": "mean"}
 
 
+# dVthSGWLD の標準計算で総和から省く SGWLD 要素（2026-07-29 ユーザー確認:
+# 「これまで変更したことがない」慣習。map にある場合のみ除外し、雛形の初期値
+# なのでユーザは普通の編集で変更できる）
+_DVTH_EXCLUDED_SGWLD = ("SGSB", "SGS", "SGD", "SGDT")
+
+
+def _typed_skeleton(name: str, type_: str, catalog: Dict[str, Optional[list]]) -> Optional[Dict[str, Any]]:
+    """KLD / dVthSGWLD の「一般的な計算」が入った type 別雛形
+    （2026-07-29 ユーザー確認 — docs/score_gui_design.md）。強制ではなく
+    初期値: 生成後は普通のパーツとして編集できる。前提の SGWLD 軸が
+    catalog に無ければ None（汎用雛形にフォールバック）。
+
+    - KLD: Board/Chip mean → log(max(|x|, 1e-6)) → SGWLD sum（重み 0.1）
+    - dVthSGWLD: Board/Chip/Block mean → abs → SGWLD sum（SG系4要素を除く選択）
+    重みは集計時重みで持つ（変換ステップと違い vthSkip のダミー計算でも掛かる）。
+    """
+    if type_ not in ("KLD", "dVthSGWLD") or not catalog.get("SGWLD"):
+        return None
+    if type_ == "KLD":
+        mean_axes = [a for a in ("Board", "Chip") if a in catalog]
+        order = mean_axes + ["__log__", "SGWLD"]
+        aggregations: Dict[str, Any] = {a: {"op": "mean"} for a in mean_axes}
+        aggregations["__log__"] = {"op": "log", "floor": 1e-6}
+        aggregations["SGWLD"] = {"op": "sum", "weight": 0.1}
+    else:
+        mean_axes = [a for a in ("Board", "Chip", "Block") if a in catalog]
+        order = mean_axes + ["__abs__", "SGWLD"]
+        aggregations = {a: {"op": "mean"} for a in mean_axes}
+        aggregations["__abs__"] = {"op": "abs"}
+        kept = [v for v in catalog["SGWLD"] if v not in _DVTH_EXCLUDED_SGWLD]
+        spec: Dict[str, Any] = {"op": "sum"}
+        if kept and len(kept) < len(catalog["SGWLD"]):
+            spec["value"] = kept
+        aggregations["SGWLD"] = spec
+    return {"name": name, "type": type_, "order": order, "aggregations": aggregations}
+
+
 def part_skeleton(name: str, type_: str, catalog: Dict[str, Optional[list]]) -> Dict[str, Any]:
     """**そのまま計算が通る**新規パーツ: 全軸をデフォルトopつきで `order` に
     並べる。相対化のプリセットは無し — 旧仕様の「Read_Override があれば自動ON」
     は廃止（docs/spec_change_dataname_measure.md 9節。dataName 命名ルール確定後、
     ルールに合うペアが見つかったときの自動セットを第2弾で追加する）。
 
+    KLD / dVthSGWLD は標準計算入りの type 別雛形（_typed_skeleton）を返す。
+
     Measure 軸のある type では parameterLabel 由来の Label/Override 軸を雛形に
     入れない（明示追加は可能）: それらは Measure 番号が一意に決める測定メタ
     データで、Measure filter との二重指定になる上、Measure 分割の相対化では
     ペア結合キーに残って分子/分母の行を対にできなくする（Override は基準側と
     評価側で必ず値が異なるため）。"""
+    typed = _typed_skeleton(name, type_, catalog)
+    if typed is not None:
+        return typed
     exclude: set = set()
     if "Measure" in catalog:
         exclude = {a for a in catalog if a.endswith("_Label") or a.endswith("_Override")}
@@ -505,6 +547,22 @@ def validate_part(
         "weightSets": weight_sets or {},
     }
     return validate_score_file(single)
+
+
+def part_types_without_data(score_file: Dict[str, Any], ctx: Optional[Dict[str, Any]]) -> set:
+    """読み込んだデータに測定ファイルの無い type を使うパーツの `_uid` 集合。
+
+    別実験の config を読むとデータに無い type のパーツが残る — これは意図した
+    設計（読み込んだ設定を黙って変えず、取捨選択はユーザーが行う）だが、
+    テスト計算して初めてエラーで気づくのは遠回りなので、一覧の ⚠ と編集画面の
+    警告に使う。custom はデータ type を持たないので対象外。設定のみ編集モード
+    ではカタログが設定自身から導出されるため自然に空になる。"""
+    catalogs = (ctx or {}).get("catalogs") or {}
+    return {
+        p.get("_uid")
+        for p in score_file.get("score_parts", [])
+        if p.get("type") not in (None, "custom") and p.get("type") not in catalogs
+    }
 
 
 # -------------------------------------------------- コンテキスト（画面1）
