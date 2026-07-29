@@ -37,6 +37,38 @@ import subprocess
 import tempfile
 
 
+def _json_key(k):
+    """dict キーの JSON 化: numpy int64 等のキーを Python 型へ（json.dump は
+    str/int/float/bool/None 以外のキーを受けない。int 等は json 側が文字列化する）。"""
+    if not isinstance(k, (str, int, float, bool)) and k is not None and hasattr(k, "item"):
+        return k.item()
+    return k
+
+
+def _jsonable(obj):
+    """config dict を json.dump できる形へ再帰変換する
+    （get_score_bridge_example.py と同じもの — 各ファイル単体で貼れるよう重複させている）。
+
+    現行の config ローダは読み込み時に一部の値を計算用に加工する（例:
+    WLgroupWeight / KLDweight を {名前: 重み} の pandas Series 化、値は numpy
+    数値型）。そのままでは json.dump が失敗するため、ここで素の Python 型へ
+    戻す。エンジンが読むフィールドは to_dict で手書きの config と同じ形に戻り、
+    読まないフィールドは dump を壊さなければ何でもよい（読み込み時に無視）。"""
+    if isinstance(obj, dict):
+        return {_json_key(k): _jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_jsonable(v) for v in obj]
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj  # numpy float64 は float のサブクラスなのでここを通る
+    if hasattr(obj, "to_dict"):  # pandas Series / DataFrame
+        return _jsonable(obj.to_dict())
+    if hasattr(obj, "tolist"):  # numpy ndarray
+        return _jsonable(obj.tolist())
+    if hasattr(obj, "item"):  # numpy スカラー（int64 / bool_ など）
+        return obj.item()
+    return str(obj)  # 最後の砦（エンジンが読まないフィールドを想定）
+
+
 def _find_scorelib_parent():
     """このファイルの場所から親方向へ3階層まで scorelib_param/ を探す。
     例: このコードが kicOpt/optlib/ 内のスクリプトに貼られていて scorelib_param が
@@ -89,7 +121,9 @@ def compute_batch_scores(
         if isinstance(config, dict):
             fd, tmp_config = tempfile.mkstemp(suffix=".jsonc", prefix="scorelib_cfg_")
             with os.fdopen(fd, "w") as f:
-                json.dump(config, f)  # JSON は jsonc として妥当
+                # ローダ加工済みの dict（pandas Series / numpy 型入り）でも
+                # 書き出せるよう正規化してから dump（JSON は jsonc として妥当）
+                json.dump(_jsonable(config), f)
             config_path = tmp_config
         else:
             config_path = config

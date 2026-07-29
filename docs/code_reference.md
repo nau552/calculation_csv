@@ -348,6 +348,7 @@ stderr に note で報告（0.6.0）。`--max-threads N` で計算スレッド�
 | `scripts/benchmark_batch.py` | 実運用マシンでバッチサイズごとの所要時間・ピークメモリを実測する（計測1回=子プロセス1つ。`--batch-sizes auto,10,25,50` / `--max-threads` / `--repeat`） |
 | `scripts/batch_bridge_example.py` | 最適化スクリプト（python3.7）からバッチCLIを subprocess 起動するブリッジ実装例。scorelib_param 非依存・py3.7互換で、そのまま現行スクリプトへコピーできる（stderr は `<out>.log` へ、失敗は log 末尾つき RuntimeError、`<out>.failed.csv` を failed dict として返す） |
 | `scripts/get_score_bridge_example.py` | turbo.py の get_score() に差し込む**毎epochの通常スコア計算**ブリッジ実装例（score_function="gui_score" 分岐）。`python -m scorelib_param.cli` を subprocess 起動し stdout の JSON を dict で返す。py3.7互換・scorelib非依存。initial_temperature 省略時は data_dir 内を自動使用 |
+| （両ブリッジ共通）`_jsonable` / `_json_key` | config dict の dump 前正規化（2026-07-29 実機で判明した問題への対応）: 現行の config ローダは読み込み時に WLgroupWeight / KLDweight 等を pandas Series（値は numpy 型）へ加工するため、そのままでは json.dump が失敗する。to_dict / tolist / item の**振る舞い判定**（pandas/numpy を import しない）で素の Python 型へ再帰変換し、エンジンが読むフィールドは手書き config と同じ形に復元、読まないフィールドは最後の砦 str() で dump を通す |
 | `tests/data/result_tmp_mini/` | テスト・動作確認用の小さな測定データ一式（git登録済み。実データ result_tmp/ は登録しない） |
 | `tests/` | テスト（解説は `testing_guide.md`） |
 | `reference_scripts/` | 現行スクリプトの参照用コピー（エンジン検証の正解データ生成に使用。expand_FBC_measure.py はテストが実行する） |

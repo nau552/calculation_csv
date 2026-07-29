@@ -12,6 +12,16 @@
 開発の時系列記録は `docs/score_gui_progress.md`、設計判断は各設計書。
 リリース手順（README）の一部としてここに追記する。
 
+## 未リリース
+
+- **ブリッジ見本（scripts/*_bridge_example.py）: config の dump 前正規化を追加**。
+  現行の config ローダは読み込み時に WLgroupWeight / KLDweight 等を
+  pandas Series（値は numpy 型）へ加工するため、加工済み dict の
+  json.dump が失敗していた（実機で判明）。to_dict / item 等の振る舞い判定で
+  素の Python 型へ再帰変換してから書き出す（エンジンが読むフィールドは
+  手書き config と同じ形に復元される）。**実機の kicOpt 側へ貼ったコピーにも
+  反映が必要**。エンジン本体は変更なし（版数は動かさない）
+
 ## ver.0.7.0 — 2026-07-29
 
 **WLgroup 定義の在り処を1つにする**（score.jsonc の語彙が変わるため真ん中を

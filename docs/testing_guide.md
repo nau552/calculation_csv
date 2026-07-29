@@ -107,6 +107,7 @@ group_reduce op のエラー案内）、`test_enabled_true/false_...`（旧 rela
 | `test_dummy.py` | 単体 | ダミー一式の Board/Chip 複製展開（scorelib_param/dummy.py）。行数・番号付け・Boardごとに違うChip数・initial_temperature/map の扱い・複数Board元データの拒否。**「mean 集計は複製に対して不変」という性質**で「展開は行の複製だけ」を検証し、展開一式で実計算が通ることも確認 |
 | `test_agg_weight.py` | 単体 | 集計時重み（`weight`/`weight_ref`）: 「軸を潰す直前に値ごとの重みを乗算」が変換ステップ（by+mul）を直前に置いた場合と一致すること、weightSets からの解決、形状検査 |
 | `test_transform_weights.py` | 単体 | 変換ステップの拡張（add/sub/mul/div・複数回・グループ別重み）と**単項op abs/log**（0.6.0: KLD 標準計算の polars 手組みとの一致、floor 必須等の検証）、Physical 記法グループ定義（definedInLogical / WLgroupDefinLogical の読み替え）。`{Generation}.json` 無しでの**データ由来の軸総数導出**が json ありと同値なこと、導出不能軸の明確なエラー |
+| `test_bridge_example.py` | 単体 | ブリッジ見本の config 正規化（_jsonable）: ローダ加工済み config（pandas Series / numpy 型相当）が json 化でき、WLgroupWeight が手書きと同じ形に復元されて RunConfig で読めること。実装が振る舞い判定なのでフェイクで検証（pandas を test 依存にしない） |
 | `test_wlgroup_legacy.py` | 単体 | WLgroup 定義の在り処の一本化（0.7.0）: エクスポートが WL 軸の WLgroup / WLgroupWeight を旧形式キーだけに書くこと（groupDefs に残らない・WL 以外の定義は残る）、エクスポート→インポートのラウンドトリップ、ScoreFile の旧形式キー吸収（groupDefs 優先・不正な文字列 bool の拒否）、to_score_file の統合、"WLgroup" 予約名ガード |
 | `test_vthskip.py` | 単体〜結合 | vthSkip のダミー計算（0.6.0）: ダミー値=「変換後の値」の意味論（KLD 0 → 0.0、dVthSGWLD 1 → 残す8要素で 8.0）、relative パーツの拒否、compute_score_file のファイル不在分岐（ファイルがあれば vthSkip は無視）、batch のダミー埋め+dummy_used 報告・ダミー値なしでの failed、BatchRunner の事前検証免除 |
 

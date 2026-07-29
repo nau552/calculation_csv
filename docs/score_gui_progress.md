@@ -402,3 +402,8 @@ v0.4.0 の機能群（集計時重み・変換ステップ拡張・Physical 記�
   対応）し、見つからないときは旧挙動の「スキップして CI に委ねる」をやめ
   fail-closed（社内 CI 未整備の間はフックが唯一の自動テストのため。
   逃げ道は --no-verify を案内）。dev_workflow.md 更新。
+- 追記: 実機ブリッジで config の json.dump が失敗（ローダが WLgroupWeight /
+  KLDweight 等を pandas Series 化しているため）→ ブリッジ見本2つに dump 前
+  正規化 _jsonable を追加（振る舞い判定・pandas/numpy 非依存・py3.7互換。
+  エンジンが読むフィールドは手書き config と同じ形に復元）。フェイクによる
+  テスト追加、302件パス。実機 kicOpt 側のコピーへの反映が必要。
