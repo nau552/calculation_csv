@@ -17,7 +17,9 @@ dependencies = [
 # streamlit-sortables is a soft dependency: without it the app falls back
 # from drag&drop reordering to up/down buttons.
 ui = ["streamlit>=1.50", "streamlit-sortables>=0.3"]
-dev = ["pytest>=8.0", "streamlit>=1.50", "streamlit-sortables>=0.3"]
+# ruff はチーム共通コンテナの設定(ruff.toml に転記済み)で lint/format するため
+# 固定版で入れる(版が動くと有効ルールが変わり、警告ゼロの状態が崩れるため)
+dev = ["pytest>=8.0", "streamlit>=1.50", "streamlit-sortables>=0.3", "ruff==0.16.0"]
 
 [build-system]
 requires = ["setuptools>=61.0"]

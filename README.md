@@ -118,8 +118,11 @@ git config core.hooksPath scripts/hooks         # push前テストのフック�
   数日がかりの機能（途中状態が main に乗ると困るもの）は `feature/<名前>` ブランチで
   作業し、テスト全パスを確認してから main へマージする。小さな修正・ドキュメントは
   main 直コミットでよい
+- **コード規約（ruff）**: 社内チーム共通コンテナの設定に合わせる（リポジトリ直下の
+  `ruff.toml` に転記済み。独自規約は作らない — 解説は docs/dev_workflow.md）。
+  push 前に `.venv/bin/ruff check .` と `.venv/bin/ruff format .` を流す
 - **CI**: push / PR のたびに GitHub Actions（`.github/workflows/test.yml`）が
-  本番エンジン環境と同じ Python 3.13 で全テストを実行する。
+  本番エンジン環境と同じ Python 3.13 で ruff（lint・整形検査）と全テストを実行する。
   **社内 GitLab で運用する場合は `.gitlab-ci.yml`**（同内容の下書き作成済み。
   Runner・イメージ・pip ミラー等の実地確認手順は docs/dev_workflow.md
   「社内 GitLab での CI」を参照）
@@ -586,8 +589,8 @@ CLI（stderr / `--version`）に表示される — SVN側エンジンとの版�
 ```python
 # custom_parts.py（リポジトリ直下、SVN管理）
 def my_score(ctx):
-    df = pl.read_csv(ctx.data_dir / "FBC.csv")   # ctx: data_dir / generation / group_defs / params
-    return float(df["FBC"].mean())               # 1つの有限な数値を返す（エンジンが検証）
+    df = pl.read_csv(ctx.data_dir / "FBC.csv")  # ctx: data_dir / generation / group_defs / params
+    return float(df["FBC"].mean())  # 1つの有限な数値を返す（エンジンが検証）
 ```
 
 - 関数ファイルの場所は**固定**（`--custom-parts` はテスト用の上書き）。config にパスを
@@ -952,8 +955,9 @@ Python から:
 
 ```python
 from scorelib_param.batch import BatchRunner
+
 runner = BatchRunner([hist_path1, hist_path2], run_config, dvtbudget_coef=coef)
-result = runner.run()        # result.scores: DataFrame / result.failed: {Epoch: 理由}
+result = runner.run()  # result.scores: DataFrame / result.failed: {Epoch: 理由}
 for batch in runner.run_iter():  # バッチごとに逐次受け取る場合
     ...
 ```
@@ -996,13 +1000,13 @@ scorelib_param 用の python 実行ファイルを指定して起動し、`--out
 ```python
 scores, failed = compute_batch_scores(
     engine_python="/opt/py311/bin/python",  # scorelib_param が入っている python
-    config=self.config,                      # 読み込み済み dict でもパスでも可
+    config=self.config,  # 読み込み済み dict でもパスでも可
     histories=[".../Step1/Loop01/result_history", ...],
     out_csv="/tmp/past_scores.csv",
     dvtbudget_coef="dvtbudget_coef.jsonc",
     # scorelib_parent は省略可: 関数を kicOpt/ 内のスクリプトに貼れば
     # kicOpt/（scorelib_param/ が並ぶ場所）が自動で使われる
-)   # scores: epoch ごとの dict のリスト / failed: {Epoch: 除外理由}
+)  # scores: epoch ごとの dict のリスト / failed: {Epoch: 除外理由}
 ```
 
 エンジンの進捗・警告は `<out_csv>.log` に保存され、失敗時は log 末尾つきの

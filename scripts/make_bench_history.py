@@ -1,7 +1,8 @@
+# Copyright (c) 2026
 """1 epoch 分のデータディレクトリから、ベンチマーク用の result_history を組み立てる。
 
 同じ epoch ディレクトリを result.0001 .. result.NNNN として複製する。複製は
-NTFS ハードリンク（同一ボリューム）なのでディスク消費は実質ゼロ。クロス
+NTFS ハードリンク(同一ボリューム)なのでディスク消費は実質ゼロ。クロス
 ボリューム等でハードリンクできない場合はコピーにフォールバックする。
 
 使い方:
@@ -17,6 +18,7 @@ NTFS ハードリンク（同一ボリューム）なのでディスク消費は
     python scripts/profile_batch.py --config config_bench.jsonc \
         --history result_tmp_bench_history --dvtbudget-coef dvtbudget_coef.jsonc
 """
+
 from __future__ import annotations
 
 import argparse
@@ -28,14 +30,19 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 
-def main(argv=None) -> None:
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+def main(argv: list[str] | None = None) -> None:
+    """コマンドライン引数に従い、複製でベンチマーク用の result_history を組み立てる。"""
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument(
+        "--source",
+        default=str(REPO / "result_tmp_full"),
+        help="1 epoch 分のデータディレクトリ (default: result_tmp_full)",
     )
-    parser.add_argument("--source", default=str(REPO / "result_tmp_full"),
-                        help="1 epoch 分のデータディレクトリ (default: result_tmp_full)")
-    parser.add_argument("--dest", default=str(REPO / "result_tmp_bench_history"),
-                        help="作成する result_history のパス (default: result_tmp_bench_history)")
+    parser.add_argument(
+        "--dest",
+        default=str(REPO / "result_tmp_bench_history"),
+        help="作成する result_history のパス (default: result_tmp_bench_history)",
+    )
     parser.add_argument("--epochs", type=int, default=100)
     args = parser.parse_args(argv)
 

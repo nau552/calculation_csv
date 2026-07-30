@@ -1,8 +1,15 @@
+# Copyright (c) 2026
 import itertools
+
 import pandas as pd
 
 
-def create_dataframe_with_cyclic_fbc(column_ranges, fbc_max=20, output_csv="output.csv"):
+def create_dataframe_with_cyclic_fbc(
+    column_ranges: dict[str, tuple[int, int]],
+    fbc_max: int = 20,
+    output_csv: str = "output.csv",
+) -> pd.DataFrame:
+    """軸範囲の全組み合わせに 0..fbc_max を巡回する tR 列を足して csv に保存し、DataFrame を返す。"""
     columns = list(column_ranges.keys())
     value_lists = [range(start, end + 1) for start, end in column_ranges.values()]
 
@@ -10,12 +17,13 @@ def create_dataframe_with_cyclic_fbc(column_ranges, fbc_max=20, output_csv="outp
     df = pd.DataFrame(combinations, columns=columns)
 
     cycle_length = fbc_max + 1
-    df['tR'] = [i % cycle_length for i in range(len(df))]
+    df["tR"] = [i % cycle_length for i in range(len(df))]
 
-    df.to_csv(output_csv, index=False, encoding='utf-8')
+    df.to_csv(output_csv, index=False, encoding="utf-8")
     return df
 
-column_ranges={
+
+column_ranges = {
     "InBatchEpoch": (0, 0),
     "Board": (0, 1),
     "Chip": (0, 1),

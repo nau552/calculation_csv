@@ -1,5 +1,9 @@
+# Copyright (c) 2026
 """ui.state のテスト: Streamlit UI の背後にある純粋な編集ロジック。"""
+
 import shutil
+from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -8,25 +12,30 @@ from scorelib_param.introspect import axis_catalog
 from scorelib_param.models import ScorePart
 from ui import state
 
-# mini データに実在する全 type（値列ルールで検出される。test_introspect と対）
+# mini データに実在する全 type(値列ルールで検出される。test_introspect と対)
 MINI_TYPES = ["FBC", "KLD", "PROGLOOP", "PROGSTATUS", "dVthSGWLD", "tPROG", "tR"]
 
 
 @pytest.fixture
-def catalog(data_dir_mini):
+def catalog(data_dir_mini: Path) -> dict[str, list | None]:
+    """FBC の軸カタログ(mini データ)を返す。"""
     return axis_catalog(data_dir_mini, "FBC")
 
 
 @pytest.fixture
-def sf():
+def sf() -> dict[str, Any]:
+    """空の ScoreFile dict を返す。"""
     return state.empty_score_file()
 
 
 # ------------------------------------------------------------------- skeleton
 
-def test_skeleton_is_valid_without_relative_preset(catalog):
-    """v1: 相対化プリセットは無し — 旧「Read_Override があれば自動ON」は廃止
-    （docs/spec_change_dataname_measure.md 9節）。"""
+
+def test_skeleton_is_valid_without_relative_preset(catalog: dict[str, list | None]) -> None:
+    """v1: 相対化プリセットは無し — 旧「Read_Override があれば自動ON」は廃止。
+
+    (docs/spec_change_dataname_measure.md 9節)
+    """
     part = state.part_skeleton("p1", "FBC", catalog)
     assert "relative" not in part
     assert part["order"][0] == "Measure"  # 「どの測定か」の選択が先頭
@@ -38,7 +47,8 @@ def test_skeleton_is_valid_without_relative_preset(catalog):
     assert state.validate_part(part) == []
 
 
-def test_skeleton_default_ops(catalog):
+def test_skeleton_default_ops(catalog: dict[str, list | None]) -> None:
+    """FBC 雛形の既定op: Measure は filter 0、State は filter R2A、WL は mean になることを検証する。"""
     part = state.part_skeleton("p1", "FBC", catalog)
     aggs = part["aggregations"]
     assert aggs["Measure"] == {"op": "filter", "value": 0}  # 識別子軸: 平均しない
@@ -46,24 +56,25 @@ def test_skeleton_default_ops(catalog):
     assert aggs["WL"] == {"op": "mean"}
 
 
-def test_skeleton_keeps_label_axes_for_types_without_measure():
-    """Measure 軸の無いカタログ（集計済み type 等）では従来どおり全軸が雛形に
-    入る（Label/Override 除外は Measure がある場合だけの規則）。"""
+def test_skeleton_keeps_label_axes_for_types_without_measure() -> None:
+    """Measure 軸の無いカタログ(集計済み type 等)では従来どおり全軸が雛形に入る。
+
+    (Label/Override 除外は Measure がある場合だけの規則)
+    """
     catalog = {"Read_Override": [False, True], "Board": [0, 1]}
     part = state.part_skeleton("p", "X", catalog)
     assert "Read_Override" in part["order"]
 
 
-def test_skeleton_computes_as_is(data_dir_mini, catalog):
+def test_skeleton_computes_as_is(data_dir_mini: Path, catalog: dict[str, list | None]) -> None:
     """雛形の存在意義そのもの: 一切編集せずに計算が通ること。"""
     part = ScorePart.model_validate(state.part_skeleton("p1", "FBC", catalog))
     value = compute_score_part(data_dir_mini, part)
     assert isinstance(value, float)
 
 
-def test_kld_skeleton_standard_computation(data_dir_mini):
-    """KLD の type 別雛形: Board/Chip mean → log(床 1e-6) → 0.1 重みの SGWLD 総和。
-    そのまま計算が通る。"""
+def test_kld_skeleton_standard_computation(data_dir_mini: Path) -> None:
+    """KLD の type 別雛形: Board/Chip mean → log(床 1e-6) → 0.1 重みの SGWLD 総和。そのまま計算が通る。"""
     part = state.part_skeleton("p", "KLD", axis_catalog(data_dir_mini, "KLD"))
     assert part["order"] == ["Board", "Chip", "__log__", "SGWLD"]
     assert part["aggregations"]["__log__"] == {"op": "log", "floor": 1e-6}
@@ -72,8 +83,8 @@ def test_kld_skeleton_standard_computation(data_dir_mini):
     assert isinstance(value, float)
 
 
-def test_dvth_skeleton_excludes_sg_elements(data_dir_mini):
-    """dVthSGWLD の type 別雛形: mean → abs → SG系4要素を除く8要素の総和。"""
+def test_dvth_skeleton_excludes_sg_elements(data_dir_mini: Path) -> None:
+    """DVthSGWLD の type 別雛形: mean → abs → SG系4要素を除く8要素の総和。"""
     catalog = axis_catalog(data_dir_mini, "dVthSGWLD")
     part = state.part_skeleton("p", "dVthSGWLD", catalog)
     assert part["order"] == ["Board", "Chip", "Block", "__abs__", "SGWLD"]
@@ -86,32 +97,34 @@ def test_dvth_skeleton_excludes_sg_elements(data_dir_mini):
     assert isinstance(value, float)
 
 
-def test_typed_skeleton_falls_back_without_sgwld():
+def test_typed_skeleton_falls_back_without_sgwld() -> None:
     """SGWLD 軸が無いデータでは KLD でも汎用雛形にフォールバックする。"""
     part = state.part_skeleton("p", "KLD", {"Board": [0, 1], "Chip": [0, 1]})
     assert part["order"] == ["Board", "Chip"]
     assert "__log__" not in part["aggregations"]
 
 
-def test_default_split_axis_priority(catalog):
+def test_default_split_axis_priority(catalog: dict[str, list | None]) -> None:
     """既定 split 軸: Measure > Param > Read_Override > 他の Override > 先頭の軸。"""
     assert state.default_split_axis(catalog) == "Measure"
     no_measure = {a: c for a, c in catalog.items() if a != "Measure"}
     assert state.default_split_axis(no_measure) == "Read_Override"
     progloop = {"Board": [0, 1], "Param": ["ROM", "Opt"], "WL": [0, 1]}
     assert state.default_split_axis(progloop) == "Param"
-    aggregated = {"Board": [0, 1], "Chip": [0, 1]}  # 集計済み type（4b回答の形）
+    aggregated = {"Board": [0, 1], "Chip": [0, 1]}  # 集計済み type(4b回答の形)
     assert state.default_split_axis(aggregated) == "Board"
 
 
 # ------------------------------------------------- relative on/off and order
 
-def test_enable_relative_defaults_to_measure_split(catalog):
+
+def test_enable_relative_defaults_to_measure_split(catalog: dict[str, list | None]) -> None:
+    """相対化ONの既定: split=Measure・分母0/分子1になり、Measure が order と aggregations から消えることを検証する。"""
     part = state.part_skeleton("p", "FBC", catalog)
     state.enable_relative(part, catalog)
     rel = part["relative"]
     assert rel["split_axis"] == "Measure"
-    # 位置既定: 候補の先頭 = 分母（基準）、2番目 = 分子（評価）
+    # 位置既定: 候補の先頭 = 分母(基準)、2番目 = 分子(評価)
     assert rel["denominator_when"] == 0
     assert rel["numerator_when"] == 1
     assert "Measure" not in part["order"]  # 相対化が消費するため order には無い
@@ -119,18 +132,20 @@ def test_enable_relative_defaults_to_measure_split(catalog):
     assert state.validate_part(part) == []
 
 
-def test_enable_relative_computes_as_is(data_dir_mini, catalog):
-    """相対化ONの既定値（Measure 1/0）のまま計算が通ること。"""
+def test_enable_relative_computes_as_is(data_dir_mini: Path, catalog: dict[str, list | None]) -> None:
+    """相対化ONの既定値(Measure 1/0)のまま計算が通ること。"""
     part = state.part_skeleton("p", "FBC", catalog)
     state.enable_relative(part, catalog)
     value = compute_score_part(data_dir_mini, ScorePart.model_validate(part))
     assert isinstance(value, float)
 
 
-def test_enable_relative_param_split_computes(data_dir_mini):
-    """Param 軸を持つ Measure 無し type（PROGLOOP）: 相対化の既定は
-    split=Param・分母 ROM（基準パラ）・分子 Opt（提案パラ）で、そのまま
-    計算が通る（2026-07-29 ユーザー確認: この系の相対化は基本 Param）。"""
+def test_enable_relative_param_split_computes(data_dir_mini: Path) -> None:
+    """Param 軸を持つ Measure 無し type(PROGLOOP)の相対化既定で、そのまま計算が通ることを検証する。
+
+    既定は split=Param・分母 ROM(基準パラ)・分子 Opt(提案パラ)
+    (2026-07-29 ユーザー確認: この系の相対化は基本 Param)。
+    """
     catalog = axis_catalog(data_dir_mini, "PROGLOOP")
     part = state.part_skeleton("p", "PROGLOOP", catalog)
     state.enable_relative(part, catalog)
@@ -142,8 +157,8 @@ def test_enable_relative_param_split_computes(data_dir_mini):
     assert isinstance(value, float)
 
 
-def test_enable_relative_on_aggregated_type_uses_any_axis():
-    """Measure 列の無い集計済み type: split は任意軸（先頭）から。"""
+def test_enable_relative_on_aggregated_type_uses_any_axis() -> None:
+    """Measure 列の無い集計済み type: split は任意軸(先頭)から。"""
     catalog = {"Board": [0, 1], "Chip": [0, 1, 2, 3]}
     part = state.part_skeleton("p", "SUMMARY", catalog)
     state.enable_relative(part, catalog)
@@ -152,9 +167,11 @@ def test_enable_relative_on_aggregated_type_uses_any_axis():
     assert (rel["numerator_when"], rel["denominator_when"]) == (1, 0)
 
 
-def test_enable_relative_without_candidates_shows_validation_error():
-    """候補の無い軸が split になった場合、分子/分母はユーザ入力まで None →
-    エンジンの「both numerator_when and denominator_when」エラーが表示される。"""
+def test_enable_relative_without_candidates_shows_validation_error() -> None:
+    """候補の無い軸が split になった場合、分子/分母はユーザ入力まで None になる。
+
+    エンジンの「both numerator_when and denominator_when」エラーが表示される。
+    """
     catalog = {"Foo": None, "Board": [0]}
     part = state.part_skeleton("p", "X", catalog)
     state.enable_relative(part, catalog)
@@ -163,7 +180,8 @@ def test_enable_relative_without_candidates_shows_validation_error():
     assert any("numerator_when" in p for p in problems)
 
 
-def test_disable_relative_restores_split_axis(catalog):
+def test_disable_relative_restores_split_axis(catalog: dict[str, list | None]) -> None:
+    """相対化OFFで split 軸 Measure が order へ戻り、filter の安全な既定つきで検証も通ることを検証する。"""
     part = state.part_skeleton("p", "FBC", catalog)
     state.enable_relative(part, catalog)
     assert "Measure" not in part["order"]
@@ -171,12 +189,16 @@ def test_disable_relative_restores_split_axis(catalog):
     assert restored == "Measure"
     assert "relative" not in part
     assert "Measure" in part["order"]
-    # 識別子軸の安全なデフォルト（先頭番号の filter）で復帰する
+    # 識別子軸の安全なデフォルト(先頭番号の filter)で復帰する
     assert part["aggregations"]["Measure"] == {"op": "filter", "value": 0}
     assert state.validate_part(part) == []
 
 
-def test_change_split_axis_swaps_order_membership_and_resets_sides(catalog):
+def test_change_split_axis_swaps_order_membership_and_resets_sides(catalog: dict[str, list | None]) -> None:
+    """相対化の split 軸を変更すると新旧軸の order 所属が入れ替わることを検証する。
+
+    分子/分母は新しい軸の候補の位置から初期化し直される。
+    """
     part = state.part_skeleton("p", "FBC", catalog)
     state.enable_relative(part, catalog)
     state.change_split_axis(part, "Read_Override", catalog)
@@ -193,7 +215,8 @@ def test_change_split_axis_swaps_order_membership_and_resets_sides(catalog):
     assert "Measure" not in part["order"]
 
 
-def test_change_split_axis_drops_stale_labels(catalog):
+def test_change_split_axis_drops_stale_labels(catalog: dict[str, list | None]) -> None:
+    """相対化の split 軸を変更したら古い Measure 用の labels 注記が消えることを検証する。"""
     part = state.part_skeleton("p", "FBC", catalog)
     state.enable_relative(part, catalog)
     part["relative"]["labels"] = {"1": "evaluation_param_read_level_1"}
@@ -201,10 +224,12 @@ def test_change_split_axis_drops_stale_labels(catalog):
     assert "labels" not in part["relative"]
 
 
-def test_disable_relative_removes_explicit_relative_step(catalog):
+def test_disable_relative_removes_explicit_relative_step(catalog: dict[str, list | None]) -> None:
     """機能の組み合わせ: UIは __relative__ を order に明示配置できる。
-    相対化をOFFにしたらそれも除去されること（相対化設定なしの __relative__
-    は検証エラーになるため）。"""
+
+    相対化をOFFにしたらそれも除去されること(相対化設定なしの
+    __relative__ は検証エラーになるため)。
+    """
     part = state.part_skeleton("p", "FBC", catalog)
     state.enable_relative(part, catalog)
     part["order"].insert(0, "__relative__")
@@ -213,7 +238,8 @@ def test_disable_relative_removes_explicit_relative_step(catalog):
     assert state.validate_part(part) == []
 
 
-def test_drop_stale_virtual_steps_on_type_change(catalog):
+def test_drop_stale_virtual_steps_on_type_change(catalog: dict[str, list | None]) -> None:
+    """パーツ type の変更で不整合になった仮想ステップだけが order から除去されることを検証する。"""
     part = state.part_skeleton("p", "FBC", catalog)
     part["order"].insert(0, "__dvtbudget__")
     part["type"] = "dVtBudget"
@@ -224,7 +250,8 @@ def test_drop_stale_virtual_steps_on_type_change(catalog):
     assert state.validate_part(part) == []
 
 
-def test_disable_relative_skips_axis_already_in_combined_entry(catalog):
+def test_disable_relative_skips_axis_already_in_combined_entry(catalog: dict[str, list | None]) -> None:
+    """複合軸エントリが split 軸をカバー済みなら、相対化OFFでもその軸を order に再追加しないことを検証する。"""
     part = state.part_skeleton("p", "FBC", catalog)
     state.enable_relative(part, catalog)  # split = Measure
     part["order"].insert(0, "State&Measure")
@@ -235,7 +262,9 @@ def test_disable_relative_skips_axis_already_in_combined_entry(catalog):
 
 # ------------------------------------------------- Measure の labels 注記
 
-def test_annotate_measure_labels_relative():
+
+def test_annotate_measure_labels_relative() -> None:
+    """相対化設定の分子/分母の Measure 番号に対応する名前が labels に注記されることを検証する。"""
     mlabels = {0: "reference_param_read_level_1", 1: "evaluation_param_read_level_1"}
     rel = {"split_axis": "Measure", "numerator_when": 1, "denominator_when": 0}
     state.annotate_measure_labels(rel, mlabels)
@@ -245,7 +274,11 @@ def test_annotate_measure_labels_relative():
     }
 
 
-def test_annotate_measure_labels_filter_and_unnamed():
+def test_annotate_measure_labels_filter_and_unnamed() -> None:
+    """Measure の filter では名前を持つ番号だけが labels に注記されることを検証する。
+
+    名前が無くなれば注記ごと消える。
+    """
     mlabels = {1: "evaluation_param_read_level_1"}
     spec = {"op": "filter", "value": [1, 2]}
     state.annotate_measure_labels(spec, mlabels)
@@ -253,7 +286,7 @@ def test_annotate_measure_labels_filter_and_unnamed():
     unnamed = {"op": "filter", "value": 5}
     state.annotate_measure_labels(unnamed, {})
     assert "labels" not in unnamed
-    # 名前が無くなったら（ラベル無しデータへ切替等）注記ごと消える
+    # 名前が無くなったら(ラベル無しデータへ切替等)注記ごと消える
     spec2 = {"op": "filter", "value": 3, "labels": {"3": "old"}}
     state.annotate_measure_labels(spec2, {})
     assert "labels" not in spec2
@@ -261,7 +294,12 @@ def test_annotate_measure_labels_filter_and_unnamed():
 
 # ------------------------------------------------------- ダミー展開の入力
 
-def test_parse_chip_counts():
+
+def test_parse_chip_counts() -> None:
+    """Chip 数入力の解釈を検証する: 単一値は全 Board 共通になる。
+
+    個数不一致・非数値・0以下・空入力は ValueError になる。
+    """
     assert state.parse_chip_counts("4", 3) == [4, 4, 4]  # 数1つ = 全 Board 共通
     assert state.parse_chip_counts("4, 4, 2, 2", 4) == [4, 4, 2, 2]
     with pytest.raises(ValueError, match="一致しません"):
@@ -274,9 +312,8 @@ def test_parse_chip_counts():
         state.parse_chip_counts("", 2)
 
 
-def test_expand_dummy_bundle_roundtrip(tmp_path, data_dir_mini):
-    """疑似ダミー → expand_dummy_bundle → build_context が通しで動くこと
-    （画面1のダミー展開ボタンの中身）。"""
+def test_expand_dummy_bundle_roundtrip(tmp_path: Path, data_dir_mini: Path) -> None:
+    """疑似ダミー → expand_dummy_bundle → build_context が通しで動くこと(画面1のダミー展開ボタンの中身)。"""
     from scorelib_param.dummy import make_pseudo_dummy
 
     pseudo = make_pseudo_dummy(data_dir_mini, tmp_path / "pseudo")
@@ -289,15 +326,19 @@ def test_expand_dummy_bundle_roundtrip(tmp_path, data_dir_mini):
 
 # ------------------------------------------------------------------- editing
 
-def test_unique_part_name(sf):
+
+def test_unique_part_name(sf: dict[str, Any]) -> None:
+    """既存の part_1 と重複しない新規パーツ名 part_2 が生成されることを検証する。"""
     sf["score_parts"].append({"name": "part_1"})
     assert state.unique_part_name(sf) == "part_2"
 
 
-def test_duplicate_part(sf, catalog):
-    """本番と同じ形の入力で検証する: アプリが複製する時点でパーツは _uid を
-    持っている（_uid を共有するとウィジェットも共有され、2パーツが互いの
-    名前・相対化を静かに上書きし合う実バグがあった）。"""
+def test_duplicate_part(sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
+    """本番と同じ形の入力で検証する: アプリが複製する時点でパーツは _uid を持っている。
+
+    (_uid を共有するとウィジェットも共有され、2パーツが互いの
+    名前・相対化を静かに上書きし合う実バグがあった)
+    """
     sf["score_parts"].append(state.part_skeleton("p", "FBC", catalog))
     state.ensure_uids(sf)
     idx = state.duplicate_part(sf, 0)
@@ -306,28 +347,34 @@ def test_duplicate_part(sf, catalog):
     assert sf["score_parts"][1]["name"] == "p_1"
     assert sf["score_parts"][0]["_uid"] != sf["score_parts"][1]["_uid"]
     sf["score_parts"][1]["aggregations"]["WL"]["op"] = "sum"
-    assert sf["score_parts"][0]["aggregations"]["WL"]["op"] == "mean"  # 深いコピー（元は不変）
+    assert sf["score_parts"][0]["aggregations"]["WL"]["op"] == "mean"  # 深いコピー(元は不変)
 
 
-def test_part_list_labels_marker_handle_and_warning(sf, catalog):
-    """ドラッグリストのラベルには ⠿ ハンドル・⚠ 検証マーカー・← 編集中 が
-    付く。D&D部品自体は AppTest から観測できないため、この純関数の側で
-    ロジックを検証する。"""
+def test_part_list_labels_marker_handle_and_warning(sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
+    """ドラッグリストのラベルには ⠿ ハンドル・⚠ 検証マーカー・← 編集中 が付く。
+
+    D&D部品自体は AppTest から観測できないため、この純関数の側で
+    ロジックを検証する。
+    """
     a = state.part_skeleton("a", "FBC", catalog)
     b = state.part_skeleton("b", "FBC", catalog)
     sf["score_parts"] = [a, b]
     state.ensure_uids(sf)
     labels = state.part_list_labels(sf, b["_uid"], {a["_uid"]})
-    assert labels[0].startswith("⠿ ⚠ 1. a（")
+    assert labels[0].startswith("⠿ ⚠ 1. a(")
     assert "編集中" not in labels[0]
-    assert labels[1].startswith("⠿ 2. b（")
+    assert labels[1].startswith("⠿ 2. b(")
     assert labels[1].endswith("← 編集中")
 
 
-def test_part_select_labels_unique_even_with_duplicate_names(sf, catalog):
-    """Streamlit の selectbox は表示ラベルで項目を照合する: 誤って同名に
-    なった2パーツにも別々のプルダウンラベルが付かないと、片方をクリック
-    したらもう片方が選ばれる（実バグ）。"""
+def test_part_select_labels_unique_even_with_duplicate_names(
+    sf: dict[str, Any], catalog: dict[str, list | None]
+) -> None:
+    """誤って同名になった2パーツにも別々のプルダウンラベルが付くことを検証する。
+
+    Streamlit の selectbox は表示ラベルで項目を照合するため、ラベルが
+    同一だと片方をクリックしたらもう片方が選ばれる(実バグ)。
+    """
     a = state.part_skeleton("dAR_margin", "FBC", catalog)
     b = state.part_skeleton("dAR_margin", "FBC", catalog)
     sf["score_parts"] = [a, b]
@@ -338,7 +385,7 @@ def test_part_select_labels_unique_even_with_duplicate_names(sf, catalog):
     assert len(set(labels.values())) == 2
 
 
-def test_ensure_uids_repairs_duplicated_ids(sf, catalog):
+def test_ensure_uids_repairs_duplicated_ids(sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
     """_uid 重複バグの期間に保存された下書きが、開くだけで治ること。"""
     a = state.part_skeleton("a", "FBC", catalog)
     b = state.part_skeleton("b", "FBC", catalog)
@@ -349,7 +396,8 @@ def test_ensure_uids_repairs_duplicated_ids(sf, catalog):
     assert a["_uid"] == "same1234"  # 最初の1つは安定して保持される
 
 
-def test_move_entry():
+def test_move_entry() -> None:
+    """move_entry がリスト要素を前後に移動し、端では no-op になることを検証する。"""
     lst = ["a", "b", "c"]
     assert state.move_entry(lst, 0, +1) == 1
     assert lst == ["b", "a", "c"]
@@ -359,7 +407,9 @@ def test_move_entry():
 
 # -------------------------------------------------------------- selection sets
 
-def test_referencing_parts_and_guarded_delete(sf):
+
+def test_referencing_parts_and_guarded_delete(sf: dict[str, Any]) -> None:
+    """選択セットを参照するパーツがある間は削除が拒否され、参照が無くなれば削除できることを検証する。"""
     sf["selectionSets"]["ud"] = [{"State": "R2A", "Read_Label": "read_level_upper1"}]
     sf["score_parts"].append(
         {
@@ -377,35 +427,45 @@ def test_referencing_parts_and_guarded_delete(sf):
     assert sf["selectionSets"] == {}
 
 
-def test_save_set_as(sf):
+def test_save_set_as(sf: dict[str, Any]) -> None:
+    """選択セットの別名保存が深いコピーで行われ、既存名への保存は拒否されることを検証する。"""
     sf["selectionSets"]["ud"] = [{"State": "R2A", "Read_Label": "u1"}]
     state.save_set_as(sf, "ud", "ud2")
     sf["selectionSets"]["ud2"][0]["State"] = "A2B"
-    assert sf["selectionSets"]["ud"][0]["State"] == "R2A"  # 深いコピー（元は不変）
+    assert sf["selectionSets"]["ud"][0]["State"] == "R2A"  # 深いコピー(元は不変)
     with pytest.raises(ValueError, match="既に存在"):
         state.save_set_as(sf, "ud", "ud2")
 
 
 # ----------------------------------------------------------------- group defs
 
-def test_import_config_group_defs(sf):
+
+def test_import_config_group_defs(sf: dict[str, Any]) -> None:
+    """設定ファイルの WLgroup が groupDefs に取り込まれることを検証する。
+
+    再取り込みで編集済みコピーは上書きされない。
+    """
     wlgroup = {"g1": (0, 3), "g2": (4, 8)}
     assert state.import_config_group_defs(sf, wlgroup) is True
     assert sf["groupDefs"]["WLgroup"] == {
-        "axis": "WL", "groups": {"g1": [0, 3], "g2": [4, 8]}, "definedInLogical": True,
+        "axis": "WL",
+        "groups": {"g1": [0, 3], "g2": [4, 8]},
+        "definedInLogical": True,
     }
-    # 再取り込み（や先の編集）で編集可能コピーが上書きされてはならない
+    # 再取り込み(や先の編集)で編集可能コピーが上書きされてはならない
     sf["groupDefs"]["WLgroup"]["groups"]["g1"] = [0, 5]
     assert state.import_config_group_defs(sf, wlgroup) is False
     assert sf["groupDefs"]["WLgroup"]["groups"]["g1"] == [0, 5]
     assert state.import_config_group_defs(sf, None) is False
 
 
-def test_import_config_group_defs_physical_and_weight(sf):
+def test_import_config_group_defs_physical_and_weight(sf: dict[str, Any]) -> None:
+    """Physical 定義と重みの取り込みを検証する: definedInLogical=False と weightSets が入る。
+
+    既に編集済みの重みセットは上書きされない。
+    """
     wlgroup = {"g1": (0, 3)}
-    assert state.import_config_group_defs(
-        sf, wlgroup, defin_logical=False, wlgroup_weight={"g1": 2.0}
-    ) is True
+    assert state.import_config_group_defs(sf, wlgroup, defin_logical=False, wlgroup_weight={"g1": 2.0}) is True
     assert sf["groupDefs"]["WLgroup"]["definedInLogical"] is False
     assert sf["weightSets"]["WLgroupWeight"] == {"g1": 2.0}
     # 既に編集済みの重みセットは上書きしない
@@ -414,7 +474,8 @@ def test_import_config_group_defs_physical_and_weight(sf):
     assert sf["weightSets"]["WLgroupWeight"] == 5.0
 
 
-def test_group_def_delete_guarded_by_references(sf, catalog):
+def test_group_def_delete_guarded_by_references(sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
+    """グループ定義を参照するパーツがある間は削除が拒否され、参照が無くなれば削除できることを検証する。"""
     part = state.part_skeleton("p", "FBC", catalog)
     part["order"].append("WLgroup")
     part["aggregations"]["WLgroup"] = {"op": "max"}
@@ -428,7 +489,8 @@ def test_group_def_delete_guarded_by_references(sf, catalog):
     assert sf["groupDefs"] == {}
 
 
-def test_add_group_def_rejects_collisions(sf, catalog):
+def test_add_group_def_rejects_collisions(sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
+    """グループ定義の追加で、空名・軸名との衝突・既存名の重複がそれぞれ拒否されることを検証する。"""
     with pytest.raises(ValueError, match="入力してください"):
         state.add_group_def(sf, "  ", "WL", set(catalog))
     with pytest.raises(ValueError, match="軸名と衝突"):
@@ -439,7 +501,8 @@ def test_add_group_def_rejects_collisions(sf, catalog):
         state.add_group_def(sf, "STRgroup", "STR", set(catalog))
 
 
-def test_export_part_bundles_group_defs(sf, catalog):
+def test_export_part_bundles_group_defs(sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
+    """パーツ単体エクスポートに、そのパーツが参照するグループ定義だけが同梱されることを検証する。"""
     part = state.part_skeleton("p", "FBC", catalog)
     part["order"].append("WLgroup")
     part["aggregations"]["WLgroup"] = {"op": "max"}
@@ -450,17 +513,19 @@ def test_export_part_bundles_group_defs(sf, catalog):
     assert list(back["groupDefs"]) == ["WLgroup"]  # 参照している定義だけ同梱される
 
 
-def test_validate_weight_ref_resolves_against_weight_sets(sf, catalog):
+def test_validate_weight_ref_resolves_against_weight_sets(sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
     """重みセット ref の検証: 定義済みなら通り、未定義なら分かるエラーになる。
-    （回帰: 検証層が weightSets を渡さず、定義済みでも常に
-    "unknown weight set" になっていた）"""
+
+    (回帰: 検証層が weightSets を渡さず、定義済みでも常に
+    "unknown weight set" になっていた)
+    """
     part = state.part_skeleton("p", "FBC", catalog)
     part["order"].insert(0, "__weight__")
     part["aggregations"]["__weight__"] = {"op": "mul", "by": "WLgroup", "ref": "WLgroupWeight"}
     sf["score_parts"].append(part)
     sf["groupDefs"]["WLgroup"] = {"axis": "WL", "groups": {"g1": [0, 1000]}}
 
-    # 未定義 → 検証で捕まる（計算まで行かない）
+    # 未定義 → 検証で捕まる(計算まで行かない)
     assert any("WLgroupWeight" in p for p in state.validate_score_file(sf))
     assert state.validate_part(part, sf["selectionSets"], sf.get("weightSets"))
 
@@ -470,11 +535,10 @@ def test_validate_weight_ref_resolves_against_weight_sets(sf, catalog):
     assert state.validate_part(part, sf["selectionSets"], sf["weightSets"]) == []
 
 
-def test_export_part_bundles_weight_sets(sf, catalog):
+def test_export_part_bundles_weight_sets(sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
+    """パーツ単体エクスポートに、そのパーツが参照する重みセットだけが同梱されることを検証する。"""
     part = state.part_skeleton("p", "FBC", catalog)
-    part["order"] = ["WL", "__weight__", "WLgroup"] + [
-        e for e in part["order"] if e not in ("WL",)
-    ]
+    part["order"] = ["WL", "__weight__", "WLgroup"] + [e for e in part["order"] if e != "WL"]
     part["aggregations"]["WLgroup"] = {"op": "max"}
     part["aggregations"]["__weight__"] = {"op": "mul", "by": "WLgroup", "ref": "WLgroupWeight"}
     sf["score_parts"].append(part)
@@ -486,10 +550,12 @@ def test_export_part_bundles_weight_sets(sf, catalog):
     assert "WLgroup" in back["groupDefs"]
 
 
-def test_run_test_compute_with_weight_step(sf, catalog, data_dir_mini):
-    """UI経由の一気通貫: WLgroup 別の重みステップつきパーツが実データで
-    計算でき、重み全1なら重みなしと一致する。"""
-    def make(with_weight):
+def test_run_test_compute_with_weight_step(
+    sf: dict[str, Any], catalog: dict[str, list | None], data_dir_mini: Path
+) -> None:
+    """UI経由の一気通貫: WLgroup 別重みステップつきパーツが実データで計算でき、重み全1なら重みなしと一致する。"""
+
+    def make(with_weight: bool) -> dict[str, Any]:
         f = state.empty_score_file()
         part = state.part_skeleton("p", "FBC", catalog)
         part["order"].append("WLgroup")
@@ -497,7 +563,9 @@ def test_run_test_compute_with_weight_step(sf, catalog, data_dir_mini):
         if with_weight:
             part["order"].insert(part["order"].index("WLgroup"), "__weight__")
             part["aggregations"]["__weight__"] = {
-                "op": "mul", "by": "WLgroup", "ref": "WLgroupWeight",
+                "op": "mul",
+                "by": "WLgroup",
+                "ref": "WLgroupWeight",
             }
             f["weightSets"]["WLgroupWeight"] = {"low": 1.0, "high": 1.0}
         f["groupDefs"]["WLgroup"] = {"axis": "WL", "groups": {"low": [0, 10], "high": [11, 1000]}}
@@ -510,9 +578,13 @@ def test_run_test_compute_with_weight_step(sf, catalog, data_dir_mini):
     assert weighted["p"] == pytest.approx(plain["p"])
 
 
-def test_run_test_compute_with_group_axis(sf, catalog, data_dir_mini):
-    """UI経由の一気通貫: 派生グループ軸を使うパーツが実データで計算できる
-    （グループ間集計を最後に回すユーザシナリオ）。"""
+def test_run_test_compute_with_group_axis(
+    sf: dict[str, Any], catalog: dict[str, list | None], data_dir_mini: Path
+) -> None:
+    """UI経由の一気通貫: 派生グループ軸を使うパーツが実データで計算できる。
+
+    (グループ間集計を最後に回すユーザシナリオ)
+    """
     part = state.part_skeleton("p", "FBC", catalog)
     part["order"].append("WLgroup")
     part["aggregations"]["WLgroup"] = {"op": "max"}
@@ -525,13 +597,16 @@ def test_run_test_compute_with_group_axis(sf, catalog, data_dir_mini):
 
 # ---------------------------------------------------------------- validation
 
-def test_validate_score_file_ok(sf, catalog):
+
+def test_validate_score_file_ok(sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
+    """雛形パーツと式だけの ScoreFile が検証エラーなしで通ることを検証する。"""
     sf["score_parts"].append(state.part_skeleton("p", "FBC", catalog))
     sf["expression"] = "p"
     assert state.validate_score_file(sf) == []
 
 
-def test_validate_reports_engine_errors(sf):
+def test_validate_reports_engine_errors(sf: dict[str, Any]) -> None:
+    """エンジン層の検証エラー(value 無しの filter)が validate_score_file から報告されることを検証する。"""
     sf["score_parts"].append(
         {"name": "p", "type": "FBC", "order": ["State"], "aggregations": {"State": {"op": "filter"}}}
     )
@@ -539,14 +614,16 @@ def test_validate_reports_engine_errors(sf):
     assert any("filter" in p for p in problems)
 
 
-def test_validate_expression_unknown_part(sf, catalog):
+def test_validate_expression_unknown_part(sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
+    """式が未知のパーツ名を参照していると expression のエラーになることを検証する。"""
     sf["score_parts"].append(state.part_skeleton("p", "FBC", catalog))
     sf["expression"] = "p + nope"
     problems = state.validate_score_file(sf)
     assert any("expression" in p for p in problems)
 
 
-def test_validate_duplicate_names_and_dangling_constraint(sf, catalog):
+def test_validate_duplicate_names_and_dangling_constraint(sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
+    """パーツ名の重複と、存在しないパーツへの制約しきい値がそれぞれ検証エラーになることを検証する。"""
     sf["score_parts"] = [
         state.part_skeleton("p", "FBC", catalog),
         state.part_skeleton("p", "FBC", catalog),
@@ -557,7 +634,8 @@ def test_validate_duplicate_names_and_dangling_constraint(sf, catalog):
     assert any("gone" in p for p in problems)
 
 
-def test_validate_unknown_ref(sf, catalog):
+def test_validate_unknown_ref(sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
+    """未定義の選択セット ref がエラーとして報告されることを検証する。"""
     part = state.part_skeleton("p", "FBC", catalog)
     part["aggregations"]["State"] = {"op": "sum", "ref": "nope"}
     sf["score_parts"].append(part)
@@ -567,7 +645,9 @@ def test_validate_unknown_ref(sf, catalog):
 
 # ------------------------------------------------------------------- context
 
-def test_build_context(data_dir_mini):
+
+def test_build_context(data_dir_mini: Path) -> None:
+    """build_context で type 一覧・カタログ・初期温度の有無が揃うことを検証する(mini データ)。"""
     ctx = state.build_context(str(data_dir_mini))
     assert ctx["types"] == MINI_TYPES
     assert ctx["part_types"] == MINI_TYPES  # mini ディレクトリに係数jsoncは無い
@@ -576,8 +656,8 @@ def test_build_context(data_dir_mini):
     assert ctx["config_path"] is None
 
 
-def test_part_types_without_data(data_dir_mini):
-    """別実験の config 由来でデータに無い type のパーツを検出する（custom は対象外）。"""
+def test_part_types_without_data(data_dir_mini: Path) -> None:
+    """別実験の config 由来でデータに無い type のパーツを検出する(custom は対象外)。"""
     ctx = state.build_context(str(data_dir_mini))
     sf = state.empty_score_file()
     sf["score_parts"] = [
@@ -588,51 +668,55 @@ def test_part_types_without_data(data_dir_mini):
     assert state.part_types_without_data(sf, ctx) == {"b"}
 
 
-def test_part_types_without_data_config_only_never_flags():
+def test_part_types_without_data_config_only_never_flags() -> None:
     """設定のみ編集モードはカタログが設定自身から導出されるため警告しない。"""
     sf = state.empty_score_file()
     sf["score_parts"] = [
-        {"_uid": "a", "name": "p", "type": "tR",
-         "order": ["WL"], "aggregations": {"WL": {"op": "mean"}}},
+        {"_uid": "a", "name": "p", "type": "tR", "order": ["WL"], "aggregations": {"WL": {"op": "mean"}}},
     ]
     ctx = state.config_only_context(sf)
     assert state.part_types_without_data(sf, ctx) == set()
 
 
-def test_build_context_missing_dir():
+def test_build_context_missing_dir() -> None:
+    """存在しないディレクトリ指定が ValueError で拒否されることを検証する。"""
     with pytest.raises(ValueError, match="見つかりません"):
         state.build_context("no/such/dir")
 
 
-def test_build_context_empty_path_rejected():
-    """Python では Path('') はカレントディレクトリ扱い。空入力のまま、
-    アプリの起動場所を黙って走査してはならない。"""
+def test_build_context_empty_path_rejected() -> None:
+    """Python では Path('') はカレントディレクトリ扱い。空入力のまま、アプリの起動場所を黙って走査してはならない。"""
     for bad in ("", "   "):
         with pytest.raises(ValueError, match="入力してください"):
             state.build_context(bad)
 
 
-def test_build_context_explicit_coef(data_dir_mini, dvtbudget_coef_path):
+def test_build_context_explicit_coef(data_dir_mini: Path, dvtbudget_coef_path: Path) -> None:
     """係数jsoncは通常 result_tmp の外にあり、独立したパスで指定される。"""
     ctx = state.build_context(str(data_dir_mini), coef_path=str(dvtbudget_coef_path))
-    assert ctx["part_types"] == MINI_TYPES + ["dVtBudget"]
+    assert ctx["part_types"] == [*MINI_TYPES, "dVtBudget"]
     assert ctx["coef_source"] == "指定"
     assert "dVtBudget" in ctx["catalogs"]
 
 
-def test_build_context_explicit_config(data_dir_mini, fixtures_dir):
+def test_build_context_explicit_config(data_dir_mini: Path, fixtures_dir: Path) -> None:
+    """config_path 明示指定で config_source が「指定」になり、generation と wlgroup が読めることを検証する。"""
     ctx = state.build_context(str(data_dir_mini), config_path=str(fixtures_dir / "config.jsonc"))
     assert ctx["config_source"] == "指定"
     assert ctx["generation"]
     assert ctx["wlgroup"]
 
 
-def test_build_context_missing_explicit_file_rejected(data_dir_mini):
+def test_build_context_missing_explicit_file_rejected(data_dir_mini: Path) -> None:
+    """明示指定した係数jsoncが存在しない場合に ValueError で拒否されることを検証する。"""
     with pytest.raises(ValueError, match="dVtBudget係数jsonc が見つかりません"):
         state.build_context(str(data_dir_mini), coef_path="no/such.jsonc")
 
 
-def test_build_context_in_dir_discovery_still_works(tmp_path, data_dir_mini, dvtbudget_coef_path):
+def test_build_context_in_dir_discovery_still_works(
+    tmp_path: Path, data_dir_mini: Path, dvtbudget_coef_path: Path
+) -> None:
+    """測定ディレクトリ内に置かれた係数jsoncが自動検出されることを検証する。"""
     d = tmp_path / "run"
     shutil.copytree(data_dir_mini, d)
     shutil.copy(dvtbudget_coef_path, d / "dvtbudget_coef.jsonc")
@@ -643,13 +727,18 @@ def test_build_context_in_dir_discovery_still_works(tmp_path, data_dir_mini, dvt
 
 # ----------------------------------------------------------- generation info
 
-def test_build_context_geninfo_explicit(data_dir_mini, fixtures_dir):
+
+def test_build_context_geninfo_explicit(data_dir_mini: Path, fixtures_dir: Path) -> None:
+    """geninfo_path 明示指定で世代情報が読まれ、軸本数が得られることを検証する。"""
     ctx = state.build_context(str(data_dir_mini), geninfo_path=str(fixtures_dir / "B9LS.json"))
     assert ctx["geninfo_source"] == "指定"
     assert state.axis_counts(ctx["geninfo"]) == {"WL": 6, "STR": 3}
 
 
-def test_build_context_geninfo_discovered_via_generation(tmp_path, data_dir_mini, fixtures_dir):
+def test_build_context_geninfo_discovered_via_generation(
+    tmp_path: Path, data_dir_mini: Path, fixtures_dir: Path
+) -> None:
+    """設定ファイルの Generation 名から同名の世代情報 json が自動検出されることを検証する。"""
     d = tmp_path / "run"
     shutil.copytree(data_dir_mini, d)
     shutil.copy(fixtures_dir / "config.jsonc", d / "config.jsonc")  # Generation: B9LS
@@ -659,20 +748,22 @@ def test_build_context_geninfo_discovered_via_generation(tmp_path, data_dir_mini
     assert ctx["geninfo"]["numWLs"] == 6
 
 
-def test_build_context_missing_geninfo_rejected(data_dir_mini):
+def test_build_context_missing_geninfo_rejected(data_dir_mini: Path) -> None:
+    """明示指定した世代情報 json が存在しない場合に ValueError で拒否されることを検証する。"""
     with pytest.raises(ValueError, match="世代情報json が見つかりません"):
         state.build_context(str(data_dir_mini), geninfo_path="no/such.json")
 
 
-def test_group_def_warnings(sf):
+def test_group_def_warnings(sf: dict[str, Any]) -> None:
+    """グループ範囲の軸本数チェック: 範囲外・取りこぼしを警告し、整合時や本数不明の軸は無音であることを検証する。"""
     counts = {"WL": 6, "STR": 3}
     sf["groupDefs"]["WLgroup"] = {"axis": "WL", "groups": {"g1": [0, 3], "g2": [4, 8]}}
     warns = state.group_def_warnings(sf, counts)
-    assert any("範囲外" in w and "g2(4–8)" in w for w in warns)
+    assert any("範囲外" in w and "g2(4-8)" in w for w in warns)
 
     sf["groupDefs"]["WLgroup"]["groups"] = {"g1": [0, 3]}
     warns = state.group_def_warnings(sf, counts)
-    assert any("4–5" in w and "どのグループにも入りません" in w for w in warns)
+    assert any("4-5" in w and "どのグループにも入りません" in w for w in warns)
 
     # 範囲が本数と合っていれば無音。本数の分からない軸はチェック対象外
     sf["groupDefs"]["WLgroup"]["groups"] = {"g1": [0, 3], "g2": [4, 5]}
@@ -681,9 +772,8 @@ def test_group_def_warnings(sf):
     assert state.group_def_warnings(sf, {}) == []
 
 
-def test_data_axis_counts_and_validation_counts(data_dir_mini):
-    """本数はデータ（カタログ）由来が正。世代情報 json は補完のみで、
-    食い違いは診断警告になる。"""
+def test_data_axis_counts_and_validation_counts(data_dir_mini: Path) -> None:
+    """本数はデータ(カタログ)由来が正。世代情報 json は補完のみで、食い違いは診断警告になる。"""
     ctx = state.build_context(str(data_dir_mini))
     counts = state.data_axis_counts(ctx["catalogs"])
     assert counts["WL"] == 6  # mini データの WL 最大値 5 → 6本
@@ -698,14 +788,19 @@ def test_data_axis_counts_and_validation_counts(data_dir_mini):
     ctx["geninfo_path"] = "B9LS.json"
     assert state.validation_axis_counts(ctx)["WL"] == 6
     warns = state.geninfo_mismatch_warnings(ctx)
-    assert len(warns) == 1 and "100" in warns[0] and "6" in warns[0]
+    assert len(warns) == 1
+    assert "100" in warns[0]
+    assert "6" in warns[0]
 
 
 # ------------------------------------------------------- 設定のみ編集モード
 
-def test_load_config_only_from_run_config(fixtures_dir):
-    """設定 jsonc だけからの編集開始: データ無しで検証・編集・エクスポートに
-    必要な情報が揃うこと。"""
+
+def test_load_config_only_from_run_config(fixtures_dir: Path) -> None:
+    """設定 jsonc だけからの編集開始を検証する。
+
+    データ無しで検証・編集・エクスポートに必要な情報が揃うこと。
+    """
     text = (fixtures_dir / "config.jsonc").read_text(encoding="utf-8")
     sf, ctx = state.load_config_only(text)
     assert ctx["config_only"] is True
@@ -713,19 +808,19 @@ def test_load_config_only_from_run_config(fixtures_dir):
     assert sf["score_parts"]
     # 旧来の optimization.WLgroup も編集可能なグループ定義として取り込まれる
     assert "WLgroup" in sf["groupDefs"]
-    # カタログは設定が言及する軸名（値候補は無し = 自由入力）
+    # カタログは設定が言及する軸名(値候補は無し = 自由入力)
     assert ctx["part_types"]
     cat = ctx["catalogs"][ctx["part_types"][0]]
-    assert cat and all(v is None for v in cat.values())
+    assert cat
+    assert all(v is None for v in cat.values())
     assert not any(a.startswith("__") for a in cat)  # 仮想ステップは軸ではない
     # 検証・エクスポートはデータ非依存で動く
     assert state.validate_score_file(sf) == []
     assert state.score_file_to_jsonc(sf)
 
 
-def test_load_config_only_from_score_jsonc(sf, catalog):
-    """エクスポートした score.jsonc 形式も読める（式・グループ定義の微修正 →
-    再エクスポートの往復）。"""
+def test_load_config_only_from_score_jsonc(sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
+    """エクスポートした score.jsonc 形式も読める(式・グループ定義の微修正 → 再エクスポートの往復)。"""
     sf["score_parts"].append(state.part_skeleton("p", "FBC", catalog))
     sf["expression"] = "p"
     text = state.score_file_to_jsonc(sf)
@@ -736,7 +831,7 @@ def test_load_config_only_from_score_jsonc(sf, catalog):
     assert "p * 2" in state.score_file_to_jsonc(sf2)
 
 
-def test_is_run_config_text(fixtures_dir, sf, catalog):
+def test_is_run_config_text(fixtures_dir: Path, sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
     """①の設定を build_context の config として渡せる形式かの判定。"""
     assert state.is_run_config_text((fixtures_dir / "config.jsonc").read_text(encoding="utf-8"))
     sf["score_parts"].append(state.part_skeleton("p", "FBC", catalog))
@@ -744,9 +839,11 @@ def test_is_run_config_text(fixtures_dir, sf, catalog):
     assert not state.is_run_config_text("not json at all")
 
 
-def test_config_only_skeleton_measure_requires_input():
-    """設定のみ編集の雛形: Measure は候補が無いので value 未入力の filter になり、
-    番号を入れるまで検証エラーで促される（mean だと測定が静かに混ざるため）。"""
+def test_config_only_skeleton_measure_requires_input() -> None:
+    """設定のみ編集の雛形: Measure は候補が無いので value 未入力の filter になる。
+
+    番号を入れるまで検証エラーで促される(mean だと測定が静かに混ざるため)。
+    """
     catalog = {"Measure": None, "State": None, "Board": None}
     part = state.part_skeleton("p", "X", catalog)
     assert part["aggregations"]["Measure"] == {"op": "filter", "value": None}
@@ -756,22 +853,26 @@ def test_config_only_skeleton_measure_requires_input():
 
 # ----------------------------------------------------- アップロード入力経路
 
-def test_save_upload():
+
+def test_save_upload() -> None:
+    """アップロード保存で内容がそのまま書かれ、ファイル名のパス成分が捨てられることを検証する。"""
     from pathlib import Path
 
     p = Path(state.save_upload("config.jsonc", b"{}"))
     assert p.is_file()
     assert p.name == "config.jsonc"
     assert p.read_bytes() == b"{}"
-    # パス成分は捨てられる（アップロード名による書き込み先操作の防止）
+    # パス成分は捨てられる(アップロード名による書き込み先操作の防止)
     p2 = Path(state.save_upload("../evil.py", b"x"))
     assert p2.name == "evil.py"
 
 
-def test_dummy_zip_upload_flow(tmp_path, data_dir_mini):
-    """ダミー一式を zip でアップロードする経路（画面1）: 展開 → Board/Chip
-    複製 → 通常読み込み、が通しで動くこと。フォルダごと圧縮された zip の
-    「トップに1フォルダ」形も extract_bundle_zip が吸収する。"""
+def test_dummy_zip_upload_flow(tmp_path: Path, data_dir_mini: Path) -> None:
+    """ダミー一式を zip でアップロードする経路(画面1): 展開 → Board/Chip 複製 → 通常読み込み、が通しで動くこと。
+
+    フォルダごと圧縮された zip の「トップに1フォルダ」形も
+    extract_bundle_zip が吸収する。
+    """
     import io
     import zipfile
 
@@ -791,23 +892,29 @@ def test_dummy_zip_upload_flow(tmp_path, data_dir_mini):
 
 # --------------------------------------------------- readable error messages
 
-def test_validation_error_names_the_part(sf):
+
+def test_validation_error_names_the_part(sf: dict[str, Any]) -> None:
+    """検証エラーメッセージに問題のパーツ名が含まれることを検証する。"""
     sf["score_parts"].append(
-        {"name": "myPart", "type": "FBC", "order": ["State"],
-         "aggregations": {"State": {"op": "filter"}}}
+        {"name": "myPart", "type": "FBC", "order": ["State"], "aggregations": {"State": {"op": "filter"}}}
     )
     problems = state.validate_score_file(sf)
     assert any("パーツ 'myPart'" in p for p in problems)
 
 
-def test_import_error_names_the_part():
+def test_import_error_names_the_part() -> None:
+    """読み込みエラーメッセージに問題のパーツ名が含まれることを検証する。"""
     import json
 
     text = json.dumps(
         {
             "score_parts": [
-                {"name": "old_part", "type": "FBC", "order": ["WL"],
-                 "aggregations": {"WL": {"op": "group_reduce", "group_def": "WLgroup"}}}
+                {
+                    "name": "old_part",
+                    "type": "FBC",
+                    "order": ["WL"],
+                    "aggregations": {"WL": {"op": "group_reduce", "group_def": "WLgroup"}},
+                }
             ],
             "expression": "old_part",
         }
@@ -818,12 +925,15 @@ def test_import_error_names_the_part():
 
 # -------------------------------------------------------- custom parts / zip
 
+
 @pytest.fixture
-def custom_parts_path(fixtures_dir):
+def custom_parts_path(fixtures_dir: Path) -> Path:
+    """カスタムパーツ定義 fixtures/custom_parts.py のパスを返す。"""
     return fixtures_dir / "custom_parts.py"
 
 
-def test_build_context_custom_explicit(data_dir_mini, custom_parts_path):
+def test_build_context_custom_explicit(data_dir_mini: Path, custom_parts_path: Path) -> None:
+    """custom_path 明示指定でカスタム関数が読まれ、custom type が part_types に追加されることを検証する。"""
     ctx = state.build_context(str(data_dir_mini), custom_path=str(custom_parts_path))
     assert ctx["custom_source"] == "指定"
     assert "fixed_value" in ctx["custom_functions"]
@@ -831,12 +941,14 @@ def test_build_context_custom_explicit(data_dir_mini, custom_parts_path):
     assert "custom" not in ctx["catalogs"]  # pseudo-type, no axis catalog
 
 
-def test_build_context_without_custom_hides_type(data_dir_mini):
+def test_build_context_without_custom_hides_type(data_dir_mini: Path) -> None:
+    """custom_path 無しでは custom type が part_types に現れないことを検証する。"""
     ctx = state.build_context(str(data_dir_mini))
     assert "custom" not in ctx["part_types"]
 
 
-def test_custom_part_skeleton_and_compute(sf, data_dir_mini, custom_parts_path):
+def test_custom_part_skeleton_and_compute(sf: dict[str, Any], data_dir_mini: Path, custom_parts_path: Path) -> None:
+    """カスタムパーツの雛形が検証を通り、実データで計算できることを検証する。"""
     part = state.custom_part_skeleton("p", ["mean_fbc_plus_offset"])
     part["params"] = {"offset": 5}
     sf["score_parts"].append(part)
@@ -846,19 +958,23 @@ def test_custom_part_skeleton_and_compute(sf, data_dir_mini, custom_parts_path):
     assert isinstance(result["p"], float)
 
 
-def test_switch_part_type_strips_mismatched_fields(sf, catalog):
+def test_switch_part_type_strips_mismatched_fields(sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
+    """パーツ type を custom と通常の間で切り替えると、合わない側のフィールドが除去されることを検証する。"""
     part = state.part_skeleton("p", "FBC", catalog)
     state.switch_part_type(part, "custom")
-    assert "order" not in part and "relative" not in part and "aggregations" not in part
+    assert "order" not in part
+    assert "relative" not in part
+    assert "aggregations" not in part
     assert part["function"] == "p"
     assert state.validate_part(part) == []
     state.switch_part_type(part, "FBC")
-    assert "function" not in part and "params" not in part
+    assert "function" not in part
+    assert "params" not in part
     assert part["order"] == []
     assert state.validate_part(part) == []
 
 
-def _bundle_zip(data_dir_mini, fixtures_dir, custom_parts_path, layout) -> bytes:
+def _bundle_zip(data_dir_mini: Path, fixtures_dir: Path, custom_parts_path: Path, layout: str) -> bytes:
     """layout: arcname prefix for the measurement csvs (companions at root)."""
     import io
     import zipfile
@@ -873,35 +989,48 @@ def _bundle_zip(data_dir_mini, fixtures_dir, custom_parts_path, layout) -> bytes
     return buf.getvalue()
 
 
-def test_bundle_zip_flat_layout(data_dir_mini, fixtures_dir, custom_parts_path):
+def test_bundle_zip_flat_layout(data_dir_mini: Path, fixtures_dir: Path, custom_parts_path: Path) -> None:
     """全部1フォルダに入った形: そのフォルダ自体が測定ディレクトリになる。"""
     data = _bundle_zip(data_dir_mini, fixtures_dir, custom_parts_path, "bundle")
     found = state.locate_bundle_inputs(state.extract_bundle_zip(data))
     ctx = state.build_context(
-        found["data_dir"], found["config_path"], found["coef_path"],
-        found["geninfo_path"], found["custom_path"],
+        found["data_dir"],
+        found["config_path"],
+        found["coef_path"],
+        found["geninfo_path"],
+        found["custom_path"],
     )
     assert ctx["types"] == MINI_TYPES
     assert ctx["geninfo"]["numWLs"] == 6
     assert "custom" in ctx["part_types"]
 
 
-def test_bundle_zip_nested_layout(data_dir_mini, fixtures_dir, custom_parts_path):
-    """GUIが作る自然な構成: 測定csvは result_tmp サブフォルダ内、同梱
-    ファイルはルート — サブディレクトリも探索するのでこれも読めること。"""
+def test_bundle_zip_nested_layout(data_dir_mini: Path, fixtures_dir: Path, custom_parts_path: Path) -> None:
+    """GUIが作る自然な構成: 測定csvは result_tmp サブフォルダ内、同梱ファイルはルート。
+
+    サブディレクトリも探索するのでこれも読めること。
+    """
     data = _bundle_zip(data_dir_mini, fixtures_dir, custom_parts_path, "bundle/result_tmp")
     found = state.locate_bundle_inputs(state.extract_bundle_zip(data))
     assert found["data_dir"].endswith("result_tmp")
-    assert found["config_path"] and found["geninfo_path"] and found["custom_path"]
+    assert found["config_path"]
+    assert found["geninfo_path"]
+    assert found["custom_path"]
     ctx = state.build_context(
-        found["data_dir"], found["config_path"], found["coef_path"],
-        found["geninfo_path"], found["custom_path"],
+        found["data_dir"],
+        found["config_path"],
+        found["coef_path"],
+        found["geninfo_path"],
+        found["custom_path"],
     )
     assert ctx["types"] == MINI_TYPES
     assert "custom" in ctx["part_types"]
 
 
-def test_bundle_zip_ambiguous_data_dirs_rejected(data_dir_mini, fixtures_dir, custom_parts_path):
+def test_bundle_zip_ambiguous_data_dirs_rejected(
+    data_dir_mini: Path, fixtures_dir: Path, custom_parts_path: Path
+) -> None:
+    """測定結果ディレクトリの候補が zip 内に複数あると ValueError で拒否されることを検証する。"""
     import io
     import zipfile
 
@@ -914,9 +1043,11 @@ def test_bundle_zip_ambiguous_data_dirs_rejected(data_dir_mini, fixtures_dir, cu
         state.locate_bundle_inputs(state.extract_bundle_zip(buf.getvalue()))
 
 
-def test_in_dir_discovery_rejects_ambiguous_configs(tmp_path, data_dir_mini, fixtures_dir):
-    """設定jsoncの形に合うファイルが2つ: 黙って選ばず拒否すること
-    （以前はアルファベット順の先頭が無言で採用されていた）。"""
+def test_in_dir_discovery_rejects_ambiguous_configs(tmp_path: Path, data_dir_mini: Path, fixtures_dir: Path) -> None:
+    """設定jsoncの形に合うファイルが2つ: 黙って選ばず拒否すること。
+
+    (以前はアルファベット順の先頭が無言で採用されていた)
+    """
     import shutil as sh
 
     d = tmp_path / "run"
@@ -932,18 +1063,21 @@ def test_in_dir_discovery_rejects_ambiguous_configs(tmp_path, data_dir_mini, fix
 
 # ------------------------------------------------------------- draft / export
 
-def test_draft_path_for_sanitizes(monkeypatch, tmp_path):
-    """ユーザ名ごとの下書きパス: パス区切り等はファイル名安全な文字へ正規化
-    （名前入力によるディレクトリ脱出の防止）。"""
+
+def test_draft_path_for_sanitizes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """ユーザ名ごとの下書きパス: パス区切り等はファイル名安全な文字へ正規化(名前入力によるディレクトリ脱出の防止)。"""
     monkeypatch.setattr(state, "DRAFTS_DIR", tmp_path)
     p = state.draft_path_for("田中 ../evil")
     assert p.parent == tmp_path
     assert p.suffix == ".jsonc"
-    assert "/" not in p.name and "\\" not in p.name and ".." not in p.name
-    assert state.draft_path_for("  ") .name == "_.jsonc"  # 空相当は "_"
+    assert "/" not in p.name
+    assert "\\" not in p.name
+    assert ".." not in p.name
+    assert state.draft_path_for("  ").name == "_.jsonc"  # 空相当は "_"
 
 
-def test_draft_roundtrip(tmp_path, sf, catalog):
+def test_draft_roundtrip(tmp_path: Path, sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
+    """下書きの保存→読込の往復で ScoreFile と context_inputs が復元され、無いパスは None になることを検証する。"""
     sf["score_parts"].append(state.part_skeleton("p", "FBC", catalog))
     path = tmp_path / "draft.jsonc"
     state.save_draft(sf, {"data_dir": "somewhere"}, path)
@@ -953,8 +1087,8 @@ def test_draft_roundtrip(tmp_path, sf, catalog):
     assert state.load_draft(tmp_path / "none.jsonc") is None
 
 
-def test_draft_legacy_format_accepted(tmp_path, sf, catalog):
-    """context_inputs 導入前の旧形式（素の ScoreFile dict）の下書きも読めること。"""
+def test_draft_legacy_format_accepted(tmp_path: Path, sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
+    """context_inputs 導入前の旧形式(素の ScoreFile dict)の下書きも読めること。"""
     import json
 
     sf["score_parts"].append(state.part_skeleton("p", "FBC", catalog))
@@ -965,7 +1099,8 @@ def test_draft_legacy_format_accepted(tmp_path, sf, catalog):
     assert draft["context_inputs"] == {}
 
 
-def test_export_and_import_roundtrip(sf, catalog):
+def test_export_and_import_roundtrip(sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
+    """エクスポートした jsonc を import_score_file で読み戻すとパーツ名と式が復元されることを検証する。"""
     sf["score_parts"].append(state.part_skeleton("p", "FBC", catalog))
     sf["expression"] = "p"
     text = state.score_file_to_jsonc(sf)
@@ -974,7 +1109,8 @@ def test_export_and_import_roundtrip(sf, catalog):
     assert back["expression"] == "p"
 
 
-def test_import_run_config(fixtures_dir):
+def test_import_run_config(fixtures_dir: Path) -> None:
+    """実行 config.jsonc 形式を import_score_file が読めて score_parts が得られることを検証する。"""
     text = (fixtures_dir / "config.jsonc").read_text(encoding="utf-8")
     imported = state.import_score_file(text)
     assert imported["score_parts"]

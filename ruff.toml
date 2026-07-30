@@ -1,0 +1,178 @@
+# 社内チーム共通コンテナ(.devcontainer/ruff.toml)からの転記。独自ルールは足さない。
+
+# Exclude a variety of commonly ignored directories.
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pyenv",
+    ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "site-packages",
+    "venv",
+]
+
+# Same as Black.
+line-length = 119
+indent-width = 4
+
+# Assume Python 3.13
+target-version = "py313"
+
+[lint]
+# Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`) codes by default.
+# Unlike Flake8, Ruff doesn't enable pycodestyle warnings (`W`) or
+# McCabe complexity (`C901`) by default.
+# select = ["E4", "E7", "E9", "F"]
+select = ["ALL"]
+ignore = [
+    "COM812",  # 末尾の「,」を強制
+    "COM819",  # 末尾の「,」を禁止
+    "D100",    # 公開モジュールのdocstringを強制
+    "D203",    # Classとdocstringの間に空白行を挿入することを強制
+    "D213",    # docstringのSummary行を"""の右ではなく次の行に書くことを強制
+    "D400",    # docstringの最初の行の末尾が「.」であることを強制
+    "D415",    # docstringの最初の行の末尾が「.」「?」「!」であることを強制
+    "E111",    # 4つのスペースの倍数でないインデントを禁止
+    "E114",    # 4つのスペースの倍数でないコメントのインデントを禁止
+    "E117",    # 過度なインデントを禁止
+    "ISC001",  # 単一行の暗黙的に連結された文字列を禁止
+    "ISC002",  # 複数行の暗黙的に連結された文字列を禁止
+    "Q000",    # 一重引用符「'」を使用する文字列を禁止
+    "Q001",    # 一重引用符「'''」を使用する複数行の文字列を禁止
+    "Q003",    # 文字列内のエスケープされた引用符「\'」「\"」を禁止
+    "FIX002",  # TODOの使用を禁止
+    "TD003",   # TODOにissueリンクがないことを禁止
+    "ERA001",  # コメントアウトされたコードを禁止
+    "T201",    # printの使用を禁止
+    "TRY002",  # 標準のExceptionの使用を禁止
+]
+
+# Allow fix for all enabled rules (when `--fix`) is provided.
+fixable = ["ALL"]
+unfixable = []
+
+# Allow unused variables when underscore-prefixed.
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[format]
+# Like Black, use double quotes for strings.
+quote-style = "double"
+
+# Like Black, indent with spaces, rather than tabs.
+indent-style = "space"
+
+# Like Black, respect magic trailing commas.
+skip-magic-trailing-comma = false
+
+# Like Black, automatically detect the appropriate line ending.
+line-ending = "auto"
+
+# Enable auto-formatting of code examples in docstrings. Markdown,
+# reStructuredText code/literal blocks and doctests are all supported.
+#
+# This is currently disabled by default, but it is planned for this
+# to be opt-out in the future.
+docstring-code-format = false
+
+# Set the line length limit used when formatting code snippets in
+# docstrings.
+#
+# This only has an effect when the `docstring-code-format` setting is
+# enabled.
+docstring-code-line-length = "dynamic"
+
+# 特定ファイル/ディレクトリに関する除外設定
+[lint.per-file-ignores]
+# tests ディレクトリの除外設定(先頭6つはチーム原本のまま)
+"tests/*" = [
+    "S101",     # assertの使用を禁止
+    "INP001",   # __init__.pyの作成を強制
+    "PLC2701",  # 外部モジュールからプライベートな名前（_から始まる）のimport禁止
+    "SLF001",   # プライベートメソッド（_から始まる）の使用禁止
+    "FBT001",   # parametrize の bool 型引数
+    "FBT002",   # parametrize の bool デフォルト引数
+    # --- ここから scorelib 固有の追記(2026-07-31。TOML は同じキーを2度書けない
+    #     ためこのリストに追記する。理由は各行に明記) ---
+    "PLR2004",  # 比較に生の数値を使うことを禁止するルール。テストの期待値は
+                # 生の数値で書くのが正常な姿(定数名に隠すと期待値が読めなくなる)
+    "PLC0415",  # 関数内 import を禁止するルール。streamlit の AppTest などは
+                # テスト関数内で import するのが作法のため免除
+    "ARG001",   # 使われない引数を禁止するルール。monkeypatch で本物と差し替える
+                # フェイク関数は、本物と同じ引数並びを持つ必要がある(使わなくても)
+    "ARG005",   # 同上(lambda 版)
+    "FBT003",   # 関数呼び出しに bool をそのまま渡すことを禁止するルール。
+                # 差し替え先の関数が位置引数で bool を取る以上、合わせるしかない
+    "S603",     # subprocess 起動を「信頼できない入力かも」と警告するルール。
+                # テストが起動するのは自リポジトリの CLI・スクリプトで、引数も固定
+]
+
+# --- ここから下は scorelib 固有の追記(2026-07-31。チーム原本には無い節) ---
+# 方針: スタイル本体(整形・行長・引用符・有効ルール)はチーム設定のまま変えない。
+# ここには「ルールに従って直すこと自体が目的に反する」既存コードの免除だけを、
+# 理由つきで足す。1〜2箇所だけの例外は設定でなく行単位の noqa(理由コメント付き)
+# で容認している。
+
+# 以下5つは「1つの関数を大きくしすぎない」ためのルール群(それぞれ 分岐・ループの
+# 組み合わせ数 / if の分岐数 / 引数の個数 / 行数 / 位置引数の個数 に上限を課す)。
+# 動作中のエンジン・UI の関数をルールのためだけに分割し直すと、挙動を壊すリスク
+# だけを負うことになるので、既存コードのあるこの2ディレクトリでは免除する
+"scorelib_param/*" = [
+    "C901",     # 分岐・ループの組み合わせ数(McCabe 複雑度)の上限
+    "PLR0912",  # if/elif の分岐数の上限
+    "PLR0913",  # 引数の個数の上限
+    "PLR0915",  # 文の数(実質の行数)の上限
+    "PLR0917",  # 位置引数の個数の上限
+]
+"ui/*" = [
+    "C901",     # (上と同じ5つ)
+    "PLR0912",
+    "PLR0913",
+    "PLR0915",
+    "PLR0917",
+    "PLC0415",  # 関数内 import を禁止するルール。UI は streamlit-sortables 等の
+                # 「無くても動く」任意依存を関数内 import で受けるのが設計
+                # (docs/score_gui_design.md 8-3節)
+    "BLE001",   # except Exception を禁止するルール。UI は入力・環境起因のどんな
+                # 例外でも画面を落とさずエラー表示に変える必要があり、意図的
+]
+
+# scripts は単体実行スクリプト置き場(ブリッジ見本・計測用など)
+"scripts/*" = [
+    "INP001",   # __init__.py の作成を強制するルール。パッケージではないので持たない
+    "S603",     # subprocess 起動の警告。起動するのは自リポジトリの CLI で引数も固定
+    # 「1つの関数を大きくしすぎない」ルール群(scorelib_param/ と同じ理由:
+    # 動作しているスクリプトをルールのためだけに分割し直すリスクを避ける)
+    "C901",
+    "PLR0911",  # return 文の数の上限(この節でのみ追加。診断スクリプトの status 分岐)
+    "PLR0912",
+    "PLR0913",
+    "PLR0915",
+    "PLR0917",
+]
+
+# reference_scripts は単体実行スクリプト置き場
+"reference_scripts/*" = [
+    "INP001",  # __init__.py の作成を強制するルール。パッケージではないので持たない
+               # (チームが tests/* で INP001 を免除しているのと同じ理由)
+    "S311",    # random モジュールを「暗号用途に不適」と警告するルール。ここでの
+               # 乱数はテストデータ生成用で、暗号強度は不要
+]

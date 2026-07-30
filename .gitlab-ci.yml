@@ -25,4 +25,6 @@ test:
   script:
     - python --version
     - python -m pip install -e ".[dev]"
+    - python -m ruff check .
+    - python -m ruff format --check .
     - python -m pytest -q

@@ -14,6 +14,16 @@
 
 ## 未リリース
 
+- **コード規約をチーム共通コンテナの ruff 設定に統一**（2026-07-31。挙動・config
+  語彙の変更なし = 版数は動かさない）。コンテナの `.devcontainer/ruff.toml` を
+  リポジトリ直下 `ruff.toml` に転記し、リポジトリ全体を警告ゼロ化
+  （当初 4822 件 → 0 件）。主な変更: 全ファイル `ruff format` 整形・
+  copyright ヘッダ付与・コメント/文言の全角記号を半角化・全関数に型注釈と
+  docstring・例外メッセージの変数化・os.path → pathlib。「直すと挙動が変わる」
+  指摘は行単位 noqa（理由付き）と ruff.toml の scorelib 固有節（理由明記）で
+  容認し、将来の品質向上パスの作業リストとして残した。ruff は dev extras に
+  0.16.0 固定で追加し、CI（GitHub Actions / GitLab 下書き）に
+  `ruff check` + `ruff format --check` を組み込み
 - **ブリッジ見本（scripts/*_bridge_example.py）: config の dump 前正規化を追加**。
   現行の config ローダは読み込み時に WLgroupWeight / KLDweight 等を
   pandas Series（値は numpy 型）へ加工するため、加工済み dict の

@@ -1,48 +1,55 @@
+# Copyright (c) 2026
 """バッチ実行のオーケストレータ。
 
 「取得(fetch) → ステージング(展開・検証) → バッチ計算 → ステージング削除」を
-バッチ単位のパイプラインで回す（docs/batch_design.md 6節）:
+バッチ単位のパイプラインで回す(docs/batch_design.md 6節):
 
 - 計算中に裏で次の最大 `max_prefetch` バッチを先行取得する
-  （ディスク使用量の上限 = (1 + max_prefetch) × 1バッチ分）
-- 削除するのはステージング領域（fetch 先・展開ビュー）のみ。
-  ローカル既存データ（pass-through）は削除しない
-- fetch 手段は差し替え可能な callable（Fetcher）。デフォルトはローカル/
+  (ディスク使用量の上限 = (1 + max_prefetch) * 1バッチ分)
+- 削除するのはステージング領域(fetch 先・展開ビュー)のみ。
+  ローカル既存データ(pass-through)は削除しない
+- fetch 手段は差し替え可能な callable(Fetcher)。デフォルトはローカル/
   共有マウント済みパスの pass-through。scp 等はこのインターフェースの
   実装を1つ足すだけでよい
 """
+
 from __future__ import annotations
 
+import contextlib
 import shutil
 import sys
 import tempfile
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING
 
 import polars as pl
 
-from ..models import DvtBudgetCoefFile, RunConfig
 from .compute import BatchComputeContext, BatchResult, _result_frame, compute_score_batch
 from .history import EpochRef, enumerate_epochs
 from .staging import StagedEpoch, cleanup_epoch, stage_epoch, validate_epoch
 
+if TYPE_CHECKING:
+    from scorelib_param.models import DvtBudgetCoefFile, RunConfig
+
 DEFAULT_BATCH_SIZE = 50
 # 1 epoch の解決済みフレーム実測サイズに対する、計算中の中間結果
-# （相対化・キャッシュ点・group_by）を見込んだ安全係数
+# (相対化・キャッシュ点・group_by)を見込んだ安全係数
 MEMORY_FACTOR = 3.0
 # 推奨バッチサイズは「利用可能メモリのこの割合に収まる」ように選ぶ
 MEMORY_BUDGET_RATIO = 1 / 3
 
 # fetch の契約: (epoch参照, ステージング領域) → ローカルの epoch ディレクトリ。
-# リモート実装は staging_root 配下に取得して返すこと（計算後に削除される）。
-# ブロッキングでよい（Runner 側が並行化する）
+# リモート実装は staging_root 配下に取得して返すこと(計算後に削除される)。
+# ブロッキングでよい(Runner 側が並行化する)
 Fetcher = Callable[[EpochRef, Path], Path]
 
 
-def passthrough_fetcher(ref: EpochRef, staging_root: Path) -> Path:
-    """ローカル/共有マウント済みデータをそのまま使う（コピーも削除もしない）。"""
+# staging_root は差し替え可能な fetch 実装の共通シグネチャ(上の Fetcher 契約)。pass-through では使わない
+def passthrough_fetcher(ref: EpochRef, staging_root: Path) -> Path:  # noqa: ARG001
+    """ローカル/共有マウント済みデータをそのまま使う(コピーも削除もしない)。"""
     return ref.source_dir
 
 
@@ -50,42 +57,46 @@ class StrictBatchError(RuntimeError):
     """strict モードで不良 epoch を検出したとき送出される。"""
 
 
-def available_memory_bytes() -> Optional[int]:
-    """利用可能メモリ。Linux は /proc/meminfo（追加依存なし・古い Ubuntu でも
-    可）、それ以外は psutil があれば使用、どちらも無ければ None（advisory を
-    スキップ）。"""
+def available_memory_bytes() -> int | None:
+    """利用可能メモリを返す。
+
+    Linux は /proc/meminfo(追加依存なし・古い Ubuntu でも可)、それ以外は
+    psutil があれば使用、どちらも無ければ None(advisory をスキップ)。
+    """
     meminfo = Path("/proc/meminfo")
     if meminfo.exists():
         for line in meminfo.read_text().splitlines():
             if line.startswith("MemAvailable:"):
                 return int(line.split()[1]) * 1024
     try:
-        import psutil
+        # psutil は任意依存(無ければ except に落ちて advisory をスキップする)。あるときだけ読み込む
+        import psutil  # noqa: PLC0415
 
         return int(psutil.virtual_memory().available)
     except Exception:  # noqa: BLE001 — advisory なので静かに諦める
         return None
 
 
-def estimate_epoch_bytes(sample: StagedEpoch, run_config: RunConfig) -> Optional[int]:
-    """最初の epoch を実際に解決してメモリ足跡を実測する（advisory 用）。"""
+def estimate_epoch_bytes(sample: StagedEpoch, run_config: RunConfig) -> int | None:
+    """最初の epoch を実際に解決してメモリ足跡を実測する(advisory 用)。"""
     try:
         score_file = run_config.to_score_file()
         parts = [p for p in score_file.score_parts if p.type != "custom"]
         if not parts:
             return None
         ctx = BatchComputeContext([sample], parts, run_config.group_defs())
-        return sum(ctx.resolved(st).estimated_size() for st in ctx._union_axes)
+        # 同一パッケージ内部での意図的な利用(compute の実測サイズ見積もりを advisory に使う)
+        return sum(ctx.resolved(st).estimated_size() for st in ctx._union_axes)  # noqa: SLF001
     except Exception:  # noqa: BLE001 — 見積もり失敗は advisory を諦めるだけ
         return None
 
 
-def _advise_batch_size(
-    requested: Union[int, str], epoch_bytes: Optional[int], n_epochs: int
-) -> Tuple[int, List[str]]:
-    """batch_size の解決と助言メッセージ（docs/batch_design.md 6.3節）。
-    実行をブロックしない。"""
-    msgs: List[str] = []
+def _advise_batch_size(requested: int | str, epoch_bytes: int | None, n_epochs: int) -> tuple[int, list[str]]:
+    """batch_size の解決と助言メッセージ(docs/batch_design.md 6.3節)。
+
+    実行をブロックしない。
+    """
+    msgs: list[str] = []
     available = available_memory_bytes()
     per_epoch = int(epoch_bytes * MEMORY_FACTOR) if epoch_bytes else None
 
@@ -100,14 +111,13 @@ def _advise_batch_size(
             )
         else:
             size = DEFAULT_BATCH_SIZE
-            msgs.append(
-                f"batch-size auto: memory info unavailable, using default {size}"
-            )
+            msgs.append(f"batch-size auto: memory info unavailable, using default {size}")
         return size, msgs
 
     size = int(requested)
     if size < 1:
-        raise ValueError(f"batch_size must be >= 1, got {size}")
+        msg = f"batch_size must be >= 1, got {size}"
+        raise ValueError(msg)
     if per_epoch and available:
         needed = size * per_epoch
         if needed > available * 0.8:
@@ -132,26 +142,27 @@ class BatchRunner:
 
         runner = BatchRunner(["/path/to/expA/Step1/Loop01/result_history", ...],
                              run_config, dvtbudget_coef=coef)
-        result = runner.run()          # まとめて（scores: DataFrame, failed: dict）
+        result = runner.run()          # まとめて(scores: DataFrame, failed: dict)
         for batch in runner.run_iter():  # バッチごとに逐次受け取る
             ...
     """
 
     def __init__(
         self,
-        histories: Union[Sequence[Union[str, Path]], Mapping[str, Union[str, Path]]],
+        histories: Sequence[str | Path] | Mapping[str, str | Path],
         run_config: RunConfig,
         *,
-        dvtbudget_coef: Optional[DvtBudgetCoefFile] = None,
-        batch_size: Union[int, str] = DEFAULT_BATCH_SIZE,
+        dvtbudget_coef: DvtBudgetCoefFile | None = None,
+        batch_size: int | str = DEFAULT_BATCH_SIZE,
         max_prefetch: int = 2,
-        staging_dir: Optional[Union[str, Path]] = None,
+        staging_dir: str | Path | None = None,
         strict: bool = False,
         keep_staging: bool = False,
-        fetcher: Optional[Fetcher] = None,
-        custom_parts_path=None,
-        generation_info_path=None,
-    ):
+        fetcher: Fetcher | None = None,
+        custom_parts_path: str | Path | None = None,
+        generation_info_path: str | Path | None = None,
+    ) -> None:
+        """実行設定を保持し、ステージング領域と事前検証の必須 type を準備する。"""
         self.histories = histories
         self.run_config = run_config
         self.dvtbudget_coef = dvtbudget_coef
@@ -164,29 +175,26 @@ class BatchRunner:
         self.generation_info_path = generation_info_path
 
         self._own_staging = staging_dir is None
-        self.staging_root = Path(
-            staging_dir if staging_dir else tempfile.mkdtemp(prefix="scorelib_batch_")
-        )
+        self.staging_root = Path(staging_dir or tempfile.mkdtemp(prefix="scorelib_batch_"))
         self.staging_root.mkdir(parents=True, exist_ok=True)
 
-        from ..cli import _source_type
+        # cli 側の補助関数はこの初期化経路でのみ使うため、使うときだけ読み込む
+        from scorelib_param.cli import _source_type  # noqa: PLC0415
 
         parts = run_config.optimization.score_parts
         # vthSkip でダミー値が設定された type はファイルが無くても計算できる
-        # （compute.py が epoch ごとに埋める）ため、事前検証の必須対象から外す
+        # (compute.py が epoch ごとに埋める)ため、事前検証の必須対象から外す
         vth = run_config.optimization.vthSkip
         dummy_types = set(vth.dummy_values()) if vth else set()
-        self._required_types = sorted(
-            {_source_type(p) for p in parts if p.type != "custom"} - dummy_types
-        )
+        self._required_types = sorted({_source_type(p) for p in parts if p.type != "custom"} - dummy_types)
         self._needs_dvt = any(p.type == "dVtBudget" for p in parts)
         self._part_names = [p.name for p in parts]
 
-    # --- 1 epoch の準備（fetch → ステージング → 検証）。worker スレッドで走る ---
+    # --- 1 epoch の準備(fetch → ステージング → 検証)。worker スレッドで走る ---
 
-    def _prepare_epoch(self, ref: EpochRef) -> Tuple[StagedEpoch, Optional[Path]]:
+    def _prepare_epoch(self, ref: EpochRef) -> tuple[StagedEpoch, Path | None]:
         """戻り値: (staged, 削除すべき fetch 先ディレクトリ or None)。"""
-        fetched_dir: Optional[Path] = None
+        fetched_dir: Path | None = None
         try:
             local = Path(self.fetcher(ref, self.staging_root))
         except Exception as err:  # noqa: BLE001 — epoch 単位で理由ごと報告
@@ -201,10 +209,10 @@ class BatchRunner:
             staged.error = err
         return staged, fetched_dir
 
-    def _prepare_batch(self, refs: List[EpochRef]) -> List[Tuple[StagedEpoch, Optional[Path]]]:
+    def _prepare_batch(self, refs: list[EpochRef]) -> list[tuple[StagedEpoch, Path | None]]:
         return [self._prepare_epoch(ref) for ref in refs]
 
-    def _cleanup_batch(self, prepared: List[Tuple[StagedEpoch, Optional[Path]]]) -> None:
+    def _cleanup_batch(self, prepared: list[tuple[StagedEpoch, Path | None]]) -> None:
         if self.keep_staging:
             return
         for staged, fetched_dir in prepared:
@@ -212,8 +220,8 @@ class BatchRunner:
             if fetched_dir is not None:
                 shutil.rmtree(fetched_dir, ignore_errors=True)
 
-    def _resolve_batch_size(self, refs: List[EpochRef]) -> int:
-        # メモリ情報が取れない環境では（auto でない限り）見積もり読み込み
+    def _resolve_batch_size(self, refs: list[EpochRef]) -> int:
+        # メモリ情報が取れない環境では(auto でない限り)見積もり読み込み
         # 自体を省略する — advisory のために実データを読むのは無駄なので
         epoch_bytes = None
         if refs and (self.batch_size == "auto" or available_memory_bytes() is not None):
@@ -228,14 +236,13 @@ class BatchRunner:
 
     # --- 実行 ---
 
-    def run_iter(self):
+    def run_iter(self) -> Iterator[BatchResult]:
         """バッチごとに BatchResult を yield する。先行取得つきパイプライン。"""
         refs = enumerate_epochs(self.histories)
         size = self._resolve_batch_size(refs)
         batches = [refs[i : i + size] for i in range(0, len(refs), size)]
 
-        executor = ThreadPoolExecutor(max_workers=max(1, self.max_prefetch)) \
-            if self.max_prefetch > 0 else None
+        executor = ThreadPoolExecutor(max_workers=max(1, self.max_prefetch)) if self.max_prefetch > 0 else None
         futures: dict = {}
         try:
             for i in range(len(batches)):
@@ -255,33 +262,30 @@ class BatchRunner:
 
                 if self.strict and result.failed:
                     epoch, reason = next(iter(result.failed.items()))
-                    raise StrictBatchError(
-                        f"{len(result.failed)} epoch(s) failed (strict mode); "
-                        f"first: {epoch}: {reason}"
-                    )
+                    msg = f"{len(result.failed)} epoch(s) failed (strict mode); first: {epoch}: {reason}"
+                    raise StrictBatchError(msg)
                 yield result
         finally:
             for fut in futures.values():
                 fut.cancel()
             if executor is not None:
-                # 取得中のものは完了を待ってから片付ける（放置すると消せない）
+                # 取得中のものは完了を待ってから片付ける(放置すると消せない)
                 for fut in list(futures.values()):
                     if not fut.cancelled():
-                        try:
+                        with contextlib.suppress(Exception):
                             self._cleanup_batch(fut.result())
-                        except Exception:  # noqa: BLE001
-                            pass
                 executor.shutdown(wait=True)
             if self._own_staging and not self.keep_staging:
                 shutil.rmtree(self.staging_root, ignore_errors=True)
 
-    def _compute_prepared(
-        self, prepared: List[Tuple[StagedEpoch, Optional[Path]]]
-    ) -> BatchResult:
+    def _compute_prepared(self, prepared: list[tuple[StagedEpoch, Path | None]]) -> BatchResult:
         good = [s for s, _ in prepared if s.error is None]
         pre_failed = {s.ref.epoch_id: s.error for s, _ in prepared if s.error is not None}
         result = compute_score_batch(
-            good, self.run_config, self.dvtbudget_coef, self.custom_parts_path,
+            good,
+            self.run_config,
+            self.dvtbudget_coef,
+            self.custom_parts_path,
             generation_info_path=self.generation_info_path,
         )
         result.failed.update(pre_failed)
@@ -289,7 +293,7 @@ class BatchRunner:
 
     def run(self) -> BatchResult:
         """全バッチを実行して結果を1つに結合する。全滅時はエラー。"""
-        frames: List[pl.DataFrame] = []
+        frames: list[pl.DataFrame] = []
         failed: dict = {}
         dummy_used: dict = {}
         for batch in self.run_iter():
@@ -302,8 +306,6 @@ class BatchRunner:
             else _result_frame([], self._part_names)
         )
         if scores.height == 0 and failed:
-            raise RuntimeError(
-                f"all {len(failed)} epochs failed — nothing to return. "
-                f"first failure: {next(iter(failed.items()))}"
-            )
+            msg = f"all {len(failed)} epochs failed — nothing to return. first failure: {next(iter(failed.items()))}"
+            raise RuntimeError(msg)
         return BatchResult(scores, failed, dummy_used)

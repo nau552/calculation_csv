@@ -1,5 +1,11 @@
-"""複合軸（"State&Read_Label"）のテスト — 1つのスコアパーツ内で
-(State, Read_Label) の組に対して選択・集計する。"""
+# Copyright (c) 2026
+"""複合軸("State&Read_Label")のテスト。
+
+1つのスコアパーツ内で (State, Read_Label) の組に対して選択・集計する。
+"""
+
+from pathlib import Path
+
 import pytest
 
 from scorelib_param import io_jsonc
@@ -9,7 +15,8 @@ from scorelib_param.models import ScorePart
 
 
 @pytest.fixture
-def dvt_kwargs(dvtbudget_coef_path, data_dir_mini):
+def dvt_kwargs(dvtbudget_coef_path: Path, data_dir_mini: Path) -> dict[str, object]:
+    """パーツ計算に必要な dVtBudget の共通キーワード引数を返す。"""
     return {
         "generation": "B9LS",
         "dvtbudget_coef": io_jsonc.load_dvtbudget_coef(dvtbudget_coef_path),
@@ -26,7 +33,7 @@ _TAIL = {
 }
 
 
-def _combined_part(name, pair_agg):
+def _combined_part(name: str, pair_agg: dict[str, object]) -> ScorePart:
     return ScorePart.model_validate(
         {
             "name": name,
@@ -43,7 +50,7 @@ def _combined_part(name, pair_agg):
     )
 
 
-def _filtered_part(name, state_agg, read_label):
+def _filtered_part(name: str, state_agg: dict[str, object], read_label: str) -> ScorePart:
     return ScorePart.model_validate(
         {
             "name": name,
@@ -64,10 +71,13 @@ def _filtered_part(name, state_agg, read_label):
     )
 
 
-def test_updown_sum_equals_two_filtered_parts_added(data_dir_mini, dvt_kwargs):
-    """実際のユースケース: 上方向のBudget State（R2A, A2B）は read_level_upper1、
-    下方向（A2R, B2A）は read_level_lower1 で測り、1つのパーツに合算する。
-    以降の集計はすべて線形なので、方向別に作った2パーツの和と一致するはず。"""
+def test_updown_sum_equals_two_filtered_parts_added(data_dir_mini: Path, dvt_kwargs: dict[str, object]) -> None:
+    """実際のユースケース: 方向別のラベルで測った Budget を1パーツに合算する。
+
+    上方向のBudget State(R2A, A2B)は read_level_upper1、下方向(A2R, B2A)は
+    read_level_lower1 で測り、1つのパーツに合算する。
+    以降の集計はすべて線形なので、方向別に作った2パーツの和と一致するはず。
+    """
     combined = compute_score_part(
         data_dir_mini,
         _combined_part(
@@ -97,9 +107,8 @@ def test_updown_sum_equals_two_filtered_parts_added(data_dir_mini, dvt_kwargs):
     assert combined == pytest.approx(up + down)
 
 
-def test_pair_diff_across_labels(data_dir_mini, dvt_kwargs):
-    """diff between (R2A, upper1) and (B2A, lower1) in one part equals the
-    two filtered parts subtracted."""
+def test_pair_diff_across_labels(data_dir_mini: Path, dvt_kwargs: dict[str, object]) -> None:
+    """Diff between (R2A, upper1) and (B2A, lower1) in one part equals the two filtered parts subtracted."""
     combined = compute_score_part(
         data_dir_mini,
         _combined_part(
@@ -127,9 +136,11 @@ def test_pair_diff_across_labels(data_dir_mini, dvt_kwargs):
     assert combined == pytest.approx(a - b)
 
 
-def test_expr_updown_difference(data_dir_mini, dvt_kwargs):
-    """(up-direction sum) - (down-direction sum) via expr `by` lookups on a
-    combined axis, cross-checked against two filtered parts subtracted."""
+def test_expr_updown_difference(data_dir_mini: Path, dvt_kwargs: dict[str, object]) -> None:
+    """(up-direction sum) - (down-direction sum) via expr `by` lookups on a combined axis.
+
+    Cross-checked against two filtered parts subtracted.
+    """
     combined = compute_score_part(
         data_dir_mini,
         _combined_part(
@@ -157,26 +168,26 @@ def test_expr_updown_difference(data_dir_mini, dvt_kwargs):
     assert combined == pytest.approx(up - down)
 
 
-def test_positional_pair_list_rejected():
-    """位置指定の旧形式 ["R2A", "read_level_upper1"] は曖昧なので、
-    辞書形式への案内つきで拒否されること。"""
+def test_positional_pair_list_rejected() -> None:
+    """位置指定の旧形式 ["R2A", "read_level_upper1"] は曖昧なので、辞書形式への案内つきで拒否されること。"""
     with pytest.raises(Exception, match="dict naming its axes"):
         _combined_part("bad", {"op": "sum", "value": ["R2A", "read_level_upper1"]})
 
 
-def test_wrong_dict_keys_rejected():
+def test_wrong_dict_keys_rejected() -> None:
+    """複合軸の軸名と違うキーの辞書は拒否されることを検証する。"""
     with pytest.raises(Exception, match="expects keys"):
         _combined_part("bad", {"op": "filter", "value": {"State": "A2B", "ReadLabel": "read_level_upper1"}})
 
 
-def test_dict_selection_on_plain_axis_rejected():
+def test_dict_selection_on_plain_axis_rejected() -> None:
+    """複合軸でない軸への辞書形式の選択は拒否されることを検証する。"""
     with pytest.raises(Exception, match="only valid on combined axes"):
         _filtered_part("bad", {"op": "filter", "value": {"State": "A2B"}}, "read_level_upper1")
 
 
-def test_combined_filter_single_pair(data_dir_mini, dvt_kwargs):
-    """filter with a single (State, Read_Label) pair equals the classic
-    two-filter form."""
+def test_combined_filter_single_pair(data_dir_mini: Path, dvt_kwargs: dict[str, object]) -> None:
+    """Filter with a single (State, Read_Label) pair equals the classic two-filter form."""
     combined = compute_score_part(
         data_dir_mini,
         _combined_part("single", {"op": "filter", "value": {"State": "A2B", "Read_Label": "read_level_upper1"}}),

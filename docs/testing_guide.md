@@ -11,7 +11,7 @@
 def test_filter_then_mean():
     lf = pl.LazyFrame({"State": ["A", "A", "B"], "value": [10, 20, 30]})
     ...
-    assert 結果 == 15.0   # State=A の平均は 15 のはず
+    assert 結果 == 15.0  # State=A の平均は 15 のはず
 ```
 
 `pytest` コマンドがこれらを全部実行し、期待と違えば FAILED と表示します。効能は2つ:

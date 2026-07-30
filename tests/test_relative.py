@@ -1,3 +1,4 @@
+# Copyright (c) 2026
 import polars as pl
 import pytest
 
@@ -5,7 +6,8 @@ from scorelib_param.models import AxisAggregation, RelativeConfig
 from scorelib_param.relative import apply_relative
 
 
-def test_relative_with_denominator_pre_aggregation_and_offset():
+def test_relative_with_denominator_pre_aggregation_and_offset() -> None:
+    """分母の事前集計と offset を伴う相対化を検証する。"""
     lf = pl.LazyFrame(
         {
             "Board": [1, 1, 1, 1, 1, 1, 1, 1],
@@ -37,7 +39,8 @@ def test_relative_with_denominator_pre_aggregation_and_offset():
     assert "IsEval" not in out.columns
 
 
-def test_relative_without_pre_aggregation():
+def test_relative_without_pre_aggregation() -> None:
+    """事前集計なしの相対化を検証する。"""
     lf = pl.LazyFrame(
         {
             "Key": ["x", "x"],
@@ -51,7 +54,8 @@ def test_relative_without_pre_aggregation():
     assert out["value"][0] == pytest.approx(5.0)
 
 
-def test_enabled_true_is_silently_dropped():
+def test_enabled_true_is_silently_dropped() -> None:
+    """enabled: true は黙って無視されることを検証する。"""
     cfg = RelativeConfig.model_validate(
         {"enabled": True, "split_axis": "x", "numerator_when": True, "denominator_when": False}
     )
@@ -59,16 +63,19 @@ def test_enabled_true_is_silently_dropped():
     assert "enabled" not in cfg.model_dump()
 
 
-def test_enabled_false_is_rejected_loudly():
+def test_enabled_false_is_rejected_loudly() -> None:
+    """enabled: false が明確に拒否されることを検証する。"""
     with pytest.raises(Exception, match="enabled has been removed"):
         RelativeConfig.model_validate(
             {"enabled": False, "split_axis": "x", "numerator_when": True, "denominator_when": False}
         )
 
 
-def test_unset_numerator_or_denominator_rejected():
-    """分子/分母の未設定（None）は必ず0行マッチになる設定忘れ — 実行前に
-    明確なエラーで拒否する（UIの「設定完了まで検証エラー表示」の実体）。"""
+def test_unset_numerator_or_denominator_rejected() -> None:
+    """分子/分母の未設定(None)は必ず0行マッチになる設定忘れ。
+
+    実行前に明確なエラーで拒否する(UIの「設定完了まで検証エラー表示」の実体)。
+    """
     for side in ("numerator_when", "denominator_when"):
         cfg = {"split_axis": "Measure", "numerator_when": 1, "denominator_when": 0}
         cfg[side] = None
@@ -76,12 +83,16 @@ def test_unset_numerator_or_denominator_rejected():
             RelativeConfig.model_validate(cfg)
 
 
-def test_labels_annotation_round_trips():
-    """labels 注記（Measure 番号 → dataName の表示名）は実行に影響せず、
-    model_dump で保存内容に残ること（docs/spec_change_dataname_measure.md 6.1節）。"""
+def test_labels_annotation_round_trips() -> None:
+    """Labels 注記(Measure 番号 → dataName の表示名)は実行に影響しないこと。
+
+    model_dump で保存内容に残ること(docs/spec_change_dataname_measure.md 6.1節)。
+    """
     cfg = RelativeConfig.model_validate(
         {
-            "split_axis": "Measure", "numerator_when": 1, "denominator_when": 0,
+            "split_axis": "Measure",
+            "numerator_when": 1,
+            "denominator_when": 0,
             "labels": {"1": "evaluation_param_read_level_1", "0": "reference_param_read_level_1"},
         }
     )
@@ -91,7 +102,8 @@ def test_labels_annotation_round_trips():
     assert out["value"][0] == pytest.approx(5.0)
 
 
-def test_relative_diff_mode():
+def test_relative_diff_mode() -> None:
+    """相対化の diff モード(差を取り denominator_offset は無視)を検証する。"""
     lf = pl.LazyFrame(
         {
             "Key": ["x", "x", "y", "y"],
@@ -100,11 +112,13 @@ def test_relative_diff_mode():
         }
     )
     relative = RelativeConfig(
-        split_axis="IsEval", numerator_when=True, denominator_when=False,
+        split_axis="IsEval",
+        numerator_when=True,
+        denominator_when=False,
         mode="diff",
         denominator_offset=123.0,  # diff モードでは無視されるはず
     )
     out = apply_relative(lf, "value", relative).collect()
     result = {row["Key"]: row["value"] for row in out.to_dicts()}
-    assert result["x"] == pytest.approx(40.0)   # 50 - 10
-    assert result["y"] == pytest.approx(-2.0)   # 5 - 7
+    assert result["x"] == pytest.approx(40.0)  # 50 - 10
+    assert result["y"] == pytest.approx(-2.0)  # 5 - 7

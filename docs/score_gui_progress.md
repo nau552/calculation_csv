@@ -414,3 +414,17 @@ v0.4.0 の機能群（集計時重み・変換ステップ拡張・Physical 記�
   語彙（自動補完）は無い」を実機で答え合わせする診断
   scripts/config_vocab_diff_example.py を追加（py3.7 単体・テスト付き）。
   担当者への確認質問（自動補完がスコア語彙に及ぶか）は保留中。304件パス。
+- 追記(2026-07-31): コード規約をチーム共通コンテナの ruff 設定に統一。
+　 .devcontainer/ruff.toml(select=ALL + ignore 20個・
+  line-length 119・py313)をリポジトリ直下 ruff.toml へ転記し、全体を警告ゼロ化
+  (4822件 → 0件。format 60ファイル・自動修正・並列エージェントによる型注釈/
+  docstring/pathlib化/例外メッセージ変数化・UI文言の全角記号半角化238件を含む)。
+  「直すと挙動が変わる」指摘は方針確認の上、ruff.toml の scorelib 固有節
+  (理由明記)と行単位 noqa(理由付き)で容認 — 将来の品質向上パス(引数の束ね
+  直し→関数分割、キーワード専用化など)の作業リストとして残る。ruff 0.16.0 を
+  dev extras に固定追加、GitHub Actions / .gitlab-ci.yml 下書きに lint 検査を
+  組み込み。py3.7 ブリッジ見本は from __future__ import annotations で注釈系
+  のみ通した(実行コードは py3.7 構文のまま)。版数は動かさない(挙動・config
+  語彙の変更なし)。テスト304件パス。コンテナの ruff 版数は未確認(写真に
+  なし)、コンテナ内でこのリポジトリを開くとリポジトリ直下の ruff.toml が優先
+  される。

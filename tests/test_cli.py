@@ -1,7 +1,11 @@
+# Copyright (c) 2026
+from __future__ import annotations
+
 import json
 import math
 import subprocess
 import sys
+from typing import TYPE_CHECKING
 
 import polars as pl
 import pytest
@@ -11,28 +15,37 @@ from scorelib_param.cli import compute_score_file, compute_score_part
 from scorelib_param.dvtbudget import load_board_temperatures
 from scorelib_param.expression import evaluate_expression
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from scorelib_param.models import DvtBudgetCoefFile, RunConfig
+
 
 @pytest.fixture
-def run_config(fixtures_dir):
+def run_config(fixtures_dir: Path) -> RunConfig:
+    """tests/fixtures/config.jsonc を読み込んだ RunConfig を返す。"""
     return io_jsonc.load_run_config(fixtures_dir / "config.jsonc")
 
 
 @pytest.fixture
-def dvt_inputs(dvtbudget_coef_path, data_dir_mini):
+def dvt_inputs(dvtbudget_coef_path: Path, data_dir_mini: Path) -> dict[str, DvtBudgetCoefFile | dict[int, float]]:
+    """係数と初期温度など dVtBudget 計算に必要な入力一式を返す。"""
     return {
         "dvtbudget_coef": io_jsonc.load_dvtbudget_coef(dvtbudget_coef_path),
         "board_temperatures": load_board_temperatures(data_dir_mini / "initial_temperature.csv"),
     }
 
 
-def _expected_fbc_part(expanded_mini_dir, wlgroup):
-    """tests/fixtures/config.jsonc の FBC_A2B_upper1_rel パーツを、現行スクリプトが
-    生成した正解展開データを使って**テスト内で独立に**（eager に一歩ずつ）再計算する。
+def _expected_fbc_part(expanded_mini_dir: Path, wlgroup: dict[str, tuple[int, int]]) -> float:
+    """FBC_A2B_upper1_rel パーツをテスト内で独立に再計算する。
+
+    tests/fixtures/config.jsonc の FBC_A2B_upper1_rel パーツを、現行スクリプトが
+    生成した正解展開データを使って**テスト内で独立に**(eager に一歩ずつ)再計算する。
 
     このパーツは派生軸 WLgroup を参照しているため、グループ列は読み込み時から
     存在する扱い: 分母事前集計と相対化のペアリングもグループ内で閉じる
-    （グループ横断の分母にしたい場合は denominator_pre_aggregation に
-    WLgroup 自体を足す書き方になる）。
+    (グループ横断の分母にしたい場合は denominator_pre_aggregation に
+    WLgroup 自体を足す書き方になる)。
     """
     df = pl.read_csv(expanded_mini_dir / "FBC_expanded.csv")
     cols = ["Board", "Chip", "Block", "WL", "STR", "State", "Read_Label", "Read_Override", "FBC"]
@@ -42,14 +55,15 @@ def _expected_fbc_part(expanded_mini_dir, wlgroup):
         for name, (lo, hi) in wlgroup.items():
             if lo <= wl <= hi:
                 return name
-        raise AssertionError(f"WL {wl} not covered")
+        msg = f"WL {wl} not covered"
+        raise AssertionError(msg)
 
     df = df.with_columns(pl.col("WL").map_elements(to_group, return_dtype=pl.Utf8).alias("grp"))
 
     num = df.filter(pl.col("Read_Override")).drop("Read_Override")
     den = df.filter(~pl.col("Read_Override")).drop("Read_Override")
 
-    # 分母の事前集計: WL平均 → STR平均（grp はキーとして残り続ける）
+    # 分母の事前集計: WL平均 → STR平均(grp はキーとして残り続ける)
     den = den.group_by(["Board", "Chip", "Block", "STR", "State", "Read_Label", "grp"]).agg(pl.col("FBC").mean())
     den = den.group_by(["Board", "Chip", "Block", "State", "Read_Label", "grp"]).agg(pl.col("FBC").mean())
     den = den.rename({"FBC": "denom"})
@@ -73,17 +87,20 @@ def _expected_fbc_part(expanded_mini_dir, wlgroup):
     return rel["FBC"].max()
 
 
-def test_fbc_part_matches_independent_recomputation(expanded_mini_dir, run_config):
+def test_fbc_part_matches_independent_recomputation(expanded_mini_dir: Path, run_config: RunConfig) -> None:
+    """FBC パーツの計算がテスト内の独立再計算と一致することを検証する。"""
     part = next(p for p in run_config.optimization.score_parts if p.name == "FBC_A2B_upper1_rel")
     actual = compute_score_part(expanded_mini_dir, part, group_defs=run_config.group_defs())
     expected = _expected_fbc_part(expanded_mini_dir, run_config.optimization.WLgroup)
     assert actual == pytest.approx(expected)
 
 
-def test_group_axis_reduced_after_other_axes(expanded_mini_dir, run_config):
-    """旧 group_reduce では表現できなかったユーザシナリオ: まず WLgroup 内で
-    WL を平均し、Board/Chip/Block/STR を集約した後、**最後に** WLgroup を
-    max で潰す。"""
+def test_group_axis_reduced_after_other_axes(expanded_mini_dir: Path, run_config: RunConfig) -> None:
+    """旧 group_reduce では表現できなかったユーザシナリオを検証する。
+
+    まず WLgroup 内で WL を平均し、Board/Chip/Block/STR を集約した後、
+    **最後に** WLgroup を max で潰す。
+    """
     from scorelib_param.models import ScorePart
 
     wlgroup = run_config.optimization.WLgroup
@@ -126,20 +143,22 @@ def test_group_axis_reduced_after_other_axes(expanded_mini_dir, run_config):
     assert actual == pytest.approx(df["FBC"].max())
 
 
-def test_group_values_outside_ranges_rejected(data_dir_mini):
-    """どの範囲にも入らないデータ行が「名無し(null)グループ」として静かに
-    混ざってはならない（値一覧つきのエラーになること）。"""
+def test_group_values_outside_ranges_rejected(data_dir_mini: Path) -> None:
+    """範囲外のデータ行が静かに混ざらないことを検証する。
+
+    どの範囲にも入らないデータ行が「名無し(null)グループ」として静かに
+    混ざってはならない(値一覧つきのエラーになること)。
+    """
     from scorelib_param.models import GroupDef, ScorePart
 
-    part = ScorePart.model_validate(
-        {"name": "p", "type": "FBC", "order": ["G"], "aggregations": {"G": {"op": "max"}}}
-    )
+    part = ScorePart.model_validate({"name": "p", "type": "FBC", "order": ["G"], "aggregations": {"G": {"op": "max"}}})
     defs = {"G": GroupDef(axis="WL", groups={"g0": (0, 1)})}  # データには WL > 1 の行がある
     with pytest.raises(ValueError, match="not covered by any group"):
         compute_score_part(data_dir_mini, part, group_defs=defs)
 
 
-def test_group_def_name_clashing_with_source_axis_rejected(data_dir_mini, run_config):
+def test_group_def_name_clashing_with_source_axis_rejected(data_dir_mini: Path, run_config: RunConfig) -> None:
+    """元軸と同名のグループ定義が拒否されることを検証する。"""
     from scorelib_param.models import GroupDef, ScorePart
 
     part = ScorePart.model_validate(
@@ -150,16 +169,29 @@ def test_group_def_name_clashing_with_source_axis_rejected(data_dir_mini, run_co
         compute_score_part(data_dir_mini, part, group_defs=bad)
 
 
-def test_dvtbudget_part_is_finite(data_dir_mini, run_config, dvt_inputs):
+def test_dvtbudget_part_is_finite(
+    data_dir_mini: Path,
+    run_config: RunConfig,
+    dvt_inputs: dict[str, DvtBudgetCoefFile | dict[int, float]],
+) -> None:
+    """パーツ dVtBudget_R2A が有限値になることを検証する。"""
     part = next(p for p in run_config.optimization.score_parts if p.name == "dVtBudget_R2A")
     value = compute_score_part(
-        data_dir_mini, part, group_defs=run_config.group_defs(),
-        generation=run_config.Generation, **dvt_inputs,
+        data_dir_mini,
+        part,
+        group_defs=run_config.group_defs(),
+        generation=run_config.Generation,
+        **dvt_inputs,
     )
     assert math.isfinite(value)
 
 
-def test_compute_score_file_returns_all_parts(data_dir_mini, run_config, dvt_inputs):
+def test_compute_score_file_returns_all_parts(
+    data_dir_mini: Path,
+    run_config: RunConfig,
+    dvt_inputs: dict[str, DvtBudgetCoefFile | dict[int, float]],
+) -> None:
+    """compute_score_file が全パーツと Score を返すことを検証する。"""
     result = compute_score_file(data_dir_mini, run_config, **dvt_inputs)
     assert set(result) == {"Score", "FBC_A2B_upper1_rel", "dVtBudget_R2A"}
     expected_score = evaluate_expression(
@@ -169,7 +201,8 @@ def test_compute_score_file_returns_all_parts(data_dir_mini, run_config, dvt_inp
     assert result["Score"] == pytest.approx(expected_score)
 
 
-def test_custom_part_computes(data_dir_mini, fixtures_dir):
+def test_custom_part_computes(data_dir_mini: Path, fixtures_dir: Path) -> None:
+    """type=custom のパーツが計算され、expression に合成されることを検証する。"""
     from scorelib_param.models import RunConfig
 
     rc = RunConfig.model_validate(
@@ -178,32 +211,39 @@ def test_custom_part_computes(data_dir_mini, fixtures_dir):
             "optimization": {
                 "score_parts": [
                     {"name": "fixed_value", "type": "custom"},
-                    {"name": "shifted", "type": "custom",
-                     "function": "mean_fbc_plus_offset", "params": {"offset": 10}},
+                    {
+                        "name": "shifted",
+                        "type": "custom",
+                        "function": "mean_fbc_plus_offset",
+                        "params": {"offset": 10},
+                    },
                 ],
                 "expression": "fixed_value + shifted",
             },
         }
     )
-    result = compute_score_file(
-        data_dir_mini, rc, custom_parts_path=fixtures_dir / "custom_parts.py"
-    )
+    result = compute_score_file(data_dir_mini, rc, custom_parts_path=fixtures_dir / "custom_parts.py")
     assert result["fixed_value"] == 42.0
     df = pl.read_csv(data_dir_mini / "FBC.csv")
     assert result["shifted"] == pytest.approx(float(df["FBC"].mean()) + 10)
     assert result["Score"] == pytest.approx(result["fixed_value"] + result["shifted"])
 
 
-def test_custom_part_errors(data_dir_mini, fixtures_dir):
-    from scorelib_param.cli import SharedComputeContext
+def test_custom_part_errors(data_dir_mini: Path, fixtures_dir: Path) -> None:
+    """type=custom のエラー処理(未定義関数・非有限値・モジュール無し)を検証する。"""
     from scorelib_param.custom import (
-        CustomContext, compute_custom_part, list_custom_functions, load_custom_module,
+        CustomContext,
+        compute_custom_part,
+        list_custom_functions,
+        load_custom_module,
     )
     from scorelib_param.models import ScorePart
 
     module = load_custom_module(fixtures_dir / "custom_parts.py")
     assert list_custom_functions(module) == [
-        "broken_returns_nan", "fixed_value", "mean_fbc_plus_offset",
+        "broken_returns_nan",
+        "fixed_value",
+        "mean_fbc_plus_offset",
     ]  # _private_helper and the pl import are excluded
 
     ctx = CustomContext(data_dir=data_dir_mini)
@@ -215,27 +255,34 @@ def test_custom_part_errors(data_dir_mini, fixtures_dir):
         compute_score_part(data_dir_mini, ScorePart(name="fixed_value", type="custom"))
 
 
-def test_custom_fields_rejected_on_pipeline_parts():
+def test_custom_fields_rejected_on_pipeline_parts() -> None:
+    """type=custom 専用フィールドが他 type のパーツで拒否されることを検証する。"""
     from scorelib_param.models import ScorePart
 
     with pytest.raises(Exception, match="only valid on type='custom'"):
         ScorePart.model_validate({"name": "p", "type": "FBC", "function": "f"})
     with pytest.raises(Exception, match="takes no order"):
         ScorePart.model_validate(
-            {"name": "p", "type": "custom", "order": ["WL"],
-             "aggregations": {"WL": {"op": "mean"}}}
+            {"name": "p", "type": "custom", "order": ["WL"], "aggregations": {"WL": {"op": "mean"}}}
         )
 
 
-def test_cli_subprocess_end_to_end(data_dir_mini, fixtures_dir, dvtbudget_coef_path):
+def test_cli_subprocess_end_to_end(data_dir_mini: Path, fixtures_dir: Path, dvtbudget_coef_path: Path) -> None:
+    """CLI を subprocess で実行して JSON のスコア出力が得られることを検証する。"""
     cmd = [
-        sys.executable, "-m", "scorelib_param.cli",
-        "--config", str(fixtures_dir / "config.jsonc"),
-        "--data-dir", str(data_dir_mini),
-        "--dvtbudget-coef", str(dvtbudget_coef_path),
-        "--initial-temperature", str(data_dir_mini / "initial_temperature.csv"),
+        sys.executable,
+        "-m",
+        "scorelib_param.cli",
+        "--config",
+        str(fixtures_dir / "config.jsonc"),
+        "--data-dir",
+        str(data_dir_mini),
+        "--dvtbudget-coef",
+        str(dvtbudget_coef_path),
+        "--initial-temperature",
+        str(data_dir_mini / "initial_temperature.csv"),
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
     assert proc.returncode == 0, proc.stderr
     result = json.loads(proc.stdout)
     assert set(result) == {"Score", "FBC_A2B_upper1_rel", "dVtBudget_R2A"}

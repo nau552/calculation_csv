@@ -1,3 +1,4 @@
+# Copyright (c) 2026
 import polars as pl
 import pytest
 
@@ -5,7 +6,8 @@ from scorelib_param.aggregate import aggregate_score_part, group_column_expr
 from scorelib_param.models import AggregationSpec
 
 
-def test_filter_then_mean():
+def test_filter_then_mean() -> None:
+    """絞り込み(filter)後の mean が対象行だけで計算されることを検証する。"""
     lf = pl.LazyFrame({"State": ["A", "A", "B", "B"], "WL": [0, 1, 0, 1], "value": [10, 20, 30, 40]})
     order = ["State", "WL"]
     aggregations = {
@@ -15,7 +17,8 @@ def test_filter_then_mean():
     assert aggregate_score_part(lf, "value", order, aggregations) == pytest.approx(15.0)
 
 
-def test_two_axis_mean_collapses_fully():
+def test_two_axis_mean_collapses_fully() -> None:
+    """2軸の mean が順に適用されて1値に畳まれることを検証する。"""
     lf = pl.LazyFrame(
         {
             "Group": ["a", "a", "a", "a", "b", "b", "b", "b"],
@@ -32,45 +35,53 @@ def test_two_axis_mean_collapses_fully():
     assert aggregate_score_part(lf, "value", order, aggregations) == pytest.approx(22.5)
 
 
-def test_simple_op_with_value_list_restricts_before_reducing():
+def test_simple_op_with_value_list_restricts_before_reducing() -> None:
+    """通常 op の value リストが選択した値だけを集約することを検証する。"""
     lf = pl.LazyFrame({"STR": [0, 1, 2, 3, 4], "value": [10, 20, 30, 40, 50]})
     order = ["STR"]
     aggregations = {"STR": AggregationSpec(op="mean", value=[0, 1, 2])}
     assert aggregate_score_part(lf, "value", order, aggregations) == pytest.approx(20.0)
 
 
-def test_legacy_spellings_normalized():
+def test_legacy_spellings_normalized() -> None:
+    """旧綴り(values / *_subset op)が正規化されることを検証する。"""
     # values は value の別名として受理。*_subset op は通常opへ自動変換
     spec = AggregationSpec.model_validate({"op": "mean_subset", "values": [0, 1]})
     assert spec.op == "mean"
     assert spec.value == [0, 1]
 
 
-def test_both_value_and_values_rejected():
+def test_both_value_and_values_rejected() -> None:
+    """同時指定(value と values)は拒否されることを検証する。"""
     with pytest.raises(Exception, match="not both"):
         AggregationSpec.model_validate({"op": "mean", "value": [0], "values": [1]})
 
 
-def test_filter_accepts_single_element_list():
+def test_filter_accepts_single_element_list() -> None:
+    """要素1つのリスト filter がスカラーに畳まれることを検証する。"""
     spec = AggregationSpec(op="filter", value=["A2B"])
     assert spec.value == "A2B"
 
 
-def test_filter_accepts_multiple_selections_as_is_in():
+def test_filter_accepts_multiple_selections_as_is_in() -> None:
+    """複数要素のリスト filter が is_in 選択として保持されることを検証する。"""
     spec = AggregationSpec(op="filter", value=[0, 1])
     assert spec.value == [0, 1]
 
 
-def test_filter_rejects_empty_list_and_nested_list():
+def test_filter_rejects_empty_list_and_nested_list() -> None:
+    """空リストと入れ子リストの filter は拒否されることを検証する。"""
     with pytest.raises(Exception, match="at least one"):
         AggregationSpec(op="filter", value=[])
     with pytest.raises(Exception, match="not a nested list"):
         AggregationSpec(op="filter", value=[["A2B", "B2A"]])
 
 
-def test_filter_with_list_keeps_matching_rows_as_replicates():
-    """複数値 filter（is_in）: 該当行を残して軸列を落とす。残った行は後段の
-    集計に複製として流れ込む（sum なら選択値ぶんの行が全部足される）。"""
+def test_filter_with_list_keeps_matching_rows_as_replicates() -> None:
+    """複数値 filter(is_in): 該当行を残して軸列を落とす。
+
+    残った行は後段の集計に複製として流れ込む(sum なら選択値ぶんの行が全部足される)。
+    """
     lf = pl.LazyFrame(
         {
             "Measure": [0, 1, 2, 0, 1, 2],
@@ -87,18 +98,20 @@ def test_filter_with_list_keeps_matching_rows_as_replicates():
     assert aggregate_score_part(lf, "value", order, aggregations) == pytest.approx(33.0)
 
 
-def test_group_reduce_removed_with_guidance():
-    """group_reduce op は派生グループ軸（groupDefs + order に定義名）へ
-    置き換えられた。旧 config は新しい書き方への案内つきで失敗すること。"""
-    with pytest.raises(Exception, match="removed.*groupDefs"):
-        AggregationSpec.model_validate(
-            {"op": "group_reduce", "group_def": "g", "inner_op": "min", "outer_op": "max"}
-        )
+def test_group_reduce_removed_with_guidance() -> None:
+    """group_reduce op は派生グループ軸(groupDefs + order に定義名)へ置き換えられた。
+
+    旧 config は新しい書き方への案内つきで失敗すること。
+    """
+    with pytest.raises(Exception, match=r"removed.*groupDefs"):
+        AggregationSpec.model_validate({"op": "group_reduce", "group_def": "g", "inner_op": "min", "outer_op": "max"})
 
 
-def test_derived_group_axis_aggregates_like_a_real_axis():
-    """（_with_group_columns が読み込み時に作るのと同様の）作成済みグループ列は
-    任意の位置で潰せる: 先に WL、後からグループ間 max。"""
+def test_derived_group_axis_aggregates_like_a_real_axis() -> None:
+    """作成済みグループ列は任意の位置で潰せる: 先に WL、後からグループ間 max。
+
+    グループ列は _with_group_columns が読み込み時に作るのと同様のもの。
+    """
     lf = pl.LazyFrame({"WL": [0, 1, 2, 3], "value": [10.0, 5.0, 8.0, 20.0]})
     lf = lf.with_columns(group_column_expr("WL", {"g1": (0, 1), "g2": (2, 3)}).alias("g")).drop("WL")
     aggregations = {"g": AggregationSpec(op="max")}
@@ -107,14 +120,16 @@ def test_derived_group_axis_aggregates_like_a_real_axis():
     assert aggregate_score_part(lf, "value", ["g"], aggregations) == pytest.approx(14.0)
 
 
-def test_expr_op():
+def test_expr_op() -> None:
+    """式 op(expr)が values を使った式を評価することを検証する。"""
     lf = pl.LazyFrame({"WL": [0, 1, 2], "value": [10, 20, 30]})
     order = ["WL"]
     aggregations = {"WL": AggregationSpec(op="expr", expr="mean(values) + 1")}
     assert aggregate_score_part(lf, "value", order, aggregations) == pytest.approx(21.0)
 
 
-def test_diff_op():
+def test_diff_op() -> None:
+    """差分 op(diff)が2選択値の差をグループごとに計算することを検証する。"""
     lf = pl.LazyFrame(
         {
             "Board": [0, 0, 1, 1],
@@ -131,17 +146,20 @@ def test_diff_op():
     assert aggregate_score_part(lf, "value", order, aggregations) == pytest.approx(11.0)
 
 
-def test_diff_op_requires_two_selections():
+def test_diff_op_requires_two_selections() -> None:
+    """差分 op(diff)は選択が2つちょうどでないと拒否されることを検証する。"""
     with pytest.raises(Exception, match="exactly two"):
         AggregationSpec(op="diff", value=["R2A"])
 
 
-def test_sum_with_scalar_value_wrapped_to_list():
+def test_sum_with_scalar_value_wrapped_to_list() -> None:
+    """スカラーの value がリストに包まれることを検証する。"""
     spec = AggregationSpec(op="sum", value="R2A")
     assert spec.value == ["R2A"]
 
 
-def test_expr_op_by_lookup():
+def test_expr_op_by_lookup() -> None:
+    """式 op(expr)の by 参照がグループごとに評価されることを検証する。"""
     lf = pl.LazyFrame(
         {
             "Board": [0, 0, 0, 1, 1, 1],
@@ -158,9 +176,10 @@ def test_expr_op_by_lookup():
     assert aggregate_score_part(lf, "value", order, aggregations) == pytest.approx(9.5)
 
 
-def test_incomplete_order_raises():
+def test_incomplete_order_raises() -> None:
+    """軸の order が全軸を覆っていない場合はエラーになることを検証する。"""
     lf = pl.LazyFrame({"WL": [0, 1], "STR": [0, 1], "value": [10, 20]})
     order = ["WL"]
     aggregations = {"WL": AggregationSpec(op="mean")}
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="order did not cover all axes"):
         aggregate_score_part(lf, "value", order, aggregations)

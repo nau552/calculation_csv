@@ -1,20 +1,23 @@
-"""jsonc（`//` と `/* */` コメント・末尾カンマを許す JSON）の最小実装。
+# Copyright (c) 2026
+"""jsonc(`//` と `/* */` コメント・末尾カンマを許す JSON)の最小実装。
 
-このプロジェクトで扱う形式（sample.jsonc）は「素の JSON + コメント +
+このプロジェクトで扱う形式(sample.jsonc)は「素の JSON + コメント +
 たまに末尾カンマ」だけなので、外部ライブラリを増やさず小さな自前の
 ストリッパで済ませている。
 """
+
 from __future__ import annotations
 
 import json
 import re
 from pathlib import Path
-from typing import Any
 
 
 def strip_jsonc_comments(text: str) -> str:
-    """文字列リテラル内の `//` を壊さないよう、1文字ずつ状態を追いながら
-    コメントを除去する（正規表現一発では文字列内と区別できない）。"""
+    """文字列リテラル内の `//` を壊さないよう、1文字ずつ状態を追いながらコメントを除去する。
+
+    正規表現一発では文字列内と区別できない。
+    """
     out = []
     i = 0
     n = len(text)
@@ -52,19 +55,23 @@ def strip_jsonc_comments(text: str) -> str:
 _TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
 
 
-def loads(text: str) -> Any:
+def loads(text: str) -> object:
+    """与えられた jsonc 文字列をパースする(コメントと末尾カンマを除去して json.loads)。"""
     no_comments = strip_jsonc_comments(text)
     no_trailing_commas = _TRAILING_COMMA_RE.sub(r"\1", no_comments)
     return json.loads(no_trailing_commas)
 
 
-def load(path: str | Path) -> Any:
+def load(path: str | Path) -> object:
+    """指定パスの jsonc ファイルを読み込んでパースする。"""
     return loads(Path(path).read_text(encoding="utf-8"))
 
 
-def dump(obj: Any, path: str | Path, indent: int = 4) -> None:
+def dump(obj: object, path: str | Path, indent: int = 4) -> None:
+    """オブジェクトを JSON としてファイルへ書き出す(indent つき・非ASCIIはそのまま)。"""
     Path(path).write_text(json.dumps(obj, indent=indent, ensure_ascii=False), encoding="utf-8")
 
 
-def dumps(obj: Any, indent: int = 4) -> str:
+def dumps(obj: object, indent: int = 4) -> str:
+    """オブジェクトを JSON 文字列にする(indent つき・非ASCIIはそのまま)。"""
     return json.dumps(obj, indent=indent, ensure_ascii=False)

@@ -1,21 +1,27 @@
-"""相対値（分子/分母）計算。
+# Copyright (c) 2026
+"""相対値(分子/分母)計算。
 
-split_axis（読み込み系なら Read_Override、書き込み系なら Program_Override
-想定 — docs/score_gui_design.md 11節参照）の値で、各行を「評価側=分子」と
-「基準側=分母」に振り分ける。分母は比を取る前に一部の軸（例: WL, STR）で
-先に集計しておくこともできる（denominator_pre_aggregation）。
+split_axis(読み込み系なら Read_Override、書き込み系なら Program_Override
+想定 — docs/score_gui_design.md 11節参照)の値で、各行を「評価側=分子」と
+「基準側=分母」に振り分ける。分母は比を取る前に一部の軸(例: WL, STR)で
+先に集計しておくこともできる(denominator_pre_aggregation)。
 
-denominator_offset は比の**両辺**に加算する（(分子+o)/(分母+o)）。
+denominator_offset は比の**両辺**に加算する((分子+o)/(分母+o))。
 分母側はゼロ割防止のため、分子側は「相対値がちょうど0」だと後段の
-dVtBudget の log10 が発散するため（評価FBCが0になるのは日常的に起きる）。
+dVtBudget の log10 が発散するため(評価FBCが0になるのは日常的に起きる)。
 確認事項として docs/score_gui_design.md 11節に記録あり。
 """
+
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import polars as pl
 
 from .aggregate import apply_axis_op
-from .models import RelativeConfig
+
+if TYPE_CHECKING:
+    from .models import RelativeConfig
 
 
 def apply_relative(
@@ -23,6 +29,7 @@ def apply_relative(
     value_col: str,
     relative: RelativeConfig,
 ) -> pl.LazyFrame:
+    """split_axis の値で各行を分子/分母に振り分け、比(mode="diff" なら差)を取る。"""
     axis = relative.split_axis
 
     numerator = lf.filter(pl.col(axis) == relative.numerator_when).drop(axis)
@@ -43,11 +50,10 @@ def apply_relative(
         # 分母が1スカラーまで潰れている場合: 全行にブロードキャスト
         out = numerator.join(denominator, how="cross")
     if relative.mode == "diff":
-        # delta値: 分子 - 分母。offset は差で相殺される（(a+o)-(b+o)==a-b）
+        # delta値: 分子 - 分母。offset は差で相殺される((a+o)-(b+o)==a-b)
         # ため、単に適用しない
         combined = pl.col(value_col) - pl.col("__denom__")
     else:
         offset = relative.denominator_offset
         combined = (pl.col(value_col) + offset) / (pl.col("__denom__") + offset)
-    out = out.with_columns(combined.alias(value_col)).drop("__denom__")
-    return out
+    return out.with_columns(combined.alias(value_col)).drop("__denom__")

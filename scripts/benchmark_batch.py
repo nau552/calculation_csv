@@ -1,9 +1,10 @@
+# Copyright (c) 2026
 """実運用マシンでバッチスコア計算の所要時間・ピークメモリを実測するスクリプト。
 
-バッチサイズごとに**別プロセス**で1回ずつ計算を走らせ（ピークメモリを
-正確に測るため）、表にまとめる。結果 CSV は書かない（計測が目的）。
+バッチサイズごとに**別プロセス**で1回ずつ計算を走らせ(ピークメモリを
+正確に測るため)、表にまとめる。結果 CSV は書かない(計測が目的)。
 
-使い方（Ubuntu / Windows どちらでも可）:
+使い方(Ubuntu / Windows どちらでも可):
 
     python scripts/benchmark_batch.py \
         --config config.jsonc \
@@ -21,10 +22,11 @@
 
 注意:
 - 1回目の実行は OS のファイルキャッシュが冷えているため I/O 分だけ遅く
-  出ることがある。傾向を見るには同じサイズを2回測る（--repeat 2）とよい。
+  出ることがある。傾向を見るには同じサイズを2回測る(--repeat 2)とよい。
 - バッチサイズは主に**ピークメモリ**を決め、所要時間はほぼ変わらない
-  （epoch 数に対して線形）。CPU 使用を抑えたい場合は --max-threads を使う。
+  (epoch 数に対して線形)。CPU 使用を抑えたい場合は --max-threads を使う。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -35,10 +37,10 @@ import time
 from pathlib import Path
 
 
-def _peak_memory_gib():
-    """自プロセスのピークメモリ（working set / RSS）。取れない環境は None。"""
+def _peak_memory_gib() -> float | None:
+    """自プロセスのピークメモリ(working set / RSS)。取れない環境は None。"""
     try:
-        import resource  # Unix
+        import resource  # noqa: PLC0415 — Unix 専用モジュール。ImportError で有無を判定するため関数内で import
 
         peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         # Linux は KiB、macOS はバイト
@@ -46,15 +48,22 @@ def _peak_memory_gib():
     except ImportError:
         pass
     if sys.platform == "win32":
-        import ctypes
+        import ctypes  # noqa: PLC0415 — Windows 専用パス。該当 OS のときだけ import する
 
         class PMC(ctypes.Structure):
             _fields_ = [("cb", ctypes.c_uint32), ("PageFaultCount", ctypes.c_uint32)] + [
                 (n, ctypes.c_size_t)
-                for n in ("PeakWorkingSetSize", "WorkingSetSize",
-                          "QuotaPeakPagedPoolUsage", "QuotaPagedPoolUsage",
-                          "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage",
-                          "PagefileUsage", "PeakPagefileUsage")]
+                for n in (
+                    "PeakWorkingSetSize",
+                    "WorkingSetSize",
+                    "QuotaPeakPagedPoolUsage",
+                    "QuotaPagedPoolUsage",
+                    "QuotaPeakNonPagedPoolUsage",
+                    "QuotaNonPagedPoolUsage",
+                    "PagefileUsage",
+                    "PeakPagefileUsage",
+                )
+            ]
 
         k32 = ctypes.windll.kernel32
         k32.GetCurrentProcess.restype = ctypes.c_void_p
@@ -66,11 +75,13 @@ def _peak_memory_gib():
     return None
 
 
-def _run_one(args) -> None:
+def _run_one(args: argparse.Namespace) -> None:
     """子プロセスモード: 1つのバッチサイズで計算して結果を1行出力する。"""
-    from scorelib_param import io_jsonc
-    from scorelib_param.batch import BatchRunner
-    from scorelib_param.batch.__main__ import _parse_histories
+    # エンジンは子プロセスでだけ import する(親プロセスの起動を軽く保ち、
+    # 子プロセス単位のピークメモリ計測に親の事情を持ち込まないため)
+    from scorelib_param import io_jsonc  # noqa: PLC0415 — 上記コメントの意図的な遅延 import
+    from scorelib_param.batch import BatchRunner  # noqa: PLC0415 — 同上
+    from scorelib_param.batch.__main__ import _parse_histories  # noqa: PLC0415 — 同上
 
     config = io_jsonc.load_run_config(args.config)
     coef = io_jsonc.load_dvtbudget_coef(args.dvtbudget_coef) if args.dvtbudget_coef else None
@@ -96,22 +107,22 @@ def _run_one(args) -> None:
     )
 
 
-def main(argv=None) -> None:
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+def main(argv: list[str] | None = None) -> None:
+    """バッチサイズごとに子プロセスで1回ずつ計測し、表にまとめて表示する。"""
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", required=True)
-    parser.add_argument("--history", required=True, action="append",
-                        help="result_history directory (repeatable; 'label=path' also ok)")
+    parser.add_argument(
+        "--history", required=True, action="append", help="result_history directory (repeatable; 'label=path' also ok)"
+    )
     parser.add_argument("--dvtbudget-coef")
     parser.add_argument("--custom-parts")
-    parser.add_argument("--batch-sizes", default="auto,10,25,50",
-                        help="comma-separated sizes to test (integers and/or 'auto')")
+    parser.add_argument(
+        "--batch-sizes", default="auto,10,25,50", help="comma-separated sizes to test (integers and/or 'auto')"
+    )
     parser.add_argument("--repeat", type=int, default=1, help="measurements per size (default 1)")
     parser.add_argument("--max-prefetch", type=int, default=2)
     parser.add_argument("--staging-dir")
-    parser.add_argument("--max-threads", type=int,
-                        help="limit compute threads (sets POLARS_MAX_THREADS in each run)")
+    parser.add_argument("--max-threads", type=int, help="limit compute threads (sets POLARS_MAX_THREADS in each run)")
     parser.add_argument("--one", help=argparse.SUPPRESS)  # 内部用: 子プロセスモード
     args = parser.parse_args(argv)
 
@@ -137,12 +148,15 @@ def main(argv=None) -> None:
     for size in sizes:
         for _ in range(args.repeat):
             # ピークメモリはプロセス単位でしか正確に取れないため、
-            # 計測1回 = 子プロセス1つ（stderr には runner の advisory がそのまま出る）
+            # 計測1回 = 子プロセス1つ(stderr には runner の advisory がそのまま出る)
             proc = subprocess.run(
-                child_args + ["--one", size], env=env,
-                capture_output=True, text=True,
+                [*child_args, "--one", size],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,  # returncode は直後に自前検査する
             )
-            result_lines = [l for l in proc.stdout.splitlines() if l.startswith("RESULT\t")]
+            result_lines = [line for line in proc.stdout.splitlines() if line.startswith("RESULT\t")]
             if proc.returncode != 0 or not result_lines:
                 print(f"batch_size={size}: FAILED", file=sys.stderr)
                 sys.stderr.write(proc.stderr[-2000:] if proc.stderr else "(no stderr)\n")

@@ -1,4 +1,8 @@
-"""名前付き選択セット（optimization.selectionSets + `ref` 参照）のテスト。"""
+# Copyright (c) 2026
+"""名前付き選択セット(optimization.selectionSets + `ref` 参照)のテスト。"""
+
+from pathlib import Path
+
 import pytest
 
 from scorelib_param import io_jsonc
@@ -14,7 +18,7 @@ UPDOWN = [
 ]
 
 
-def _part(pair_agg):
+def _part(pair_agg: dict[str, object]) -> ScorePart:
     return ScorePart.model_validate(
         {
             "name": "updown",
@@ -39,7 +43,8 @@ def _part(pair_agg):
 
 
 @pytest.fixture
-def dvt_kwargs(dvtbudget_coef_path, data_dir_mini):
+def dvt_kwargs(dvtbudget_coef_path: Path, data_dir_mini: Path) -> dict[str, object]:
+    """パーツ計算に必要な dVtBudget の共通キーワード引数を返す。"""
     return {
         "generation": "B9LS",
         "dvtbudget_coef": io_jsonc.load_dvtbudget_coef(dvtbudget_coef_path),
@@ -47,7 +52,8 @@ def dvt_kwargs(dvtbudget_coef_path, data_dir_mini):
     }
 
 
-def test_ref_equals_inline(data_dir_mini, dvt_kwargs):
+def test_ref_equals_inline(data_dir_mini: Path, dvt_kwargs: dict[str, object]) -> None:
+    """参照(ref)とインライン指定で同じ値になることを検証する。"""
     inline = compute_score_part(data_dir_mini, _part({"op": "sum", "value": UPDOWN}), **dvt_kwargs)
     via_ref = compute_score_part(
         data_dir_mini,
@@ -58,8 +64,9 @@ def test_ref_equals_inline(data_dir_mini, dvt_kwargs):
     assert via_ref == pytest.approx(inline)
 
 
-def test_unknown_ref_raises(data_dir_mini, dvt_kwargs):
-    with pytest.raises(ValueError, match="unknown selection set 'nope'.*updown_pairs"):
+def test_unknown_ref_raises(data_dir_mini: Path, dvt_kwargs: dict[str, object]) -> None:
+    """未定義の ref は既知のセット名の案内つきでエラーになることを検証する。"""
+    with pytest.raises(ValueError, match=r"unknown selection set 'nope'.*updown_pairs"):
         compute_score_part(
             data_dir_mini,
             _part({"op": "sum", "ref": "nope"}),
@@ -68,19 +75,23 @@ def test_unknown_ref_raises(data_dir_mini, dvt_kwargs):
         )
 
 
-def test_ref_and_value_both_rejected():
+def test_ref_and_value_both_rejected() -> None:
+    """同時指定(ref と value)は拒否されることを検証する。"""
     with pytest.raises(Exception, match="not both"):
         AggregationSpec(op="sum", value=["R2A"], ref="some_set")
 
 
-def test_ref_on_op_without_selections_rejected():
+def test_ref_on_op_without_selections_rejected() -> None:
+    """選択を取らない op への ref 指定は拒否されることを検証する。"""
     with pytest.raises(Exception, match="not applicable"):
         AggregationSpec(op="expr", expr="mean(values)", ref="some_set")
 
 
-def test_resolved_content_is_validated(data_dir_mini, dvt_kwargs):
-    """キー名の間違ったセットは、インラインで書いた場合と同じエラーで
-    失敗すること（ref 解決後にも同じ検証が走る）。"""
+def test_resolved_content_is_validated(data_dir_mini: Path, dvt_kwargs: dict[str, object]) -> None:
+    """キー名の間違ったセットは、インラインで書いた場合と同じエラーで失敗すること。
+
+    (ref 解決後にも同じ検証が走る)
+    """
     bad_set = [{"State": "R2A", "ReadLabel": "read_level_upper1"}]
     with pytest.raises(ValueError, match="expects keys"):
         compute_score_part(
@@ -91,9 +102,11 @@ def test_resolved_content_is_validated(data_dir_mini, dvt_kwargs):
         )
 
 
-def test_run_config_selection_sets_flow(data_dir_mini, dvtbudget_coef_path):
-    """selectionSets defined in optimization{} are usable from score parts
-    via compute_score_file, and diff over a 2-element set works."""
+def test_run_config_selection_sets_flow(data_dir_mini: Path, dvtbudget_coef_path: Path) -> None:
+    """SelectionSets defined in optimization{} are usable from score parts via compute_score_file.
+
+    Diff over a 2-element set works.
+    """
     config = RunConfig.model_validate(
         {
             "Generation": "B9LS",

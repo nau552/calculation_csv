@@ -1,14 +1,13 @@
-# -*- coding: utf-8 -*-
-"""現行最適化スクリプト（Python 3.7）からバッチ計算エンジンを subprocess で
-呼ぶブリッジの実装例。
+# Copyright (c) 2026
+"""現行最適化スクリプト(Python 3.7)からバッチ計算エンジンを subprocess で呼ぶブリッジの実装例。
 
 エンジン本体は Python 3.10+ で動くため、最適化スクリプト自身の python では
 なく **scorelib_param 用の python 実行ファイル**を指定して起動する — 通常の
-gui_score CLI（python -m scorelib_param.cli）を呼ぶときと同じ方式。
+gui_score CLI(python -m scorelib_param.cli)を呼ぶときと同じ方式。
 
 このファイル自体は Python 3.7 で動く書き方にしてあり、現行スクリプトの
-過去データ活用部（BO 初期モデル構築の前処理）へコピーして使う想定。
-scorelib_param 本体には依存しない（subprocess と CSV 読みだけ）。
+過去データ活用部(BO 初期モデル構築の前処理)へコピーして使う想定。
+scorelib_param 本体には依存しない(subprocess と CSV 読みだけ)。
 
 使用例::
 
@@ -20,40 +19,50 @@ scorelib_param 本体には依存しない（subprocess と CSV 読みだけ）�
         out_csv=r"/tmp/past_scores.csv",
         dvtbudget_coef=r"/svn/scripts/dvtbudget_coef.jsonc",
         # scorelib_parent は省略可: この関数を kicOpt/ 内のスクリプトに貼れば
-        # kicOpt/（scorelib_param/ が並ぶ場所）が自動で使われる
+        # kicOpt/(scorelib_param/ が並ぶ場所)が自動で使われる
     )
     # scores: 1 epoch = 1 dict のリスト
     #   [{"Epoch": "expA/Step1/Loop01#0001", "History": "...", "EpochNo": 1,
     #     "Score": 160.4, "<パーツ名>": ..., ...}, ...]
-    # failed: {"expA/Step1/Loop01#0007": "理由", ...}（除外された epoch）
+    # failed: {"expA/Step1/Loop01#0007": "理由", ...}(除外された epoch)
     #
     # pandas で受けたい場合は out_csv をそのまま読めばよい:
     #   df = pandas.read_csv(out_csv)
 """
+
+from __future__ import annotations
+
+import contextlib
 import csv
 import json
 import os
 import subprocess
 import tempfile
+from pathlib import Path
 
 
-def _json_key(k):
-    """dict キーの JSON 化: numpy int64 等のキーを Python 型へ（json.dump は
-    str/int/float/bool/None 以外のキーを受けない。int 等は json 側が文字列化する）。"""
+def _json_key(k: object) -> object:
+    """キーを json.dump が受ける型へ変換する。
+
+    json.dump は str/int/float/bool/None 以外のキーを受けない(int 等は json 側が
+    文字列化する)ため、numpy int64 等のキーを Python 型へ戻す。
+    """
     if not isinstance(k, (str, int, float, bool)) and k is not None and hasattr(k, "item"):
         return k.item()
     return k
 
 
-def _jsonable(obj):
-    """config dict を json.dump できる形へ再帰変換する
-    （get_score_bridge_example.py と同じもの — 各ファイル単体で貼れるよう重複させている）。
+def _jsonable(obj: object) -> object:
+    """読み込み済み config dict を json.dump できる形へ再帰変換する。
 
-    現行の config ローダは読み込み時に一部の値を計算用に加工する（例:
+    get_score_bridge_example.py と同じもの — 各ファイル単体で貼れるよう重複させている。
+
+    現行の config ローダは読み込み時に一部の値を計算用に加工する(例:
     WLgroupWeight / KLDweight を {名前: 重み} の pandas Series 化、値は numpy
-    数値型）。そのままでは json.dump が失敗するため、ここで素の Python 型へ
+    数値型)。そのままでは json.dump が失敗するため、ここで素の Python 型へ
     戻す。エンジンが読むフィールドは to_dict で手書きの config と同じ形に戻り、
-    読まないフィールドは dump を壊さなければ何でもよい（読み込み時に無視）。"""
+    読まないフィールドは dump を壊さなければ何でもよい(読み込み時に無視)。
+    """
     if isinstance(obj, dict):
         return {_json_key(k): _jsonable(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple, set)):
@@ -64,56 +73,57 @@ def _jsonable(obj):
         return _jsonable(obj.to_dict())
     if hasattr(obj, "tolist"):  # numpy ndarray
         return _jsonable(obj.tolist())
-    if hasattr(obj, "item"):  # numpy スカラー（int64 / bool_ など）
+    if hasattr(obj, "item"):  # numpy スカラー(int64 / bool_ など)
         return obj.item()
-    return str(obj)  # 最後の砦（エンジンが読まないフィールドを想定）
+    return str(obj)  # 最後の砦(エンジンが読まないフィールドを想定)
 
 
-def _find_scorelib_parent():
+def _find_scorelib_parent() -> str:
     """このファイルの場所から親方向へ3階層まで scorelib_param/ を探す。
+
     例: このコードが kicOpt/optlib/ 内のスクリプトに貼られていて scorelib_param が
-    kicOpt/scorelib_param にある場合、optlib → kicOpt の順に探して見つかる。"""
-    d = os.path.dirname(os.path.abspath(__file__))
+    kicOpt/scorelib_param にある場合、optlib → kicOpt の順に探して見つかる。
+    """
+    d = Path(__file__).resolve().parent
     cand = d
     for _ in range(4):
-        if os.path.isdir(os.path.join(cand, "scorelib_param")):
-            return cand
-        parent = os.path.dirname(cand)
+        if (cand / "scorelib_param").is_dir():
+            return str(cand)
+        parent = cand.parent
         if parent == cand:
             break
         cand = parent
-    raise ValueError(
-        "scorelib_param/ not found in or above %s; pass scorelib_parent explicitly" % d
-    )
+    msg = f"scorelib_param/ not found in or above {d}; pass scorelib_parent explicitly"
+    raise ValueError(msg)
 
 
 def compute_batch_scores(
-    engine_python,      # scorelib_param が入っている python 実行ファイルのパス
-    config,             # config.jsonc の**パス**（推奨）または読み込み済みの config dict。
-                        # 現行ローダは読み込み時に dict を加工するため、元ファイルの
-                        # パスを渡すのが正（詳細は get_score_bridge_example.py の同項目）
-    histories,          # result_history ディレクトリのパスのリスト
-    out_csv,            # 結果 CSV の書き出し先
-    dvtbudget_coef=None,   # dVtBudget パーツがある場合のみ必須
-    batch_size="auto",     # "auto" 推奨（メモリから自動選択）
-    max_threads=None,      # マシンを共有する場合に CPU スレッド数を制限
-    max_prefetch=2,
-    strict=False,
-    generation_info=None,  # {Generation}.json のパス。Physical記法のグループ定義
-                           # （WLgroupDefinLogical=False）がある場合のみ必要
-                           # （各 epoch ディレクトリ内にあれば省略可）
-    scorelib_parent=None,  # scorelib_param/ を含む場所（例: kicOpt/）。省略時は
-                           # このファイルの場所から親方向に scorelib_param/ を自動探索
-    timeout=None,          # 秒。None なら無制限（数千 epoch は分単位かかる）
-):
+    engine_python: str,  # scorelib_param が入っている python 実行ファイルのパス
+    config: str | dict,  # config.jsonc の**パス**(推奨)または読み込み済みの config dict。
+    # 現行ローダは読み込み時に dict を加工するため、元ファイルの
+    # パスを渡すのが正(詳細は get_score_bridge_example.py の同項目)
+    histories: list[str],  # result_history ディレクトリのパスのリスト
+    out_csv: str,  # 結果 CSV の書き出し先
+    dvtbudget_coef: str | None = None,  # dVtBudget パーツがある場合のみ必須
+    batch_size: int | str = "auto",  # "auto" 推奨(メモリから自動選択)
+    max_threads: int | None = None,  # マシンを共有する場合に CPU スレッド数を制限
+    max_prefetch: int = 2,
+    strict: bool = False,  # noqa: FBT001, FBT002 — キーワード専用化は呼び出し側の変更を伴うため見送り
+    generation_info: str | None = None,  # {Generation}.json のパス。Physical記法のグループ定義
+    # (WLgroupDefinLogical=False)がある場合のみ必要
+    # (各 epoch ディレクトリ内にあれば省略可)
+    scorelib_parent: str | None = None,  # scorelib_param/ を含む場所(例: kicOpt/)。省略時は
+    # このファイルの場所から親方向に scorelib_param/ を自動探索
+    timeout: float | None = None,  # 秒。None なら無制限(数千 epoch は分単位かかる)
+) -> tuple[list[dict], dict[str, str]]:
     """バッチ計算 CLI を subprocess で起動し、(scores, failed) を返す。
 
-    - scores: epoch ごとの dict のリスト（数値列は float/int に変換済み）
-    - failed: {Epoch: 理由}。skip-and-report で除外された epoch（空 dict なら全成功）
-    - config に dict を渡した場合は一時ファイル経由で CLI へ渡す（エンジンは
-      Generation / optimization 以外のキーを無視する）
-    - エンジンの進捗・警告（batch-size advisory 等）は <out_csv>.log に保存される
-    - 失敗（returncode != 0）は RuntimeError（ログ末尾つき）
+    - scores: epoch ごとの dict のリスト(数値列は float/int に変換済み)
+    - failed: {Epoch: 理由}。skip-and-report で除外された epoch(空 dict なら全成功)
+    - config に dict を渡した場合は一時ファイル経由で CLI へ渡す(エンジンは
+      Generation / optimization 以外のキーを無視する)
+    - エンジンの進捗・警告(batch-size advisory 等)は <out_csv>.log に保存される
+    - 失敗(returncode != 0)は RuntimeError(ログ末尾つき)
     """
     if scorelib_parent is None:
         scorelib_parent = _find_scorelib_parent()
@@ -123,19 +133,25 @@ def compute_batch_scores(
         if isinstance(config, dict):
             fd, tmp_config = tempfile.mkstemp(suffix=".jsonc", prefix="scorelib_cfg_")
             with os.fdopen(fd, "w") as f:
-                # ローダ加工済みの dict（pandas Series / numpy 型入り）でも
-                # 書き出せるよう正規化してから dump（JSON は jsonc として妥当）
+                # ローダ加工済みの dict(pandas Series / numpy 型入り)でも
+                # 書き出せるよう正規化してから dump(JSON は jsonc として妥当)
                 json.dump(_jsonable(config), f)
             config_path = tmp_config
         else:
             config_path = config
 
         cmd = [
-            engine_python, "-m", "scorelib_param.batch",
-            "--config", config_path,
-            "--out", out_csv,
-            "--batch-size", str(batch_size),
-            "--max-prefetch", str(max_prefetch),
+            engine_python,
+            "-m",
+            "scorelib_param.batch",
+            "--config",
+            config_path,
+            "--out",
+            out_csv,
+            "--batch-size",
+            str(batch_size),
+            "--max-prefetch",
+            str(max_prefetch),
         ]
         for h in histories:
             cmd += ["--history", h]
@@ -149,35 +165,34 @@ def compute_batch_scores(
             cmd += ["--generation-info", generation_info]
 
         # cwd は変えず、PYTHONPATH で scorelib_param を見つけさせる
-        # （呼び出し側が相対パスを渡しても壊れないように）
+        # (呼び出し側が相対パスを渡しても壊れないように)
         env = dict(os.environ)
         env["PYTHONPATH"] = scorelib_parent + os.pathsep + env.get("PYTHONPATH", "")
 
-        # stderr（版数表示・advisory・進捗・除外理由）はログファイルへ保存する。
+        # stderr(版数表示・advisory・進捗・除外理由)はログファイルへ保存する。
         # コンソールで直接見たい場合は stderr=None にして継承させてもよい
         log_path = out_csv + ".log"
-        with open(log_path, "w") as log:
-            proc = subprocess.run(  # noqa: S603 — 固定コマンド
-                cmd, env=env,
-                stdout=log, stderr=subprocess.STDOUT,
+        with Path(log_path).open("w") as log:
+            proc = subprocess.run(
+                cmd,
+                env=env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
                 timeout=timeout,
+                check=False,  # returncode は直後に自前検査する
             )
         if proc.returncode != 0:
-            with open(log_path) as f:
+            with Path(log_path).open() as f:
                 tail = "".join(f.readlines()[-15:])
-            raise RuntimeError(
-                "scorelib_param.batch failed (exit %d). log tail (%s):\n%s"
-                % (proc.returncode, log_path, tail)
-            )
+            msg = f"scorelib_param.batch failed (exit {proc.returncode}). log tail ({log_path}):\n{tail}"
+            raise RuntimeError(msg)
     finally:
         if tmp_config is not None:
-            try:
-                os.unlink(tmp_config)
-            except OSError:
-                pass
+            with contextlib.suppress(OSError):
+                Path(tmp_config).unlink()
 
     scores = []
-    with open(out_csv, newline="") as f:
+    with Path(out_csv).open(newline="") as f:
         for row in csv.DictReader(f):
             parsed = {}
             for key, value in row.items():
@@ -191,24 +206,25 @@ def compute_batch_scores(
 
     failed = {}
     failed_csv = out_csv + ".failed.csv"
-    if os.path.exists(failed_csv):
-        with open(failed_csv, newline="") as f:
+    if Path(failed_csv).exists():
+        with Path(failed_csv).open(newline="") as f:
             for row in csv.DictReader(f):
                 failed[row["Epoch"]] = row["reason"]
     return scores, failed
 
 
 if __name__ == "__main__":
-    # 動作確認用の最小実行（リポジトリ内のミニデータを使う場合の例）:
+    # 動作確認用の最小実行(リポジトリ内のミニデータを使う場合の例):
     #   python scripts/batch_bridge_example.py <engine_python> <scorelib_parent> \
     #       <config.jsonc> <result_history> <out.csv> [dvtbudget_coef.jsonc]
     import sys
 
-    engine, parent, config_arg, history, out = sys.argv[1:6]
-    coef = sys.argv[6] if len(sys.argv) > 6 else None
+    COEF_ARG_INDEX = 6  # dvtbudget_coef.jsonc(任意)の argv 上の位置(その手前までが必須引数)
+    engine, parent, config_arg, history, out = sys.argv[1:COEF_ARG_INDEX]
+    coef = sys.argv[COEF_ARG_INDEX] if len(sys.argv) > COEF_ARG_INDEX else None
     scores, failed = compute_batch_scores(
         engine, config_arg, [history], out, dvtbudget_coef=coef, scorelib_parent=parent
     )
-    print("scored epochs: %d, failed: %d" % (len(scores), len(failed)))
+    print(f"scored epochs: {len(scores)}, failed: {len(failed)}")
     if scores:
         print("first row:", scores[0])

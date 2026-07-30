@@ -1,10 +1,18 @@
+# Copyright (c) 2026
 import itertools
 import random
+
 import pandas as pd
 
 
-def generate_csv(column_ranges, random_column, random_range, output_file):
-    """
+def generate_csv(
+    column_ranges: dict[str, tuple[int, int]],
+    random_column: str,
+    random_range: tuple[int, int],
+    output_file: str,
+) -> None:
+    """軸範囲の全組み合わせにランダム値列を足した csv を生成する。
+
     column_ranges:
         {
             "A": (0, 1),  # 0~1
@@ -18,17 +26,13 @@ def generate_csv(column_ranges, random_column, random_range, output_file):
     random_range:
         (min, max)
     """
-
     columns = list(column_ranges.keys())
 
-    value_lists = [
-        range(start, end + 1)
-        for start, end in column_ranges.values()
-    ]
+    value_lists = [range(start, end + 1) for start, end in column_ranges.values()]
 
     rows = []
     for values in itertools.product(*value_lists):
-        row = dict(zip(columns, values))
+        row = dict(zip(columns, values, strict=False))
         row[random_column] = random.randint(*random_range)
         rows.append(row)
 
@@ -55,5 +59,5 @@ generate_csv(
     random_column="tPROG",
     random_range=(750, 950),
     # output_file="./tests/data/result_tmp_mini/dVthSGWLD.csv"
-    output_file="./result_tmp_full_2/tPROG.csv"
+    output_file="./result_tmp_full_2/tPROG.csv",
 )

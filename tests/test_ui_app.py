@@ -1,10 +1,21 @@
-"""Streamlit AppTest によるE2Eテスト: アプリをブラウザなしで起動し、
-データ読み込み → 雛形からパーツ作成 → テスト計算までを一気通貫で検証する。"""
+# Copyright (c) 2026
+"""Streamlit AppTest によるE2Eテスト。
+
+アプリをブラウザなしで起動し、データ読み込み → 雛形からパーツ作成 →
+テスト計算までを一気通貫で検証する。
+"""
+
+from __future__ import annotations
+
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from ui import state
+
+if TYPE_CHECKING:
+    from streamlit.testing.v1 import AppTest
 
 APP = str(Path(__file__).resolve().parent.parent / "ui" / "app.py")
 MINI_TYPES = ["FBC", "KLD", "PROGLOOP", "PROGSTATUS", "dVthSGWLD", "tPROG", "tR"]
@@ -15,12 +26,13 @@ SCREEN_TEST = "5. テスト実行・エクスポート"
 
 
 @pytest.fixture
-def at(tmp_path, monkeypatch):
+def at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppTest:
+    """AppTest でアプリを起動して返す。"""
     apptest = pytest.importorskip("streamlit.testing.v1").AppTest
     # ユーザの実際の下書きファイルに触れないよう保存先を差し替える
     monkeypatch.setattr(state, "DRAFTS_DIR", tmp_path / "drafts")
     # AppTest は file_uploader を操作できないため、開発者モード
-    # （パス指定トグル）でテストする。一般ユーザ表示のテストは
+    # (パス指定トグル)でテストする。一般ユーザ表示のテストは
     # test_paths_hidden_without_dev_option が env を消して確認する
     monkeypatch.setenv("SCORELIB_UI_DEV", "1")
     t = apptest.from_file(APP, default_timeout=60)
@@ -29,7 +41,7 @@ def at(tmp_path, monkeypatch):
     return t
 
 
-def _load_data(at, data_dir):
+def _load_data(at: AppTest, data_dir: Path) -> None:
     # アップロードは AppTest から操作できないため「サーバ上のパスで指定」を使う
     at.toggle(key="paths_mode").set_value(True).run()
     at.text_input(key="data_dir_input").set_value(str(data_dir))
@@ -38,13 +50,16 @@ def _load_data(at, data_dir):
     assert at.session_state["context"]["types"] == MINI_TYPES
 
 
-def test_app_starts(at):
+def test_app_starts(at: AppTest) -> None:
+    """起動直後はデータ読み込み画面が選択されていることを検証する。"""
     assert at.sidebar.radio(key="screen").value == "1. データ読み込み"
 
 
-def test_load_without_inputs_shows_error(at):
-    """アップロードモード（既定）で何も入れずに読み込み → zip を促すエラー。
-    パスモードではパス入力を促すエラー。"""
+def test_load_without_inputs_shows_error(at: AppTest) -> None:
+    """アップロードモード(既定)で何も入れずに読み込み → zip を促すエラー。
+
+    パスモードではパス入力を促すエラー。
+    """
     at.button(key="load_btn").click().run()
     assert not at.exception
     assert any("アップロードしてください" in e.value for e in at.error)
@@ -54,9 +69,12 @@ def test_load_without_inputs_shows_error(at):
     assert any("入力してください" in e.value for e in at.error)
 
 
-def test_paths_hidden_without_dev_option(at, monkeypatch):
-    """一般ユーザ向けの起動（--dev / SCORELIB_UI_DEV 無し）ではパス指定の
-    トグル自体が存在せず、画面はアップロードのみ。"""
+def test_paths_hidden_without_dev_option(at: AppTest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """一般ユーザ向けの起動ではパス指定が出ないことを検証する。
+
+    --dev / SCORELIB_UI_DEV 無しではパス指定のトグル自体が存在せず、
+    画面はアップロードのみ。
+    """
     monkeypatch.delenv("SCORELIB_UI_DEV", raising=False)
     at.run()
     assert not at.exception
@@ -65,7 +83,8 @@ def test_paths_hidden_without_dev_option(at, monkeypatch):
     assert any("アップロードしてください" in e.value for e in at.error)
 
 
-def test_load_bad_dir_shows_error(at):
+def test_load_bad_dir_shows_error(at: AppTest) -> None:
+    """存在しないディレクトリの読み込みがエラー表示になることを検証する。"""
     at.toggle(key="paths_mode").set_value(True).run()
     at.text_input(key="data_dir_input").set_value("no/such/dir")
     at.button(key="load_btn").click().run()
@@ -73,7 +92,8 @@ def test_load_bad_dir_shows_error(at):
     assert any("見つかりません" in e.value for e in at.error)
 
 
-def test_load_and_create_part(at, data_dir_mini):
+def test_load_and_create_part(at: AppTest, data_dir_mini: Path) -> None:
+    """データ読み込み後に雛形からパーツを作成できることを検証する。"""
     _load_data(at, data_dir_mini)
     at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
     at.button(key="add_part_btn").click().run()
@@ -84,9 +104,12 @@ def test_load_and_create_part(at, data_dir_mini):
     assert any("検証" in s.value and "OK" in s.value for s in at.success)
 
 
-def test_part_with_absent_type_shows_warning(at, data_dir_mini):
-    """データに無い type のパーツ（別実験の config 由来）: パーツは残し、
-    編集画面に警告を出す（黙って落とさない・テスト計算まで気づけない、の両方を回避）。"""
+def test_part_with_absent_type_shows_warning(at: AppTest, data_dir_mini: Path) -> None:
+    """データに無い type のパーツ(別実験の config 由来)の扱いを検証する。
+
+    パーツは残し、編集画面に警告を出す(黙って落とさない・テスト計算まで
+    気づけない、の両方を回避)。
+    """
     _load_data(at, data_dir_mini)
     # config 読み込み相当: パーツ編集画面が描画される前に score_file に入っている
     at.session_state["score_file"]["score_parts"] = [
@@ -95,11 +118,12 @@ def test_part_with_absent_type_shows_warning(at, data_dir_mini):
     at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
     assert not at.exception
     assert any("測定データがありません" in w.value for w in at.warning)
-    # パーツ自体は残る（黙って落とさない）
+    # パーツ自体は残る(黙って落とさない)
     assert at.session_state["score_file"]["score_parts"][0]["type"] == "GONE"
 
 
-def test_create_part_and_compute(at, data_dir_mini):
+def test_create_part_and_compute(at: AppTest, data_dir_mini: Path) -> None:
+    """パーツ作成からテスト計算までの流れを検証する。"""
     _load_data(at, data_dir_mini)
     at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
     at.button(key="add_part_btn").click().run()
@@ -113,9 +137,12 @@ def test_create_part_and_compute(at, data_dir_mini):
     assert len(at.dataframe) == 1  # Score + part values table
 
 
-def test_expression_insert_button_updates_input(at, data_dir_mini):
-    """パーツ名ボタンは内部 dict だけでなく、**見えている** expression 入力欄も
-    即座に更新すること（ウィジェット状態が value= を上書きするバグの回帰）。"""
+def test_expression_insert_button_updates_input(at: AppTest, data_dir_mini: Path) -> None:
+    """パーツ名ボタンが expression 入力欄を即座に更新することを検証する。
+
+    内部 dict だけでなく**見えている**入力欄も即座に更新すること
+    (ウィジェット状態が value= を上書きするバグの回帰)。
+    """
     _load_data(at, data_dir_mini)
     at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
     at.button(key="add_part_btn").click().run()
@@ -126,7 +153,8 @@ def test_expression_insert_button_updates_input(at, data_dir_mini):
     assert at.text_input(key="expr_input").value == "part_1"
 
 
-def test_part_reorder_buttons(at, data_dir_mini):
+def test_part_reorder_buttons(at: AppTest, data_dir_mini: Path) -> None:
+    """パーツの並べ替えボタンで順序が入れ替わることを検証する。"""
     _load_data(at, data_dir_mini)
     at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
     at.button(key="add_part_btn").click().run()
@@ -141,10 +169,13 @@ def test_part_reorder_buttons(at, data_dir_mini):
     assert [p["name"] for p in at.session_state["score_file"]["score_parts"]] == ["part_2", "part_1"]
 
 
-def test_load_warns_when_groups_exceed_axis_count(at, data_dir_mini, fixtures_dir):
-    """config.jsonc は WL 20 までのグループを定義しているが、mini データの WL は
-    0..5（6本）: 世代情報 json 無しでも、データ由来の本数で読み込み直後に警告が
-    出ること（本数はデータから導出 — 世代情報の入力欄は廃止済み）。"""
+def test_load_warns_when_groups_exceed_axis_count(at: AppTest, data_dir_mini: Path, fixtures_dir: Path) -> None:
+    """グループが WL 本数を超えると読み込み直後に警告が出ることを検証する。
+
+    config.jsonc は WL 20 までのグループを定義しているが、mini データの WL は
+    0..5(6本): 世代情報 json 無しでも、データ由来の本数で読み込み直後に警告が
+    出ること(本数はデータから導出 — 世代情報の入力欄は廃止済み)。
+    """
     at.toggle(key="paths_mode").set_value(True).run()
     at.text_input(key="data_dir_input").set_value(str(data_dir_mini))
     at.text_input(key="config_path_input").set_value(str(fixtures_dir / "config.jsonc"))
@@ -153,7 +184,8 @@ def test_load_warns_when_groups_exceed_axis_count(at, data_dir_mini, fixtures_di
     assert any("範囲外" in w.value for w in at.warning)
 
 
-def test_config_wlgroup_imported_as_group_def(at, data_dir_mini, fixtures_dir):
+def test_config_wlgroup_imported_as_group_def(at: AppTest, data_dir_mini: Path, fixtures_dir: Path) -> None:
+    """読み込んだ config の WLgroup がグループ定義として取り込まれることを検証する。"""
     at.toggle(key="paths_mode").set_value(True).run()
     at.text_input(key="data_dir_input").set_value(str(data_dir_mini))
     at.text_input(key="config_path_input").set_value(str(fixtures_dir / "config.jsonc"))
@@ -161,18 +193,20 @@ def test_config_wlgroup_imported_as_group_def(at, data_dir_mini, fixtures_dir):
     assert not at.exception
     gd = at.session_state["score_file"]["groupDefs"]["WLgroup"]
     assert gd["axis"] == "WL"
-    # 取り込み経路により list / tuple どちらもありうる（内部 dict の許容形）
+    # 取り込み経路により list / tuple どちらもありうる(内部 dict の許容形)
     assert list(gd["groups"]["WLgroup01"]) == [0, 3]
     # グループ定義エディタがエラーなく描画されること
     at.sidebar.radio(key="screen").set_value(SCREEN_SETS).run()
     assert not at.exception
 
 
-def test_duplicate_then_switch_keeps_parts_independent(at, data_dir_mini):
-    """それまで欠けていた「文脈切り替え」の検証パターン: パーツBを編集 →
-    Aへ切り替え → Aのデータと**表示ウィジェット**が無事なことを確認する。
-    _uid を共有していた複製バグでは、コピー同士が全ウィジェットを共有し、
-    Aの名前がBのものになり、Bで相対化を外すとAの相対化設定まで消えた。"""
+def test_duplicate_then_switch_keeps_parts_independent(at: AppTest, data_dir_mini: Path) -> None:
+    """それまで欠けていた「文脈切り替え」の検証パターン。
+
+    パーツBを編集 → Aへ切り替え → Aのデータと**表示ウィジェット**が無事な
+    ことを確認する。_uid を共有していた複製バグでは、コピー同士が全ウィジェットを
+    共有し、Aの名前がBのものになり、Bで相対化を外すとAの相対化設定まで消えた。
+    """
     _load_data(at, data_dir_mini)
     at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
     at.button(key="add_part_btn").click().run()
@@ -198,7 +232,7 @@ def test_duplicate_then_switch_keeps_parts_independent(at, data_dir_mini):
 
     # 元パーツへ切り替える: そのウィジェットが自分自身の値を表示すること。
     # 選択は uid のキー付き状態なので、同じ実行の開始時点から新しい選択が
-    # 有効（ドラッグリストの ← 編集中 マーカーはこれに依存している）
+    # 有効(ドラッグリストの ← 編集中 マーカーはこれに依存している)
     sel = next(s for s in at.selectbox if s.label == "編集するパーツ")
     sel.set_value(uid0).run()
     assert not at.exception
@@ -212,9 +246,12 @@ def test_duplicate_then_switch_keeps_parts_independent(at, data_dir_mini):
     assert not at.error
 
 
-def test_relative_off_removes_explicit_step_via_ui(at, data_dir_mini):
-    """相対化を ON にし、専用ボタンで __relative__ を order に置いてから OFF に
-    する: パーツは検証OKのままであること（孤児ステップが残らない）。"""
+def test_relative_off_removes_explicit_step_via_ui(at: AppTest, data_dir_mini: Path) -> None:
+    """相対化 OFF で孤児ステップが残らないことを検証する。
+
+    相対化を ON にし、専用ボタンで __relative__ を order に置いてから OFF に
+    する: パーツは検証OKのままであること(孤児ステップが残らない)。
+    """
     _load_data(at, data_dir_mini)
     at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
     at.button(key="add_part_btn").click().run()
@@ -231,19 +268,24 @@ def test_relative_off_removes_explicit_step_via_ui(at, data_dir_mini):
     assert not at.error
 
 
-def test_dummy_expand_flow_end_to_end(at, tmp_path, data_dir_mini, dvtbudget_coef_path):
-    """画面1のダミー展開 → 雛形作成 → 相対化ON（Measure 分割の既定値と
-    labels 注記）→ テスト計算、まで一気通貫（docs/spec_change_dataname_measure.md
-    プラン4の実体）。"""
+def test_dummy_expand_flow_end_to_end(
+    at: AppTest, tmp_path: Path, data_dir_mini: Path, dvtbudget_coef_path: Path
+) -> None:
+    """ダミー展開からテスト計算までを一気通貫で検証する。
+
+    画面1のダミー展開 → 雛形作成 → 相対化ON(Measure 分割の既定値と
+    labels 注記)→ テスト計算、まで一気通貫(docs/spec_change_dataname_measure.md
+    プラン4の実体)。
+    """
     from scorelib_param.dummy import make_pseudo_dummy
 
     pseudo = make_pseudo_dummy(data_dir_mini, tmp_path / "pseudo")
     at.toggle(key="paths_mode").set_value(True).run()
-    at.radio(key="data_mode").set_value("ダミー（測定前）").run()
+    at.radio(key="data_mode").set_value("ダミー(測定前)").run()
     at.text_input(key="dummy_dir_input").set_value(str(pseudo))
     at.number_input(key="dummy_boards").set_value(2)
     at.text_input(key="dummy_chips").set_value("2,3")
-    # ダミーでも係数を渡せる（実測パスモードと同じ2欄 — dVtBudget の構造テスト用）
+    # ダミーでも係数を渡せる(実測パスモードと同じ2欄 — dVtBudget の構造テスト用)
     at.text_input(key="coef_path_input").set_value(str(dvtbudget_coef_path))
     at.button(key="load_btn").click().run()
     assert not at.exception
@@ -262,7 +304,7 @@ def test_dummy_expand_flow_end_to_end(at, tmp_path, data_dir_mini, dvtbudget_coe
     part = at.session_state["score_file"]["score_parts"][0]
     assert part["relative"]["split_axis"] == "Measure"
     assert part["relative"]["numerator_when"] == 1
-    # エディタ描画時に dataName の labels 注記が付く（6.1節）
+    # エディタ描画時に dataName の labels 注記が付く(6.1節)
     assert part["relative"]["labels"]["1"] == "evaluation_param_read_level_1"
 
     at.sidebar.radio(key="screen").set_value(SCREEN_TEST).run()
@@ -274,11 +316,14 @@ def test_dummy_expand_flow_end_to_end(at, tmp_path, data_dir_mini, dvtbudget_coe
     assert len(at.dataframe) == 1
 
 
-def test_config_only_editing_flow(at, fixtures_dir):
-    """設定のみ編集: 設定から導出した context で画面2（パーツ編集）が開き、
-    画面5 のテスト計算はディレクトリ未入力の明確なエラーになる
-    （file_uploader は AppTest から操作できないため、読み込み自体は
-    state.load_config_only の単体テストでカバーし、ここでは注入する）。"""
+def test_config_only_editing_flow(at: AppTest, fixtures_dir: Path) -> None:
+    """設定のみ編集のフローを検証する。
+
+    設定から導出した context で画面2(パーツ編集)が開き、画面5 のテスト計算は
+    ディレクトリ未入力の明確なエラーになる(file_uploader は AppTest から
+    操作できないため、読み込み自体は state.load_config_only の単体テストで
+    カバーし、ここでは注入する)。
+    """
     text = (fixtures_dir / "config.jsonc").read_text(encoding="utf-8")
     sf, ctx = state.load_config_only(text)
     at.session_state["score_file"] = sf
@@ -296,7 +341,7 @@ def test_config_only_editing_flow(at, fixtures_dir):
     assert any("データディレクトリを入力" in e.value for e in at.error)
 
 
-def test_custom_part_end_to_end(at, data_dir_mini, fixtures_dir):
+def test_custom_part_end_to_end(at: AppTest, data_dir_mini: Path, fixtures_dir: Path) -> None:
     """custom_parts.py 付きで読み込み、type=custom パーツを作成して計算する。"""
     at.toggle(key="paths_mode").set_value(True).run()
     at.text_input(key="data_dir_input").set_value(str(data_dir_mini))
@@ -327,7 +372,8 @@ def test_custom_part_end_to_end(at, data_dir_mini, fixtures_dir):
     assert len(at.dataframe) == 1
 
 
-def test_undo_reverts_last_action(at, data_dir_mini):
+def test_undo_reverts_last_action(at: AppTest, data_dir_mini: Path) -> None:
+    """「元に戻す」(undo)が直前の操作を取り消すことを検証する。"""
     _load_data(at, data_dir_mini)
     at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
     at.button(key="add_part_btn").click().run()
@@ -337,9 +383,13 @@ def test_undo_reverts_last_action(at, data_dir_mini):
     assert at.session_state["score_file"]["score_parts"] == []
 
 
-def test_draft_autosaved_and_restored(at, data_dir_mini, dvtbudget_coef_path, tmp_path):
-    """下書きは**名前ごと**に保存・復元される（共用サーバで他人と混ざらない）。
-    名前未入力の間は自動保存されない。"""
+def test_draft_autosaved_and_restored(
+    at: AppTest, data_dir_mini: Path, dvtbudget_coef_path: Path, tmp_path: Path
+) -> None:
+    """下書きは**名前ごと**に保存・復元される(共用サーバで他人と混ざらない)。
+
+    名前未入力の間は自動保存されない。
+    """
     # 名前未入力のまま編集 → 保存されない
     at.toggle(key="paths_mode").set_value(True).run()
     at.text_input(key="data_dir_input").set_value(str(data_dir_mini))
