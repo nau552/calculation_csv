@@ -148,6 +148,29 @@ def _load_custom_module(run_config: RunConfig, custom_parts_path: str | Path | N
     return custom.load_custom_module(path)
 
 
+def _require_custom_module(part: ScorePart, custom_module: ModuleType | None) -> ModuleType:
+    """読み込み済みの custom_parts モジュールを返す(custom パーツ計算前の防御)。
+
+    custom パーツがあれば _load_custom_module が module を返している
+    (ファイルが無ければその場で raise 済み)ため、到達しないパスの防御。
+
+    Returns:
+        読み込み済みの custom_parts モジュール(型の narrowing 用にそのまま返す)。
+
+    Raises:
+        ValueError: custom パーツがあるのに custom_parts モジュールが
+            読み込まれていないとき。
+
+    """
+    if custom_module is None:
+        msg = (
+            f"score part '{part.name}' has type='{CUSTOM_TYPE}' but no custom "
+            f"parts file was loaded (expected {custom.default_custom_parts_path()})"
+        )
+        raise ValueError(msg)
+    return custom_module
+
+
 def _epoch_row(se: StagedEpoch) -> dict[str, object]:
     return {
         EPOCH_COL: se.ref.epoch_id,
@@ -277,6 +300,7 @@ def compute_score_batch(
     try:
         for part in score_file.score_parts:
             if part.type == CUSTOM_TYPE:
+                module = _require_custom_module(part, custom_module)
                 # custom パーツは data_dir 前提の関数なので epoch ごとに呼ぶ
                 values: dict[str, float] = {}
                 for se in epochs:
@@ -285,7 +309,7 @@ def compute_score_batch(
                     try:
                         values[se.ref.epoch_id] = custom.compute_custom_part(
                             part,
-                            custom_module,
+                            module,
                             custom.CustomContext(
                                 data_dir=se.data_dir,
                                 generation=run_config.Generation,

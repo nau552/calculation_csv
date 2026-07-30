@@ -9,7 +9,7 @@ op の一覧は docs/score_gui_design.md 4.2節。
 from __future__ import annotations
 
 from itertools import starmap
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import polars as pl
 
@@ -178,7 +178,8 @@ def apply_axis_op(
 
     if spec.op == "diff":
         # 2つの選択の差で潰す: value(a) - value(b)。自分自身との結合で対にする
-        a_val, b_val = spec.value
+        # (op="diff" は pydantic の _check_value_shape が2要素リストを保証)
+        a_val, b_val = cast("list[Any]", spec.value)
         a = lf.filter(pl.col(axis) == a_val).drop(axis)
         b = lf.filter(pl.col(axis) == b_val).drop(axis).rename({value_col: "__b__"})
         keys = list(group_keys)
@@ -189,6 +190,8 @@ def apply_axis_op(
         if not spec.expr:
             msg = f"expr op for axis '{axis}' requires 'expr'"
             raise ValueError(msg)
+        # ネスト関数の閉包にはローカル変数の narrowing だけが届く(spec.expr のままだと届かない)
+        expr = spec.expr
 
         def _eval(vals: list, axis_vals: list) -> float:
             # 式の中では values(この軸の全値のリスト)と by[軸の値] が使える
@@ -201,7 +204,7 @@ def apply_axis_op(
                     )
                     raise ValueError(msg)
                 by[k] = v
-            return evaluate_expression(spec.expr, {"values": vals, "by": by})
+            return evaluate_expression(expr, {"values": vals, "by": by})
 
         if group_keys:
             df = lf.group_by(list(group_keys)).agg([pl.col(value_col), pl.col(axis)]).collect()

@@ -19,6 +19,7 @@ from pydantic import ValidationError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from collections.abc import Set as AbstractSet
 
 from scorelib_param import custom as scorelib_custom
 from scorelib_param import introspect, io_jsonc, jsonc
@@ -120,7 +121,7 @@ def unique_part_name(score_file: dict[str, Any], base: str = "part") -> str:
 # ------------------------------------------------------------------ 雛形生成
 
 
-def default_axis_order(catalog: dict[str, list | None], exclude: set[str] = frozenset()) -> list[str]:
+def default_axis_order(catalog: dict[str, list | None], exclude: AbstractSet[str] = frozenset()) -> list[str]:
     """雛形の軸順を決める。
 
     Label系 → Override系 → その他カテゴリ(State, Page, ...)
@@ -193,7 +194,8 @@ def _typed_skeleton(name: str, type_: str, catalog: dict[str, list | None]) -> d
         対象外の type や SGWLD 軸の無い catalog では None。
 
     """
-    if type_ not in {"KLD", "dVthSGWLD"} or not catalog.get("SGWLD"):
+    sgwld = catalog.get("SGWLD")
+    if type_ not in {"KLD", "dVthSGWLD"} or not sgwld:
         return None
     if type_ == "KLD":
         mean_axes = [a for a in ("Board", "Chip") if a in catalog]
@@ -206,9 +208,9 @@ def _typed_skeleton(name: str, type_: str, catalog: dict[str, list | None]) -> d
         order = [*mean_axes, "__abs__", "SGWLD"]
         aggregations = {a: {"op": "mean"} for a in mean_axes}
         aggregations["__abs__"] = {"op": "abs"}
-        kept = [v for v in catalog["SGWLD"] if v not in _DVTH_EXCLUDED_SGWLD]
+        kept = [v for v in sgwld if v not in _DVTH_EXCLUDED_SGWLD]
         spec: dict[str, Any] = {"op": "sum"}
-        if kept and len(kept) < len(catalog["SGWLD"]):
+        if kept and len(kept) < len(sgwld):
             spec["value"] = kept
         aggregations["SGWLD"] = spec
     return {"name": name, "type": type_, "order": order, "aggregations": aggregations}
@@ -367,7 +369,7 @@ def _positional_sides(candidates: list | None) -> tuple:
 def enable_relative(part: dict[str, Any], catalog: dict[str, list | None]) -> None:
     """相対化をONにする: 既定の split 軸で初期化し、その軸を `order` から外す。"""
     split = default_split_axis(catalog)
-    numerator, denominator = _positional_sides(catalog.get(split))
+    numerator, denominator = _positional_sides(catalog.get(split) if split is not None else None)
     part["relative"] = {
         "split_axis": split,
         "numerator_when": numerator,
@@ -1533,7 +1535,7 @@ def run_test_compute(
     coef_path: str | None = None,
     custom_path: str | None = None,
     geninfo_path: str | None = None,
-) -> dict[str, float]:
+) -> dict[str, float | None]:
     """画面5: 実データでエンジンを走らせる。
 
     係数ファイルは指定があれば

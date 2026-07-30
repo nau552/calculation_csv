@@ -17,7 +17,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, overload
 
 import polars as pl
 
@@ -43,6 +43,7 @@ from .models import (
 from .relative import apply_relative
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from types import ModuleType
 
 # order に軸名と並べて置ける仮想エントリ(docs/score_gui_design.md 4.1節)。
@@ -544,8 +545,8 @@ class SharedComputeContext:
                 continue  # custom パーツはデータを自分で読む
             st = _source_type(part)
             self._union_axes.setdefault(st, set()).update(_required_axes(part, group_defs))
-        self._resolved: dict[str, object] = {}
-        self.prefix_cache: dict[tuple, object] = {}
+        self._resolved: dict[str, pl.DataFrame] = {}
+        self.prefix_cache: dict[tuple, pl.DataFrame] = {}
 
     def resolved(self, source_type: str) -> pl.DataFrame:
         """Source type の csv を全パーツの軸の和集合で1回だけ解決した DataFrame。
@@ -604,14 +605,57 @@ def _step_signature(score_part: ScorePart, step: str) -> tuple:
         ステップ種別と設定内容(JSON 化した spec など)を並べたタプル。
         そこまでの設定が完全一致するパーツ同士でだけ等しくなる。
 
+    Raises:
+        ValueError: order に __relative__ があるのに relative 設定が無いとき
+            (_effective_order が先に検出するため、到達しないパスの防御)。
+
     """
     if step == RELATIVE_STEP:
-        return ("relative", score_part.relative.model_dump_json())
+        rel = score_part.relative
+        if rel is None:
+            msg = f"'{RELATIVE_STEP}' in order but '{score_part.name}' has no relative config"
+            raise ValueError(msg)
+        return ("relative", rel.model_dump_json())
     if step == DVTBUDGET_STEP:
         return ("dvtbudget",)
     spec = score_part.aggregations.get(step)
     kind = "transform" if _is_virtual(step) else "axis"
     return (kind, step, spec.model_dump_json() if spec else "")
+
+
+# overload: identity_axes 省略(空タプル)なら float、識別軸を指定したら
+# DataFrame(呼び出し側の isinstance 分岐を不要にする)。実装は1つで挙動不変
+@overload
+def compute_score_part(
+    data_dir: str | Path,
+    score_part: ScorePart,
+    group_defs: dict[str, GroupDef] | None = None,
+    generation: str | None = None,
+    dvtbudget_coef: DvtBudgetCoefFile | None = None,
+    board_temperatures: Mapping[int, float] | Mapping[str, dict[int, float]] | None = None,
+    shared_ctx: SharedComputeContext | None = None,
+    selection_sets: dict[str, list] | None = None,
+    weight_sets: dict[str, object] | None = None,
+    custom_module: ModuleType | None = None,
+    identity_axes: tuple[()] = (),
+) -> float: ...
+
+
+@overload
+def compute_score_part(
+    data_dir: str | Path,
+    score_part: ScorePart,
+    group_defs: dict[str, GroupDef] | None = None,
+    generation: str | None = None,
+    dvtbudget_coef: DvtBudgetCoefFile | None = None,
+    board_temperatures: Mapping[int, float] | Mapping[str, dict[int, float]] | None = None,
+    shared_ctx: SharedComputeContext | None = None,
+    selection_sets: dict[str, list] | None = None,
+    weight_sets: dict[str, object] | None = None,
+    custom_module: ModuleType | None = None,
+    *,
+    identity_axes: tuple[str, ...],
+) -> pl.DataFrame: ...
 
 
 def compute_score_part(
@@ -620,7 +664,7 @@ def compute_score_part(
     group_defs: dict[str, GroupDef] | None = None,
     generation: str | None = None,
     dvtbudget_coef: DvtBudgetCoefFile | None = None,
-    board_temperatures: dict[int, float] | None = None,
+    board_temperatures: Mapping[int, float] | Mapping[str, dict[int, float]] | None = None,
     shared_ctx: SharedComputeContext | None = None,
     selection_sets: dict[str, list] | None = None,
     weight_sets: dict[str, object] | None = None,
@@ -732,18 +776,25 @@ def compute_score_part(
         }
 
     # いちばん後ろのキャッシュ点から再開できるところを探す
+    # (shared_ctx が None なら cache_keys は空 = ループは元々0回。ガードは型の narrowing 用)
     start = 0
-    for i in sorted(cache_keys, reverse=True):
-        cached = shared_ctx.prefix_cache.get(cache_keys[i])
-        if cached is not None:
-            lf = cached.lazy()
-            start = i + 1
-            break
+    if shared_ctx is not None:
+        for i in sorted(cache_keys, reverse=True):
+            cached = shared_ctx.prefix_cache.get(cache_keys[i])
+            if cached is not None:
+                lf = cached.lazy()
+                start = i + 1
+                break
 
     for j in range(start, len(steps)):
         step = steps[j]
         if step == RELATIVE_STEP:
-            lf = apply_relative(lf, source_type, score_part.relative)
+            rel = score_part.relative
+            if rel is None:
+                # 到達しないパスの防御: _effective_order が relative 無しの __relative__ を先に検出する
+                msg = f"'{RELATIVE_STEP}' in order but '{score_part.name}' has no relative config"
+                raise ValueError(msg)
+            lf = apply_relative(lf, source_type, rel)
         elif step == DVTBUDGET_STEP:
             if generation is None or dvtbudget_coef is None or board_temperatures is None:
                 msg = "dVtBudget score parts require generation, dvtbudget_coef, and board_temperatures"
@@ -771,7 +822,7 @@ def compute_score_part(
         else:
             lf = _apply_axis_step(lf, source_type, step, score_part)
 
-        if j in cache_keys:
+        if shared_ctx is not None and j in cache_keys:
             df = lf.collect()
             shared_ctx.prefix_cache[cache_keys[j]] = df
             lf = df.lazy()
@@ -788,7 +839,7 @@ def compute_score_file(
     board_temperatures: dict[int, float] | None = None,
     custom_parts_path: str | Path | None = None,
     generation_info_path: str | Path | None = None,
-) -> dict[str, float]:
+) -> dict[str, float | None]:
     """Config の全スコアパーツを計算し、expression を評価して {"Score": ..., パーツ名: ...} を返す。
 
     Returns:

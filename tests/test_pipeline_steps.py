@@ -6,13 +6,22 @@ __relative__、__dvtbudget__、__offset__ のようなユーザ命名の変換�
 """
 
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 
 from scorelib_param import io_jsonc
 from scorelib_param.cli import compute_score_part
 from scorelib_param.dvtbudget import load_board_temperatures
-from scorelib_param.models import ScorePart
+from scorelib_param.models import DvtBudgetCoefFile, ScorePart
+
+
+class DvtKwargs(TypedDict):
+    """パーツ計算に `**` 展開でそのまま渡す dVtBudget 共通キーワード引数(実行時はただの dict)。"""
+
+    generation: str
+    dvtbudget_coef: DvtBudgetCoefFile
+    board_temperatures: dict[int, float]
 
 
 def _base_aggs() -> dict[str, dict[str, str]]:
@@ -108,7 +117,7 @@ def test_explicit_dvtbudget_step_equals_default_placement(data_dir_mini: Path, d
         }
     )
 
-    kwargs = {"generation": "B9LS", "dvtbudget_coef": coef, "board_temperatures": temps}
+    kwargs: DvtKwargs = {"generation": "B9LS", "dvtbudget_coef": coef, "board_temperatures": temps}
     assert compute_score_part(data_dir_mini, explicit, **kwargs) == pytest.approx(
         compute_score_part(data_dir_mini, implicit, **kwargs)
     )
@@ -146,7 +155,7 @@ def test_state_diff_within_part_equals_two_parts_subtracted(data_dir_mini: Path,
     """
     coef = io_jsonc.load_dvtbudget_coef(dvtbudget_coef_path)
     temps = load_board_temperatures(data_dir_mini / "initial_temperature.csv")
-    kwargs = {"generation": "B9LS", "dvtbudget_coef": coef, "board_temperatures": temps}
+    kwargs: DvtKwargs = {"generation": "B9LS", "dvtbudget_coef": coef, "board_temperatures": temps}
 
     def dvt_part(name: str, state_agg: dict[str, str | list[str]]) -> ScorePart:
         return ScorePart.model_validate(

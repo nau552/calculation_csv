@@ -3,6 +3,7 @@
 
 import shutil
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -94,8 +95,8 @@ def test_axis_catalog_fbc(data_dir_mini: Path) -> None:
     ]
     assert catalog["State"] == ["R2A", "A2R", "A2B", "B2A"]
     assert catalog["Read_Override"] == [False, True]
-    assert "read_level_upper1" in catalog["Read_Label"]
-    assert catalog["WL"] == sorted(catalog["WL"])  # 数値軸はユニーク値の昇順
+    assert "read_level_upper1" in cast("list[str]", catalog["Read_Label"])
+    assert catalog["WL"] == sorted(cast("list[int]", catalog["WL"]))  # 数値軸はユニーク値の昇順
     assert catalog["Measure"] == [0, 1, 2, 3]  # 識別子軸: 実在番号の昇順
     assert catalog["DataName"] == [
         "reference_param_read_level_1",

@@ -45,14 +45,14 @@ def _peak_memory_gib() -> float | None:
         環境では None。
 
     """
-    try:
-        import resource  # ruff: ignore[PLC0415] — Unix 専用モジュール。ImportError で有無を判定するため関数内で import
-
+    if sys.platform != "win32":  # win32 に resource は存在しない(型チェッカーもこの分岐で判別する)
+        try:
+            import resource  # ruff: ignore[PLC0415] — Unix 専用モジュール。ImportError で有無を判定するため関数内で import
+        except ImportError:  # resource の無い非 Windows 環境(下の Windows API 分岐にも入らない)
+            return None
         peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         # Linux は KiB、macOS はバイト
         return peak / 2**30 if sys.platform == "darwin" else peak * 1024 / 2**30
-    except ImportError:
-        pass
     if sys.platform == "win32":
         import ctypes  # ruff: ignore[PLC0415] — Windows 専用パス。該当 OS のときだけ import する
 
@@ -86,12 +86,15 @@ def _run_one(args: argparse.Namespace) -> None:
     # エンジンは子プロセスでだけ import する(親プロセスの起動を軽く保ち、
     # 子プロセス単位のピークメモリ計測に親の事情を持ち込まないため)
     from scorelib_param import io_jsonc  # ruff: ignore[PLC0415] — 上記コメントの意図的な遅延 import
-    from scorelib_param.batch import BatchRunner  # ruff: ignore[PLC0415] — 同上
 
     # _parse_histories は CLI と同じ履歴解釈を再利用するための意図的な内部借用
     from scorelib_param.batch.__main__ import (  # ruff: ignore[PLC0415] — 同上
         _parse_histories,
     )
+
+    # BatchRunner は runner サブモジュールから直接 import する(パッケージの PEP 562
+    # 遅延 import 経由と同じモジュール・同じ読み込みタイミングで、型チェッカーが実体の型を追える)
+    from scorelib_param.batch.runner import BatchRunner  # ruff: ignore[PLC0415] — 同上
 
     config = io_jsonc.load_run_config(args.config)
     coef = io_jsonc.load_dvtbudget_coef(args.dvtbudget_coef) if args.dvtbudget_coef else None

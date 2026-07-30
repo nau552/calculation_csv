@@ -14,6 +14,17 @@
 
 ## 未リリース
 
+- **型チェック(Pylance/pyright)を警告ゼロ化し CI に組み込み**（2026-07-31。
+  挙動・config 語彙の変更なし = 版数は動かさない）。チームの水準
+  「Pylance の警告が出ないコードを書く」に合わせ、pyright 1.1.411 実測
+  416 件を抑止なしでゼロ化。主因はコード規約対応時に `Any` → `object` に
+  していた注釈で、TypedDict 化（テストの fixture）・注釈の精密化・
+  `@overload`（compute_score_part: identity_axes 空 → float / 指定 →
+  DataFrame）・同値変形で解消。**本物のバグは 0 件**（全 51 候補を個別確認）。
+  付随: `batch/__init__.py` の `__all__` を静的リスト化（遅延 import は維持、
+  `_EXPORTS` との整合はテストで検証）・到達しないパスへの防御 raise 数箇所・
+  compute_score_file の戻り値注釈を実態（expression 無しなら Score=None）に
+  修正・pyright[nodejs] と psutil を dev extras に追加・CI に型チェック追加
 - **ruff の検査基準をコンテナのエディタ表示(preview)まで拡張**（2026-07-31。
   挙動・config 語彙の変更なし = 版数は動かさない）。コンテナの VS Code は
   ruff 拡張が preview ルールで動いており、CLI ゼロでもエディタに警告が残って

@@ -86,12 +86,16 @@ def _plain(obj: object) -> object:
         return [_plain(v) for v in obj]
     if isinstance(obj, (str, int, float, bool)) or obj is None:
         return obj
-    if hasattr(obj, "to_dict"):
-        return _plain(obj.to_dict())
-    if hasattr(obj, "tolist"):
-        return _plain(obj.tolist())
-    if hasattr(obj, "item"):
-        return obj.item()
+    # 振る舞い判定は getattr(3引数)で行う(hasattr と同値。メソッドは None にならない)
+    to_dict = getattr(obj, "to_dict", None)
+    if to_dict is not None:
+        return _plain(to_dict())
+    tolist = getattr(obj, "tolist", None)
+    if tolist is not None:
+        return _plain(tolist())
+    item = getattr(obj, "item", None)
+    if item is not None:
+        return item()
     return str(obj)
 
 

@@ -13,7 +13,7 @@ import gzip
 import shutil
 import tarfile
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import polars as pl
 import pytest
@@ -35,6 +35,9 @@ from scorelib_param.dvtbudget import load_board_temperatures
 from scorelib_param.models import GroupDef
 
 if TYPE_CHECKING:
+    from importlib.abc import Loader
+    from importlib.machinery import ModuleSpec
+
     from scorelib_param.models import DvtBudgetCoefFile, RunConfig
 
 MINI = Path(__file__).resolve().parent / "data" / "result_tmp_mini"
@@ -109,6 +112,23 @@ def _sequential_expected(history_tree: tuple[Path, Path, Path], config: RunConfi
             temps = load_board_temperatures(epoch_dir / "initial_temperature.csv")
             expected[f"{label}#{no:04d}"] = compute_score_file(epoch_dir, config, coef, temps)
     return expected
+
+
+# --- 公開名の整合 ---------------------------------------------------------
+
+
+def test_all_matches_lazy_exports() -> None:
+    """``__all__``(静的リスト)と遅延 import 辞書 ``_EXPORTS`` の整合を検証する。
+
+    ``__all__`` は型チェッカーのために静的リストにしたので、公開名を増やす
+    ときに ``_EXPORTS`` への追加が漏れる可能性がある。その漏れ(および逆方向の
+    ズレ)をここで検出し、全公開名が実際に import できることも確認する。
+    """
+    import scorelib_param.batch as batch_pkg
+
+    assert set(batch_pkg.__all__) == set(batch_pkg._EXPORTS)
+    for name in batch_pkg.__all__:
+        assert getattr(batch_pkg, name) is not None
 
 
 # --- ラベル・列挙 ---------------------------------------------------------
@@ -543,11 +563,14 @@ def test_bridge_example(history_tree: tuple[Path, Path, Path], tmp_path: Path) -
     import importlib.util
     import sys
 
-    spec = importlib.util.spec_from_file_location(
-        "batch_bridge_example", REPO_ROOT / "scripts" / "batch_bridge_example.py"
+    spec = cast(
+        "ModuleSpec",
+        importlib.util.spec_from_file_location(
+            "batch_bridge_example", REPO_ROOT / "scripts" / "batch_bridge_example.py"
+        ),
     )
     bridge = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(bridge)
+    cast("Loader", spec.loader).exec_module(bridge)
 
     _, hist_a, _ = history_tree
     out = tmp_path / "scores.csv"
@@ -582,11 +605,14 @@ def test_get_score_bridge_example(
     import importlib.util
     import sys
 
-    spec = importlib.util.spec_from_file_location(
-        "get_score_bridge_example", REPO_ROOT / "scripts" / "get_score_bridge_example.py"
+    spec = cast(
+        "ModuleSpec",
+        importlib.util.spec_from_file_location(
+            "get_score_bridge_example", REPO_ROOT / "scripts" / "get_score_bridge_example.py"
+        ),
     )
     bridge = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(bridge)
+    cast("Loader", spec.loader).exec_module(bridge)
 
     _, hist_a, _ = history_tree
     epoch_dir = hist_a / "result.0001"

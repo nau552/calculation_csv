@@ -25,5 +25,9 @@ jobs:
         run: |
           python -m ruff check . --preview
           python -m ruff format --check .
+      - name: Type check (pyright)
+        # Pylance(コンテナのエディタ)と同じ型チェッカー。チームの水準
+        # 「警告が出ないコードを書く」を CI でも保つ(2026-07-31 にゼロ化)
+        run: python -m pyright scorelib_param ui tests scripts reference_scripts
       - name: Run tests
         run: python -m pytest -q

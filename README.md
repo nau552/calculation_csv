@@ -122,6 +122,9 @@ git config core.hooksPath scripts/hooks         # push前テストのフック�
   `ruff.toml` に転記済み。独自規約は作らない — 解説は docs/dev_workflow.md）。
   push 前に `.venv/bin/ruff check . --preview` と `.venv/bin/ruff format .` を流す
   （`--preview` はコンテナのエディタと検査基準を揃えるため — 同 docs 参照）
+- **型チェック（pyright）**: チームの水準「Pylance の警告が出ないコードを書く」に
+  合わせて警告ゼロを保つ（`.venv/bin/pyright scorelib_param ui tests scripts
+  reference_scripts`。解説は docs/dev_workflow.md）
 - **CI**: push / PR のたびに GitHub Actions（`.github/workflows/test.yml`）が
   本番エンジン環境と同じ Python 3.13 で ruff（lint・整形検査）と全テストを実行する。
   **社内 GitLab で運用する場合は `.gitlab-ci.yml`**（同内容の下書き作成済み。

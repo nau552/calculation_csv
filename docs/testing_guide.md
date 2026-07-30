@@ -122,7 +122,7 @@ group_reduce op のエラー案内）、`test_enabled_true/false_...`（旧 rela
 | `test_prefilter.py` | filter 前絞り最適化（`_hoistable_prefilters`）: 前出し対象の判定（split軸・分母事前集計軸とその派生軸・複合軸の除外）、**前絞りあり/なしの同値性**（相対化・dVtBudget・明示 `__relative__` 込み）、prefix_cache の混線防止、filter で絞った State 分だけの係数で計算できる診断上の変化 |
 | `test_measure_split.py` | **新仕様（Measure 番号基準）の本丸**: Measure 1/0 分割の相対化が旧仕様（Read_Label filter + Read_Override 分割）と厳密同値、DataName 分割とも同値、labels 注記が計算に影響しないこと、Measure filter（単一・is_in）、is_in の前絞り同値性とキャッシュキー安全性。Read_Override 分割と Measure 軸が併用不可な理由（ペアキー衝突）もコメントで記録 |
 | `test_cli.py` | 本丸。fixtures の config を実データで計算し、**テスト内に独立に書いた素朴な再計算と一致**することを照合（FBCパーツ）。遅延グループ集計のユーザシナリオ。範囲外WL値のエラー。custom パーツの計算・エラー・混在拒否。**サブプロセスとして CLI を起動する完全E2E**（最適化側から呼ばれる形そのもの） |
-| `test_batch.py` | バッチ計算（scorelib_param.batch）。**最重要は等価性**: 5 epoch（2実験、値・dVtBudget温度を全 epoch で変えた摂動データ）のバッチ一括計算が epoch ごとの `compute_score_file` と全パーツ一致 — epoch 混線（相対化ペア・集計・係数選択のまたがり）はどんな形でも不一致として現れる構成。ほか: Step/Loop ラベル導出、列挙（重複ラベル・空 history・junk 無視）、csv.gz 直読み、tar.gz 展開（フラット/ネスト flatten・ビュー削除・入力元無傷・不正パス拒否）、skip-and-report / strict / filter 空振り epoch の帰属 / 全滅エラー / 予約名 `Epoch` 衝突、batch-size advisory、CLI E2E |
+| `test_batch.py` | バッチ計算（scorelib_param.batch）。**最重要は等価性**: 5 epoch（2実験、値・dVtBudget温度を全 epoch で変えた摂動データ）のバッチ一括計算が epoch ごとの `compute_score_file` と全パーツ一致 — epoch 混線（相対化ペア・集計・係数選択のまたがり）はどんな形でも不一致として現れる構成。ほか: Step/Loop ラベル導出、列挙（重複ラベル・空 history・junk 無視）、csv.gz 直読み、tar.gz 展開（フラット/ネスト flatten・ビュー削除・入力元無傷・不正パス拒否）、skip-and-report / strict / filter 空振り epoch の帰属 / 全滅エラー / 予約名 `Epoch` 衝突、batch-size advisory、CLI E2E、`__all__`(静的リスト)と遅延 import 辞書 `_EXPORTS` の整合（型チェッカー対応で静的化したため追加漏れをここで検出 — 2026-07-31） |
 
 ### UIテスト
 | ファイル | 層 | 内容 |

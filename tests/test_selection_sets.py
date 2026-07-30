@@ -2,13 +2,23 @@
 """名前付き選択セット(optimization.selectionSets + `ref` 参照)のテスト。"""
 
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 
 from scorelib_param import io_jsonc
 from scorelib_param.cli import compute_score_file, compute_score_part
 from scorelib_param.dvtbudget import load_board_temperatures
-from scorelib_param.models import AggregationSpec, RunConfig, ScorePart
+from scorelib_param.models import AggregationSpec, DvtBudgetCoefFile, RunConfig, ScorePart
+
+
+class DvtKwargs(TypedDict):
+    """パーツ計算に `**` 展開でそのまま渡す dVtBudget 共通キーワード引数(実行時はただの dict)。"""
+
+    generation: str
+    dvtbudget_coef: DvtBudgetCoefFile
+    board_temperatures: dict[int, float]
+
 
 UPDOWN = [
     {"State": "R2A", "Read_Label": "read_level_upper1"},
@@ -43,7 +53,7 @@ def _part(pair_agg: dict[str, object]) -> ScorePart:
 
 
 @pytest.fixture
-def dvt_kwargs(dvtbudget_coef_path: Path, data_dir_mini: Path) -> dict[str, object]:
+def dvt_kwargs(dvtbudget_coef_path: Path, data_dir_mini: Path) -> DvtKwargs:
     """パーツ計算に必要な dVtBudget の共通キーワード引数を返す。
 
     Returns:
@@ -57,7 +67,7 @@ def dvt_kwargs(dvtbudget_coef_path: Path, data_dir_mini: Path) -> dict[str, obje
     }
 
 
-def test_ref_equals_inline(data_dir_mini: Path, dvt_kwargs: dict[str, object]) -> None:
+def test_ref_equals_inline(data_dir_mini: Path, dvt_kwargs: DvtKwargs) -> None:
     """参照(ref)とインライン指定で同じ値になることを検証する。"""
     inline = compute_score_part(data_dir_mini, _part({"op": "sum", "value": UPDOWN}), **dvt_kwargs)
     via_ref = compute_score_part(
@@ -69,7 +79,7 @@ def test_ref_equals_inline(data_dir_mini: Path, dvt_kwargs: dict[str, object]) -
     assert via_ref == pytest.approx(inline)
 
 
-def test_unknown_ref_raises(data_dir_mini: Path, dvt_kwargs: dict[str, object]) -> None:
+def test_unknown_ref_raises(data_dir_mini: Path, dvt_kwargs: DvtKwargs) -> None:
     """未定義の ref は既知のセット名の案内つきでエラーになることを検証する。"""
     with pytest.raises(ValueError, match=r"unknown selection set 'nope'.*updown_pairs"):
         compute_score_part(
@@ -92,7 +102,7 @@ def test_ref_on_op_without_selections_rejected() -> None:
         AggregationSpec(op="expr", expr="mean(values)", ref="some_set")
 
 
-def test_resolved_content_is_validated(data_dir_mini: Path, dvt_kwargs: dict[str, object]) -> None:
+def test_resolved_content_is_validated(data_dir_mini: Path, dvt_kwargs: DvtKwargs) -> None:
     """キー名の間違ったセットは、インラインで書いた場合と同じエラーで失敗すること。
 
     (ref 解決後にも同じ検証が走る)

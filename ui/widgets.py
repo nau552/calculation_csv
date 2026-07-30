@@ -8,14 +8,14 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import streamlit as st
 
 from scorelib_param.models import COMBINED_SEP, MULTI_OPS, STEP_OPS, TRANSFORM_OPS, UNARY_OPS
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
     from types import ModuleType
 
     from streamlit.delta_generator import DeltaGenerator
@@ -26,10 +26,10 @@ if TYPE_CHECKING:
 # アプリ本体はこれに依存しない(設計書 8-3節)。
 try:
     from streamlit_sortables import sort_items as _sort_items
-
-    HAS_SORTABLES = True
 except Exception:  # ImportError またはコンポーネントの破損
-    HAS_SORTABLES = False
+    _sort_items = None
+
+HAS_SORTABLES = _sort_items is not None
 
 AXIS_OPS = ["filter", "mean", "sum", "min", "max", "diff", "expr"]
 
@@ -69,7 +69,7 @@ def sortable_list(items: list[str], key: str) -> list[str] | None:
         フォールバック指示)。
 
     """
-    if not HAS_SORTABLES or not items:
+    if _sort_items is None or not items:
         return None
     try:
         result = _sort_items(
@@ -94,7 +94,9 @@ def measure_format(measure_labels: dict[int, str] | None) -> Callable[[object], 
         (selectbox 等の format_func にそのまま渡せる)。
 
     """
-    m = measure_labels or {}
+    # キーは selectbox 経由の任意型なので Mapping[Any, str] 扱いにする
+    # (注釈だけでは lambda 内で dict[int, str] に絞り込まれたままになるため cast)
+    m = cast("Mapping[Any, str]", measure_labels or {})
     return lambda v: f"{m[v]} (Measure {v})" if v in m else f"Measure {v}"
 
 
@@ -115,9 +117,9 @@ def parse_scalar(text: str) -> bool | int | float | str:
         return True
     if t.lower() == "false":
         return False
-    for cast in (int, float):
+    for conv in (int, float):
         try:
-            return cast(t)
+            return conv(t)
         except ValueError:
             pass
     return t
@@ -203,8 +205,8 @@ def selection_list_widget(
         それ以外は行ごとの selection_widget の値(複合軸なら辞書)を並べたもの。
 
     """
-    if len(axes) == 1 and catalog.get(axes[0]):
-        cands = catalog[axes[0]]
+    cands = catalog.get(axes[0])
+    if len(axes) == 1 and cands:
         default = [v for v in values if v in cands]
         return st.multiselect(
             f"{axes[0]} の値", cands, default=default, key=key, format_func=_axis_format(axes[0], measure_labels)
@@ -315,7 +317,8 @@ def _transform_editor(
 
     spec.pop("ref", None)
     labels = by_value_labels.get(spec["by"]) or []
-    current = spec.get("value") if isinstance(spec.get("value"), dict) else {}
+    v = spec.get("value")
+    current = v if isinstance(v, dict) else {}
     if labels:
         weights = {}
         for i, label in enumerate(labels):
@@ -393,7 +396,8 @@ def _agg_weight_editor(
             "重み", value=float(v) if isinstance(v, (int, float)) else 1.0, key=f"{key}_wc"
         )
         return
-    current = spec.get("weight") if isinstance(spec.get("weight"), dict) else {}
+    w = spec.get("weight")
+    current = w if isinstance(w, dict) else {}
     if labels:
         weights = {}
         for i, label in enumerate(labels):
@@ -437,14 +441,19 @@ def agg_editor(
     axes = entry.split(COMBINED_SEP)
     is_virtual = entry.startswith("__")
 
-    ops = list(STEP_OPS) if is_virtual else AXIS_OPS
-    cur_op = spec.get("op") if spec.get("op") in ops else ops[0]
+    ops: list[str] = list(STEP_OPS) if is_virtual else AXIS_OPS
+    raw_op = spec.get("op")
+    cur_op = raw_op if raw_op in ops else ops[0]
+
+    def _fmt(o: str) -> str:
+        return _TRANSFORM_LABELS.get(o, o)
+
     op = st.selectbox(
         "op",
         ops,
         index=ops.index(cur_op),
         key=f"{key}_op",
-        format_func=(lambda o: _TRANSFORM_LABELS.get(o, o)) if is_virtual else str,
+        format_func=_fmt if is_virtual else str,
     )
     if op != spec.get("op"):
         # op が変わった: op 固有のフィールドが残らないよう掃除する
@@ -490,10 +499,10 @@ def agg_editor(
         from ui import state as ui_state
 
         spec.pop("ref", None)
-        if len(axes) == 1 and catalog.get(axes[0]):
+        cands = catalog.get(axes[0])
+        if len(axes) == 1 and cands:
             # 候補が分かる単一軸は複数選択可(複数 = is_in: 選んだ値の行を
             # すべて残し、後段の集計に複製として流す)
-            cands = catalog[axes[0]]
             cur = spec.get("value")
             cur_list = cur if isinstance(cur, list) else ([cur] if cur is not None else [])
             picked = st.multiselect(
@@ -523,11 +532,8 @@ def agg_editor(
             _ref_widget(spec, set_names, key)
         else:
             spec.pop("ref", None)
-            v = (
-                spec.get("value")
-                if isinstance(spec.get("value"), list) and len(spec["value"]) == _DIFF_OPERANDS
-                else [None, None]
-            )
+            raw = spec.get("value")
+            v = raw if isinstance(raw, list) and len(raw) == _DIFF_OPERANDS else [None, None]
             st.caption("結果 = a - b")
             a = selection_widget(axes, catalog, v[0], f"{key}_da", measure_labels)
             b = selection_widget(axes, catalog, v[1], f"{key}_db", measure_labels)

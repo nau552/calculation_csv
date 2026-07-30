@@ -14,7 +14,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import streamlit as st
 
@@ -227,7 +227,7 @@ def _autosave(user: str | None) -> None:
             state.save_draft(sf, context_inputs, state.draft_path_for(user))
 
 
-def _merged_catalog(ctx: dict[str, object]) -> dict:
+def _merged_catalog(ctx: dict[str, Any]) -> dict:
     merged: dict = {}
     for cat in ctx["catalogs"].values():
         for axis, cands in cat.items():
@@ -235,7 +235,7 @@ def _merged_catalog(ctx: dict[str, object]) -> dict:
     return merged
 
 
-def _catalog_for_part(ctx: dict[str, object], part: dict[str, object]) -> dict:
+def _catalog_for_part(ctx: dict[str, Any], part: dict[str, object]) -> dict:
     return ctx["catalogs"].get(part.get("type"), _merged_catalog(ctx))
 
 
@@ -354,6 +354,10 @@ def _handle_load(
                 msg = "一式 zip をアップロードしてください"
                 raise ValueError(msg)  # ruff: ignore[TRY301] -- 読み込みエラーは外側の except で st.error 表示に集約する構造のため(関数抽出は見送り)
         else:  # ダミー
+            if n_boards is None or chips_text is None:
+                # 到達しない防御: ダミーを選んだ rerun では画面側が両方の入力欄を出している
+                msg = "Board 数と Board ごとの Chip 数を入力してください"
+                raise ValueError(msg)  # ruff: ignore[TRY301] -- 読み込みエラーは外側の except で st.error 表示に集約する構造のため(関数抽出は見送り)
             counts = state.parse_chip_counts(chips_text, int(n_boards))
             if up_dummy is not None:
                 src = state.extract_bundle_zip(up_dummy.getvalue())
@@ -387,10 +391,15 @@ def _handle_load(
         if up_custom is not None:
             found["custom_path"] = state.save_upload(up_custom.name, up_custom.getvalue())
 
+        data_dir = found["data_dir"]
+        if data_dir is None:
+            # 到達しない防御: ここに来る3経路すべてで data_dir は非 None
+            msg = "測定結果ディレクトリのパスを入力してください"
+            raise ValueError(msg)  # ruff: ignore[TRY301] -- 読み込みエラーは外側の except で st.error 表示に集約する構造のため(関数抽出は見送り)
         # 世代情報 json の入力は無い: WL/STR 本数はデータから導出する
         # (zip 内で見つかった場合のみ食い違いの診断警告に使う)
         ss.context = state.build_context(
-            found["data_dir"],
+            data_dir,
             found.get("config_path"),
             found.get("coef_path"),
             found.get("geninfo_path"),
@@ -769,14 +778,14 @@ def _order_editor(part: dict, catalog: dict, sf: dict, uid: str, measure_labels:
                 )
 
 
-def _custom_part_editor(part: dict, ctx: dict[str, object], uid: str) -> None:
+def _custom_part_editor(part: dict[str, Any], ctx: dict[str, Any], uid: str) -> None:
     st.markdown("**自作関数パーツ**")
     st.caption(
         "custom_parts.py の関数を1つ呼び、その戻り値(1スカラー)がこのパーツの値になります。"
         "実行側では SVN リポジトリ直下の custom_parts.py が使われるため、"
         "設計時と同じリビジョンのファイルを読み込んでください。"
     )
-    funcs = ctx.get("custom_functions") or []
+    funcs = cast("list[str]", ctx.get("custom_functions") or [])
     cur = part.get("function") or part.get("name")
     if not funcs:
         st.error("custom_parts.py が読み込まれていません(画面1でパス指定するか、一式zipに同梱してください)")
@@ -1048,6 +1057,9 @@ def _selection_sets_section(sf: dict, ctx: dict[str, object] | None) -> None:
         return
     st.divider()
     name = st.selectbox("編集するセット", sorted(sets), key="edit_set_name")
+    if name is None:
+        # 到達しない防御: options(sets)は上の early return で非空を保証済み
+        return
     values = sets[name]
 
     catalog = _merged_catalog(ctx) if ctx else {}
@@ -1138,6 +1150,9 @@ def _group_defs_section(sf: dict, ctx: dict[str, object] | None) -> None:
     if not defs:
         return
     name = st.selectbox("編集する定義", sorted(defs), key="edit_gdef_name")
+    if name is None:
+        # 到達しない防御: options(defs)は上の early return で非空を保証済み
+        return
     gd = defs[name]
     axis_opts = numeric_axes or [gd.get("axis", "WL")]
     cur_axis = gd.get("axis")

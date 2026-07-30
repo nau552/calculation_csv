@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -409,7 +409,7 @@ def test_draft_autosaved_and_restored(
     at.text_input(key="draft_user_input").set_value("taro").run()
     at.button(key="add_part_btn").click().run()
     assert state.draft_path_for("taro").exists()
-    draft = state.load_draft(state.draft_path_for("taro"))
+    draft = cast("dict[str, Any]", state.load_draft(state.draft_path_for("taro")))
     assert [p["name"] for p in draft["score_file"]["score_parts"]] == ["part_1", "part_2"]
     assert draft["context_inputs"]["data_dir"] == str(data_dir_mini.resolve())
     assert draft["context_inputs"]["coef_path"] == str(dvtbudget_coef_path.resolve())

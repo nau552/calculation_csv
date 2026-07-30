@@ -4,16 +4,22 @@
 import importlib.util
 from pathlib import Path
 from types import ModuleType
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from importlib.abc import Loader
+    from importlib.machinery import ModuleSpec
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 
 
 def _load() -> ModuleType:
-    spec = importlib.util.spec_from_file_location(
-        "config_vocab_diff_example", SCRIPTS / "config_vocab_diff_example.py"
+    spec = cast(
+        "ModuleSpec",
+        importlib.util.spec_from_file_location("config_vocab_diff_example", SCRIPTS / "config_vocab_diff_example.py"),
     )
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    cast("Loader", spec.loader).exec_module(mod)
     return mod
 
 

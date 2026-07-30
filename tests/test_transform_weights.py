@@ -7,6 +7,7 @@ Physical 記法グループ定義は definedInLogical / WLgroupDefinLogical を�
 import json
 from collections.abc import Sequence
 from pathlib import Path
+from typing import cast
 
 import polars as pl
 import pytest
@@ -29,7 +30,7 @@ def _mean_part(
         name=name,
         type="FBC",
         order=["WL", *extra_order],
-        aggregations={"WL": {"op": "mean"}, **(extra_aggs or {})},
+        aggregations=cast("dict[str, AggregationSpec]", {"WL": {"op": "mean"}, **(extra_aggs or {})}),
     )
 
 
@@ -74,10 +75,11 @@ def _wl_split(data_dir_mini: Path) -> tuple[dict[str, tuple[int, int]], dict[str
 
     """
     df = _raw_fbc(data_dir_mini)
-    wl_max = df["WL"].max()
+    wl_max = cast("int", df["WL"].max())
     groups = {"gLow": (0, 1), "gHigh": (2, wl_max)}
     means = {
-        name: df.filter((pl.col("WL") >= lo) & (pl.col("WL") <= hi))["FBC"].mean() for name, (lo, hi) in groups.items()
+        name: cast("float", df.filter((pl.col("WL") >= lo) & (pl.col("WL") <= hi))["FBC"].mean())
+        for name, (lo, hi) in groups.items()
     }
     return groups, means
 
@@ -90,11 +92,14 @@ def test_group_weight_inline_dict(data_dir_mini: Path) -> None:
         name="w",
         type="FBC",
         order=["WL", "__weight__", "WLg"],
-        aggregations={
-            "WL": {"op": "mean"},
-            "__weight__": {"op": "mul", "by": "WLg", "value": weights},
-            "WLg": {"op": "max"},
-        },
+        aggregations=cast(
+            "dict[str, AggregationSpec]",
+            {
+                "WL": {"op": "mean"},
+                "__weight__": {"op": "mul", "by": "WLg", "value": weights},
+                "WLg": {"op": "max"},
+            },
+        ),
     )
     defs = {"WLg": GroupDef(axis="WL", groups=groups)}
     actual = compute_score_part(data_dir_mini, part, group_defs=defs)
@@ -108,11 +113,14 @@ def test_group_weight_missing_group_errors(data_dir_mini: Path) -> None:
         name="w",
         type="FBC",
         order=["WL", "__weight__", "WLg"],
-        aggregations={
-            "WL": {"op": "mean"},
-            "__weight__": {"op": "mul", "by": "WLg", "value": {"gLow": 1.0}},  # gHigh 欠落
-            "WLg": {"op": "max"},
-        },
+        aggregations=cast(
+            "dict[str, AggregationSpec]",
+            {
+                "WL": {"op": "mean"},
+                "__weight__": {"op": "mul", "by": "WLg", "value": {"gLow": 1.0}},  # gHigh 欠落
+                "WLg": {"op": "max"},
+            },
+        ),
     )
     with pytest.raises(ValueError, match=r"no entry in the transform weights.*gHigh"):
         compute_score_part(data_dir_mini, part, group_defs={"WLg": GroupDef(axis="WL", groups=groups)})
@@ -125,11 +133,14 @@ def test_group_weight_after_axis_collapsed_errors(data_dir_mini: Path) -> None:
         name="w",
         type="FBC",
         order=["WL", "WLg", "__weight__"],  # WLg を潰した後に重み
-        aggregations={
-            "WL": {"op": "mean"},
-            "WLg": {"op": "max"},
-            "__weight__": {"op": "mul", "by": "WLg", "value": {"gLow": 1.0, "gHigh": 2.0}},
-        },
+        aggregations=cast(
+            "dict[str, AggregationSpec]",
+            {
+                "WL": {"op": "mean"},
+                "WLg": {"op": "max"},
+                "__weight__": {"op": "mul", "by": "WLg", "value": {"gLow": 1.0, "gHigh": 2.0}},
+            },
+        ),
     )
     with pytest.raises(ValueError, match="not present at this step"):
         compute_score_part(data_dir_mini, part, group_defs={"WLg": GroupDef(axis="WL", groups=groups)})
@@ -241,7 +252,7 @@ def _logical_physical_configs(data_dir_mini: Path) -> tuple[RunConfig, RunConfig
 
     """
     df = _raw_fbc(data_dir_mini)
-    n = int(df["WL"].max()) + 1
+    n = int(cast("int", df["WL"].max())) + 1
     logical = {"gLow": [0, 1], "gHigh": [2, n - 1]}
     physical = {name: [n - 1 - hi, n - 1 - lo] for name, (lo, hi) in logical.items()}
 

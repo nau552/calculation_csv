@@ -8,6 +8,7 @@
 
 import math
 from pathlib import Path
+from typing import TypedDict, Unpack
 
 import pytest
 
@@ -15,6 +16,14 @@ from scorelib_param import cli, io_jsonc
 from scorelib_param.cli import SharedComputeContext, _hoistable_prefilters, compute_score_part
 from scorelib_param.dvtbudget import load_board_temperatures
 from scorelib_param.models import DvtBudgetCoefFile, GroupDef, ScorePart
+
+
+class DvtKwargs(TypedDict, total=False):
+    """パーツ計算に `**` 展開でそのまま渡す dVtBudget 共通キーワード引数(実行時はただの dict)。"""
+
+    generation: str
+    dvtbudget_coef: DvtBudgetCoefFile
+    board_temperatures: dict[int, float]
 
 
 def _part(**overrides: str | list[str] | dict[str, object] | None) -> ScorePart:
@@ -139,7 +148,7 @@ class TestEquivalence:
         data_dir: Path,
         part: ScorePart,
         monkeypatch: pytest.MonkeyPatch,
-        **kwargs: str | DvtBudgetCoefFile | dict[int, float],
+        **kwargs: Unpack[DvtKwargs],
     ) -> tuple[float, float]:
         with_prefilter = compute_score_part(data_dir, part, **kwargs)
         monkeypatch.setattr(cli, "_hoistable_prefilters", lambda *a, **k: [])
@@ -216,7 +225,7 @@ class TestEquivalence:
             ("Read_Label", "read_level_upper1"),
             ("State", "R2A"),
         ]
-        kwargs = {
+        kwargs: DvtKwargs = {
             "generation": "B9LS",
             "dvtbudget_coef": io_jsonc.load_dvtbudget_coef(dvtbudget_coef_path),
             "board_temperatures": load_board_temperatures(data_dir_mini / "initial_temperature.csv"),

@@ -4,6 +4,8 @@
 ユーザがリポジトリ直下の custom_parts.py として SVN に登録するのと同じ形。
 """
 
+from typing import cast
+
 import polars as pl
 
 from scorelib_param.custom import CustomContext
@@ -30,7 +32,7 @@ def mean_fbc_plus_offset(ctx: CustomContext) -> float:
 
     """
     df = pl.read_csv(ctx.data_dir / "FBC.csv")
-    return float(df["FBC"].mean()) + float(ctx.params.get("offset", 0))
+    return float(cast("float", df["FBC"].mean())) + float(ctx.params.get("offset", 0))
 
 
 def broken_returns_nan(ctx: CustomContext) -> float:

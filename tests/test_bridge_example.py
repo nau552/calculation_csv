@@ -11,18 +11,23 @@ import importlib.util
 import json
 from pathlib import Path
 from types import ModuleType
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from scorelib_param.models import RunConfig
 
+if TYPE_CHECKING:
+    from importlib.abc import Loader
+    from importlib.machinery import ModuleSpec
+
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 
 
 def _load(name: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name.replace(".py", ""), SCRIPTS / name)
+    spec = cast("ModuleSpec", importlib.util.spec_from_file_location(name.replace(".py", ""), SCRIPTS / name))
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    cast("Loader", spec.loader).exec_module(mod)
     return mod
 
 

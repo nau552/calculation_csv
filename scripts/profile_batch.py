@@ -44,7 +44,7 @@ from scorelib_param.batch.staging import StagedEpoch  # ruff: ignore[E402]
 from scorelib_param.cli import resolve_group_defs  # ruff: ignore[E402]
 
 
-def _timeit(fn: Callable[[], object]) -> tuple[float, object]:
+def _timeit[T](fn: Callable[[], T]) -> tuple[float, T]:
     """関数 fn を1回実行し、(所要秒, 返り値) を返す。
 
     Returns:
@@ -107,7 +107,9 @@ def main(argv: list[str] | None = None) -> None:
     print(f"A. csv parse:            {t_parse:7.2f}s  ({t_parse / t_full:5.1%})")
     print(f"B. resolve+collect:      {t_resolved:7.2f}s  ({t_resolved / t_full:5.1%})")
     for t in source_types:
-        df = ctx._resolved[t]  # ruff: ignore[SLF001] — プロファイル対象(同リポジトリ)の内部キャッシュを意図的に参照
+        # run_resolved が全 type を collect 済みなので、resolved() はキャッシュ
+        # (内部 dict)の同じ実体を返すだけ(再計算しない)
+        df = ctx.resolved(t)
         print(f"     {t}: {df.height:,} rows, {df.estimated_size() / 2**30:.2f} GiB")
     print(
         f"C. compute_score_batch:  {t_full:7.2f}s  (パーツ計算分 ≈ {t_full - t_resolved:.2f}s, "

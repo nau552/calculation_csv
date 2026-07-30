@@ -47,8 +47,10 @@ def _json_key(k: object) -> object:
         Python 型へ戻し、元から受けられる型はそのまま返す。
 
     """
-    if not isinstance(k, (str, int, float, bool)) and k is not None and hasattr(k, "item"):
-        return k.item()
+    if not isinstance(k, (str, int, float, bool)) and k is not None:
+        item = getattr(k, "item", None)
+        if item is not None:  # hasattr(k, "item") と同値(メソッドは None にならない)
+            return item()
     return k
 
 
@@ -75,12 +77,16 @@ def _jsonable(obj: object) -> object:
         return [_jsonable(v) for v in obj]
     if isinstance(obj, (str, int, float, bool)) or obj is None:
         return obj  # numpy float64 は float のサブクラスなのでここを通る
-    if hasattr(obj, "to_dict"):  # pandas Series / DataFrame
-        return _jsonable(obj.to_dict())
-    if hasattr(obj, "tolist"):  # numpy ndarray
-        return _jsonable(obj.tolist())
-    if hasattr(obj, "item"):  # numpy スカラー(int64 / bool_ など)
-        return obj.item()
+    # 振る舞い判定は getattr(3引数)で行う(hasattr と同値。メソッドは None にならない)
+    to_dict = getattr(obj, "to_dict", None)
+    if to_dict is not None:  # pandas Series / DataFrame
+        return _jsonable(to_dict())
+    tolist = getattr(obj, "tolist", None)
+    if tolist is not None:  # numpy ndarray
+        return _jsonable(tolist())
+    item = getattr(obj, "item", None)
+    if item is not None:  # numpy スカラー(int64 / bool_ など)
+        return item()
     return str(obj)  # 最後の砦(エンジンが読まないフィールドを想定)
 
 

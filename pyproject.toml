@@ -19,7 +19,20 @@ dependencies = [
 ui = ["streamlit>=1.50", "streamlit-sortables>=0.3"]
 # ruff はチーム共通コンテナの設定(ruff.toml に転記済み)で lint/format するため
 # 固定版で入れる(版が動くと有効ルールが変わり、警告ゼロの状態が崩れるため)
-dev = ["pytest>=8.0", "streamlit>=1.50", "streamlit-sortables>=0.3", "ruff==0.16.0"]
+# pyright は Pylance(コンテナのエディタ)と同じ型チェッカーの CLI 版。チームの
+# 水準「Pylance の警告が出ないコードを書く」を CI でも検査するため、ruff と
+# 同じ理由で固定版にする。[nodejs] は実行に必要な node を PyPI から一緒に
+# 入れる指定(閉域網でもミラー経由で入るように)
+# psutil はバッチの advisory(利用可能メモリの実測)用のソフト依存。開発環境に
+# 入れておくと型解決もでき advisory も実動する(無くても engine は動く)
+dev = [
+    "pytest>=8.0",
+    "streamlit>=1.50",
+    "streamlit-sortables>=0.3",
+    "ruff==0.16.0",
+    "pyright[nodejs]==1.1.411",
+    "psutil>=5.9",
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]

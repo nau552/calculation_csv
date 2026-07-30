@@ -12,9 +12,20 @@ CLI: ``python -m scorelib_param.batch --config ... --history ... --out scores.cs
 より前に**設定する必要があり、パッケージ import 時点で polars を
 読み込んでしまうと効かなくなるため。``from scorelib_param.batch import X`` は
 従来どおり動く。
+
+``__all__`` は型チェッカ向けに静的リストにしてある(静的リストと _EXPORTS の
+整合はテストが検証する)。
 """
 
 import importlib
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # 型チェッカ向けの静的な re-import(実行時は下の __getattr__ が遅延解決する)
+    from .compute import EPOCH_COL, BatchComputeContext, BatchResult, compute_score_batch
+    from .history import EpochRef, derive_label, enumerate_epochs
+    from .runner import DEFAULT_BATCH_SIZE, BatchRunner, Fetcher, StrictBatchError, passthrough_fetcher
+    from .staging import StagedEpoch, cleanup_epoch, stage_epoch, validate_epoch
 
 _EXPORTS = {
     "EPOCH_COL": "compute",
@@ -35,8 +46,24 @@ _EXPORTS = {
     "validate_epoch": "staging",
 }
 
-# PEP 562 の遅延 import のため __all__ は _EXPORTS から動的生成する(静的リストにすると追加漏れが起きる)
-__all__ = sorted(_EXPORTS)  # ruff: ignore[PLE0605]
+__all__ = [
+    "DEFAULT_BATCH_SIZE",
+    "EPOCH_COL",
+    "BatchComputeContext",
+    "BatchResult",
+    "BatchRunner",
+    "EpochRef",
+    "Fetcher",
+    "StagedEpoch",
+    "StrictBatchError",
+    "cleanup_epoch",
+    "compute_score_batch",
+    "derive_label",
+    "enumerate_epochs",
+    "passthrough_fetcher",
+    "stage_epoch",
+    "validate_epoch",
+]
 
 
 def __getattr__(name: str) -> object:

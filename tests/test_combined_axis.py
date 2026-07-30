@@ -5,17 +5,26 @@
 """
 
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 
 from scorelib_param import io_jsonc
 from scorelib_param.cli import compute_score_part
 from scorelib_param.dvtbudget import load_board_temperatures
-from scorelib_param.models import ScorePart
+from scorelib_param.models import DvtBudgetCoefFile, ScorePart
+
+
+class DvtKwargs(TypedDict):
+    """パーツ計算に `**` 展開でそのまま渡す dVtBudget 共通キーワード引数(実行時はただの dict)。"""
+
+    generation: str
+    dvtbudget_coef: DvtBudgetCoefFile
+    board_temperatures: dict[int, float]
 
 
 @pytest.fixture
-def dvt_kwargs(dvtbudget_coef_path: Path, data_dir_mini: Path) -> dict[str, object]:
+def dvt_kwargs(dvtbudget_coef_path: Path, data_dir_mini: Path) -> DvtKwargs:
     """パーツ計算に必要な dVtBudget の共通キーワード引数を返す。
 
     Returns:
@@ -76,7 +85,7 @@ def _filtered_part(name: str, state_agg: dict[str, object], read_label: str) -> 
     )
 
 
-def test_updown_sum_equals_two_filtered_parts_added(data_dir_mini: Path, dvt_kwargs: dict[str, object]) -> None:
+def test_updown_sum_equals_two_filtered_parts_added(data_dir_mini: Path, dvt_kwargs: DvtKwargs) -> None:
     """実際のユースケース: 方向別のラベルで測った Budget を1パーツに合算する。
 
     上方向のBudget State(R2A, A2B)は read_level_upper1、下方向(A2R, B2A)は
@@ -112,7 +121,7 @@ def test_updown_sum_equals_two_filtered_parts_added(data_dir_mini: Path, dvt_kwa
     assert combined == pytest.approx(up + down)
 
 
-def test_pair_diff_across_labels(data_dir_mini: Path, dvt_kwargs: dict[str, object]) -> None:
+def test_pair_diff_across_labels(data_dir_mini: Path, dvt_kwargs: DvtKwargs) -> None:
     """Diff between (R2A, upper1) and (B2A, lower1) in one part equals the two filtered parts subtracted."""
     combined = compute_score_part(
         data_dir_mini,
@@ -141,7 +150,7 @@ def test_pair_diff_across_labels(data_dir_mini: Path, dvt_kwargs: dict[str, obje
     assert combined == pytest.approx(a - b)
 
 
-def test_expr_updown_difference(data_dir_mini: Path, dvt_kwargs: dict[str, object]) -> None:
+def test_expr_updown_difference(data_dir_mini: Path, dvt_kwargs: DvtKwargs) -> None:
     """(up-direction sum) - (down-direction sum) via expr `by` lookups on a combined axis.
 
     Cross-checked against two filtered parts subtracted.
@@ -191,7 +200,7 @@ def test_dict_selection_on_plain_axis_rejected() -> None:
         _filtered_part("bad", {"op": "filter", "value": {"State": "A2B"}}, "read_level_upper1")
 
 
-def test_combined_filter_single_pair(data_dir_mini: Path, dvt_kwargs: dict[str, object]) -> None:
+def test_combined_filter_single_pair(data_dir_mini: Path, dvt_kwargs: DvtKwargs) -> None:
     """Filter with a single (State, Read_Label) pair equals the classic two-filter form."""
     combined = compute_score_part(
         data_dir_mini,

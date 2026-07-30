@@ -28,4 +28,8 @@ test:
     # --preview の理由は .github/workflows/test.yml の同項コメント参照
     - python -m ruff check . --preview
     - python -m ruff format --check .
+    # TODO(社内確認5): pyright は node 実行環境を使う(pyright[nodejs] が PyPI から
+    #   同梱 node を入れる)。閉域網ミラーに nodejs-wheel-binaries が無い場合は
+    #   この行を外すか、ミラーへの追加を依頼する
+    - python -m pyright scorelib_param ui tests scripts reference_scripts
     - python -m pytest -q

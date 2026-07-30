@@ -100,8 +100,9 @@ def estimate_epoch_bytes(sample: StagedEpoch, run_config: RunConfig) -> int | No
         if not parts:
             return None
         ctx = BatchComputeContext([sample], parts, run_config.group_defs())
-        # 同一パッケージ内部での意図的な利用(compute の実測サイズ見積もりを advisory に使う)
-        return sum(ctx.resolved(st).estimated_size() for st in ctx._union_axes)  # ruff: ignore[SLF001]
+        # 同一パッケージ内部での意図的な利用(compute の実測サイズ見積もりを advisory に使う)。
+        # estimated_size() の型は int | float だがバイト数なので int に包んでも値は不変
+        return int(sum(ctx.resolved(st).estimated_size() for st in ctx._union_axes))  # ruff: ignore[SLF001]
     except Exception:  # ruff: ignore[BLE001] — 見積もり失敗は advisory を諦めるだけ
         return None
 

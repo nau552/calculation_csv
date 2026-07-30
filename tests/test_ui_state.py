@@ -3,7 +3,7 @@
 
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -101,7 +101,7 @@ def test_dvth_skeleton_excludes_sg_elements(data_dir_mini: Path) -> None:
     assert part["aggregations"]["__abs__"] == {"op": "abs"}
     sgwld = part["aggregations"]["SGWLD"]
     assert sgwld["op"] == "sum"
-    assert set(sgwld["value"]) == set(catalog["SGWLD"]) - {"SGSB", "SGS", "SGD", "SGDT"}
+    assert set(sgwld["value"]) == set(cast("list[str]", catalog["SGWLD"])) - {"SGSB", "SGS", "SGD", "SGDT"}
     assert len(sgwld["value"]) == 8
     value = compute_score_part(data_dir_mini, ScorePart.model_validate(part))
     assert isinstance(value, float)
@@ -119,9 +119,9 @@ def test_default_split_axis_priority(catalog: dict[str, list | None]) -> None:
     assert state.default_split_axis(catalog) == "Measure"
     no_measure = {a: c for a, c in catalog.items() if a != "Measure"}
     assert state.default_split_axis(no_measure) == "Read_Override"
-    progloop = {"Board": [0, 1], "Param": ["ROM", "Opt"], "WL": [0, 1]}
+    progloop: dict[str, list | None] = {"Board": [0, 1], "Param": ["ROM", "Opt"], "WL": [0, 1]}
     assert state.default_split_axis(progloop) == "Param"
-    aggregated = {"Board": [0, 1], "Chip": [0, 1]}  # 集計済み type(4b回答の形)
+    aggregated: dict[str, list | None] = {"Board": [0, 1], "Chip": [0, 1]}  # 集計済み type(4b回答の形)
     assert state.default_split_axis(aggregated) == "Board"
 
 
@@ -169,7 +169,7 @@ def test_enable_relative_param_split_computes(data_dir_mini: Path) -> None:
 
 def test_enable_relative_on_aggregated_type_uses_any_axis() -> None:
     """Measure 列の無い集計済み type: split は任意軸(先頭)から。"""
-    catalog = {"Board": [0, 1], "Chip": [0, 1, 2, 3]}
+    catalog: dict[str, list | None] = {"Board": [0, 1], "Chip": [0, 1, 2, 3]}
     part = state.part_skeleton("p", "SUMMARY", catalog)
     state.enable_relative(part, catalog)
     rel = part["relative"]
@@ -854,7 +854,7 @@ def test_config_only_skeleton_measure_requires_input() -> None:
 
     番号を入れるまで検証エラーで促される(mean だと測定が静かに混ざるため)。
     """
-    catalog = {"Measure": None, "State": None, "Board": None}
+    catalog: dict[str, list | None] = {"Measure": None, "State": None, "Board": None}
     part = state.part_skeleton("p", "X", catalog)
     assert part["aggregations"]["Measure"] == {"op": "filter", "value": None}
     problems = state.validate_part(part)
@@ -1013,7 +1013,7 @@ def _bundle_zip(data_dir_mini: Path, fixtures_dir: Path, custom_parts_path: Path
 def test_bundle_zip_flat_layout(data_dir_mini: Path, fixtures_dir: Path, custom_parts_path: Path) -> None:
     """全部1フォルダに入った形: そのフォルダ自体が測定ディレクトリになる。"""
     data = _bundle_zip(data_dir_mini, fixtures_dir, custom_parts_path, "bundle")
-    found = state.locate_bundle_inputs(state.extract_bundle_zip(data))
+    found = cast("dict[str, str]", state.locate_bundle_inputs(state.extract_bundle_zip(data)))
     ctx = state.build_context(
         found["data_dir"],
         found["config_path"],
@@ -1032,7 +1032,7 @@ def test_bundle_zip_nested_layout(data_dir_mini: Path, fixtures_dir: Path, custo
     サブディレクトリも探索するのでこれも読めること。
     """
     data = _bundle_zip(data_dir_mini, fixtures_dir, custom_parts_path, "bundle/result_tmp")
-    found = state.locate_bundle_inputs(state.extract_bundle_zip(data))
+    found = cast("dict[str, str]", state.locate_bundle_inputs(state.extract_bundle_zip(data)))
     assert found["data_dir"].endswith("result_tmp")
     assert found["config_path"]
     assert found["geninfo_path"]
@@ -1102,7 +1102,7 @@ def test_draft_roundtrip(tmp_path: Path, sf: dict[str, Any], catalog: dict[str, 
     sf["score_parts"].append(state.part_skeleton("p", "FBC", catalog))
     path = tmp_path / "draft.jsonc"
     state.save_draft(sf, {"data_dir": "somewhere"}, path)
-    draft = state.load_draft(path)
+    draft = cast("dict[str, Any]", state.load_draft(path))
     assert draft["score_file"] == sf
     assert draft["context_inputs"]["data_dir"] == "somewhere"
     assert state.load_draft(tmp_path / "none.jsonc") is None
@@ -1115,7 +1115,7 @@ def test_draft_legacy_format_accepted(tmp_path: Path, sf: dict[str, Any], catalo
     sf["score_parts"].append(state.part_skeleton("p", "FBC", catalog))
     path = tmp_path / "draft.jsonc"
     path.write_text(json.dumps(sf), encoding="utf-8")
-    draft = state.load_draft(path)
+    draft = cast("dict[str, Any]", state.load_draft(path))
     assert draft["score_file"] == sf
     assert draft["context_inputs"] == {}
 

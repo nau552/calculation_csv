@@ -444,3 +444,15 @@ v0.4.0 の機能群（集計時重み・変換ステップ拡張・Physical 記�
   コードを書いている」ため設定で消さずコードを直す方針に確定 — pyright 実測
   414 件(汚染源は ANN401 対応の Any→object)、次の作業として実施予定。その次に
   品質向上パス。
+- 追記(2026-07-31): Pylance/pyright を警告ゼロ化(feature/pylance-zero)。実測
+  416 件を抑止コメント・設定無効化なしで解消。分析エージェントで全51候補を
+  個別確認し**本物のバグは0件**(全て「注釈が実態とズレ」か「不変条件が型に
+  見えない」)。主な修正: テスト fixture の TypedDict 化(dict[str, object] の
+  ** 展開が汚染源・約210件連鎖消滅)・compute_score_part に @overload
+  (identity_axes 空→float/指定→DataFrame)・batch/__init__ の __all__ 静的化
+  (遅延 import は維持、_EXPORTS との整合テスト新設)・hasattr→getattr の同値
+  変形(py3.7 ブリッジ)・到達しないパスへの防御 raise/return 8箇所・
+  compute_score_file の戻り値注釈を実態に修正(expression 無し→Score=None は
+  仕様)。pyright[nodejs]==1.1.411 と psutil を dev extras へ、CI に型チェック
+  組み込み。テスト305件パス(整合テスト+1)。版数は動かさない(挙動・config
+  語彙の変更なし)。残: 品質向上パス(ラチェット方式)が次の作業。

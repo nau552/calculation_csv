@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Literal
+from typing import Any, Literal, TypeIs
 
 from pydantic import BaseModel, Field, RootModel, model_validator
 
@@ -169,7 +169,7 @@ class AggregationSpec(BaseModel):
         """
         op, v = self.op, self.value
 
-        def _num(x: object) -> bool:
+        def _num(x: object) -> TypeIs[int | float]:
             return isinstance(x, (int, float)) and not isinstance(x, bool)
 
         if self.by is not None and op not in TRANSFORM_OPS:

@@ -8,6 +8,7 @@
 
 from collections.abc import Iterable
 from pathlib import Path
+from typing import TypedDict
 
 import polars as pl
 import pytest
@@ -17,6 +18,13 @@ from scorelib_param.aggregate import collapse
 from scorelib_param.cli import SharedComputeContext, compute_score_file, compute_score_part
 from scorelib_param.dvtbudget import load_board_temperatures
 from scorelib_param.models import DvtBudgetCoefFile, RelativeConfig, RunConfig, ScorePart
+
+
+class DvtInputs(TypedDict):
+    """計算関数に `**` 展開でそのまま渡す dVtBudget 入力の組(実行時はただの dict)。"""
+
+    dvtbudget_coef: DvtBudgetCoefFile
+    board_temperatures: dict[int, float]
 
 
 @pytest.fixture
@@ -31,7 +39,7 @@ def mini_config(fixtures_dir: Path) -> RunConfig:
 
 
 @pytest.fixture
-def dvt_inputs(dvtbudget_coef_path: Path, data_dir_mini: Path) -> dict[str, DvtBudgetCoefFile | dict[int, float]]:
+def dvt_inputs(dvtbudget_coef_path: Path, data_dir_mini: Path) -> DvtInputs:
     """係数と Board 温度の組(dVtBudget 計算に必要な入力)。
 
     Returns:
@@ -71,7 +79,7 @@ def _dvt_part(name: str, state: str, offset: float = 1, board_op: str = "mean") 
 
 
 def test_shared_equals_standalone_for_fixture_config(
-    data_dir_mini: Path, mini_config: RunConfig, dvt_inputs: dict[str, DvtBudgetCoefFile | dict[int, float]]
+    data_dir_mini: Path, mini_config: RunConfig, dvt_inputs: DvtInputs
 ) -> None:
     """キャッシュ共有計算が各パーツ単独計算と同じ値を返すことを検証する。"""
     shared = compute_score_file(data_dir_mini, mini_config, **dvt_inputs)
@@ -90,7 +98,7 @@ def test_shared_equals_standalone_for_fixture_config(
 def test_resolve_runs_once_per_type(
     data_dir_mini: Path,
     mini_config: RunConfig,
-    dvt_inputs: dict[str, DvtBudgetCoefFile | dict[int, float]],
+    dvt_inputs: DvtInputs,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """同じ type の resolve が1回しか走らないことを検証する。"""
@@ -111,7 +119,7 @@ def test_resolve_runs_once_per_type(
 
 def test_states_prefiltered_instead_of_shared(
     data_dir_mini: Path,
-    dvt_inputs: dict[str, DvtBudgetCoefFile | dict[int, float]],
+    dvt_inputs: DvtInputs,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """State の filter だけが違うパーツ同士は前段を共有**しない**ことを検証する。
@@ -144,7 +152,7 @@ def test_states_prefiltered_instead_of_shared(
 
 def test_prefix_shared_when_prefilters_match(
     data_dir_mini: Path,
-    dvt_inputs: dict[str, DvtBudgetCoefFile | dict[int, float]],
+    dvt_inputs: DvtInputs,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """前絞りまで同一のパーツ同士は、引き続き resolve + 相対化 + dVtBudget の前段を共有すること。
@@ -172,9 +180,7 @@ def test_prefix_shared_when_prefilters_match(
         assert values[p.name] == pytest.approx(standalone, rel=1e-12)
 
 
-def test_different_offset_does_not_share_prefix(
-    data_dir_mini: Path, dvt_inputs: dict[str, DvtBudgetCoefFile | dict[int, float]]
-) -> None:
+def test_different_offset_does_not_share_prefix(data_dir_mini: Path, dvt_inputs: DvtInputs) -> None:
     """相対化設定(offset)が違うパーツは、他パーツのキャッシュ済み前段を再利用してはならない。"""
     a = _dvt_part("a", "A2B", offset=1)
     b = _dvt_part("b", "A2B", offset=20)

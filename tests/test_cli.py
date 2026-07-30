@@ -5,7 +5,7 @@ import json
 import math
 import subprocess
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict, cast
 
 import polars as pl
 import pytest
@@ -21,6 +21,13 @@ if TYPE_CHECKING:
     from scorelib_param.models import DvtBudgetCoefFile, RunConfig
 
 
+class DvtInputs(TypedDict):
+    """計算関数に `**` 展開でそのまま渡す dVtBudget 入力の組(実行時はただの dict)。"""
+
+    dvtbudget_coef: DvtBudgetCoefFile
+    board_temperatures: dict[int, float]
+
+
 @pytest.fixture
 def run_config(fixtures_dir: Path) -> RunConfig:
     """tests/fixtures/config.jsonc を読み込んだ RunConfig を返す。
@@ -33,7 +40,7 @@ def run_config(fixtures_dir: Path) -> RunConfig:
 
 
 @pytest.fixture
-def dvt_inputs(dvtbudget_coef_path: Path, data_dir_mini: Path) -> dict[str, DvtBudgetCoefFile | dict[int, float]]:
+def dvt_inputs(dvtbudget_coef_path: Path, data_dir_mini: Path) -> DvtInputs:
     """係数と初期温度など dVtBudget 計算に必要な入力一式を返す。
 
     Returns:
@@ -99,7 +106,7 @@ def _expected_fbc_part(expanded_mini_dir: Path, wlgroup: dict[str, tuple[int, in
     # Board 平均 → Chip 平均 → Block max
     rel = rel.group_by(["Chip", "Block"]).agg(pl.col("FBC").mean())
     rel = rel.group_by(["Block"]).agg(pl.col("FBC").mean())
-    return rel["FBC"].max()
+    return cast("float", rel["FBC"].max())
 
 
 def test_fbc_part_matches_independent_recomputation(expanded_mini_dir: Path, run_config: RunConfig) -> None:
@@ -187,7 +194,7 @@ def test_group_def_name_clashing_with_source_axis_rejected(data_dir_mini: Path, 
 def test_dvtbudget_part_is_finite(
     data_dir_mini: Path,
     run_config: RunConfig,
-    dvt_inputs: dict[str, DvtBudgetCoefFile | dict[int, float]],
+    dvt_inputs: DvtInputs,
 ) -> None:
     """パーツ dVtBudget_R2A が有限値になることを検証する。"""
     part = next(p for p in run_config.optimization.score_parts if p.name == "dVtBudget_R2A")
@@ -204,7 +211,7 @@ def test_dvtbudget_part_is_finite(
 def test_compute_score_file_returns_all_parts(
     data_dir_mini: Path,
     run_config: RunConfig,
-    dvt_inputs: dict[str, DvtBudgetCoefFile | dict[int, float]],
+    dvt_inputs: DvtInputs,
 ) -> None:
     """compute_score_file が全パーツと Score を返すことを検証する。"""
     result = compute_score_file(data_dir_mini, run_config, **dvt_inputs)
@@ -240,8 +247,11 @@ def test_custom_part_computes(data_dir_mini: Path, fixtures_dir: Path) -> None:
     result = compute_score_file(data_dir_mini, rc, custom_parts_path=fixtures_dir / "custom_parts.py")
     assert result["fixed_value"] == 42.0
     df = pl.read_csv(data_dir_mini / "FBC.csv")
-    assert result["shifted"] == pytest.approx(float(df["FBC"].mean()) + 10)
-    assert result["Score"] == pytest.approx(result["fixed_value"] + result["shifted"])
+    assert result["shifted"] == pytest.approx(float(cast("float", df["FBC"].mean())) + 10)
+    fixed_value, shifted = result["fixed_value"], result["shifted"]
+    assert fixed_value is not None
+    assert shifted is not None
+    assert result["Score"] == pytest.approx(fixed_value + shifted)
 
 
 def test_custom_part_errors(data_dir_mini: Path, fixtures_dir: Path) -> None:
