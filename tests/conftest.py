@@ -11,19 +11,34 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 @pytest.fixture
 def data_dir_mini() -> Path:
-    """ミニ実データディレクトリ result_tmp_mini のパス。"""
+    """ミニ実データディレクトリ result_tmp_mini のパス。
+
+    Returns:
+        リポジトリ同梱の tests/data/result_tmp_mini を指す絶対パス。
+
+    """
     return Path(__file__).resolve().parent / "data" / "result_tmp_mini"
 
 
 @pytest.fixture
 def fixtures_dir() -> Path:
-    """テスト用フィクスチャディレクトリのパス。"""
+    """テスト用フィクスチャディレクトリのパス。
+
+    Returns:
+        tests/fixtures を指す絶対パス。
+
+    """
     return Path(__file__).resolve().parent / "fixtures"
 
 
 @pytest.fixture
 def dvtbudget_coef_path(fixtures_dir: Path) -> Path:
-    """係数フィクスチャ dvtbudget_coef.jsonc のパス。"""
+    """係数フィクスチャ dvtbudget_coef.jsonc のパス。
+
+    Returns:
+        tests/fixtures/dvtbudget_coef.jsonc を指す絶対パス。
+
+    """
     return fixtures_dir / "dvtbudget_coef.jsonc"
 
 
@@ -36,6 +51,10 @@ def expanded_mini_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     FBC_expanded.csv を生成したもの。エンジンの結果を「現行方式の答え」と
     照合するための基準データ(スクリプトは ../result_tmp を見るため、
     一時ディレクトリに同じ配置を再現して走らせる)。
+
+    Returns:
+        FBC_expanded.csv を含む result_tmp コピーのディレクトリパス。
+
     """
     root = tmp_path_factory.mktemp("expand")
     data_copy = root / "result_tmp"

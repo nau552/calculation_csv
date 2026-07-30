@@ -19,8 +19,11 @@ jobs:
       - name: Install
         run: python -m pip install -e ".[dev]"
       - name: Lint (ruff)
+        # --preview はコンテナの VS Code(ruff 拡張)と検査基準を揃えるため。
+        # ruff.toml に書かずフラグにしているのは、設定本体をチーム原本の転記の
+        # ままにしておくため(docs/dev_workflow.md「ruff.toml」参照)
         run: |
-          python -m ruff check .
+          python -m ruff check . --preview
           python -m ruff format --check .
       - name: Run tests
         run: python -m pytest -q

@@ -55,7 +55,12 @@ def _is_archive(name: str) -> bool:
 
 
 def _check_member_name(name: str, archive: Path) -> None:
-    """展開先の外に書き出すエントリ(絶対パス・..)を拒否する。"""
+    """展開先の外に書き出すエントリ(絶対パス・..)を拒否する。
+
+    Raises:
+        ValueError: エントリ名が絶対パスまたは `..` を含むとき。
+
+    """
     p = Path(name)
     if p.is_absolute() or ".." in p.parts:
         msg = f"unsafe path '{name}' in archive {archive}"
@@ -76,7 +81,7 @@ def _extract_archive(archive: Path, dest: Path) -> None:
                 _check_member_name(name, archive)
             # 展開対象は自分たちの実験履歴アーカイブ(信頼できる入力)で、全エントリ名を上で検査済み。
             # tarfile 側の filter="data" 相当の強化は将来の検討余地(今回は挙動を変えないため見送り)
-            zf.extractall(dest)  # noqa: S202
+            zf.extractall(dest)  # ruff: ignore[S202]
 
 
 def _flatten_single_dir(view: Path) -> None:
@@ -110,6 +115,12 @@ def stage_epoch(ref: EpochRef, staging_root: Path) -> StagedEpoch:
 
     例外は投げず error に落とす(skip-and-report の入り口。呼び出し側が
     strict を判断する)。
+
+    Returns:
+        計算に渡せる StagedEpoch。data_dir は展開不要なら元ディレクトリ、
+        アーカイブがあればステージング領域のビュー。失敗時は error に
+        理由が入る。
+
     """
     try:
         source = ref.source_dir
@@ -135,15 +146,20 @@ def stage_epoch(ref: EpochRef, staging_root: Path) -> StagedEpoch:
             shutil.rmtree(view, ignore_errors=True)
             raise
         return StagedEpoch(ref, view, created_dir=view)
-    except Exception as err:  # noqa: BLE001 — 理由ごと報告してスキップさせる
+    except Exception as err:  # ruff: ignore[BLE001] — 理由ごと報告してスキップさせる
         return StagedEpoch(ref, ref.source_dir, error=f"staging failed: {err}")
 
 
 # needs_dvtbudget のキーワード専用化は既存呼び出しの規約(公開シグネチャ)が変わるため見送り
-def validate_epoch(staged: StagedEpoch, required_types: Sequence[str], needs_dvtbudget: bool) -> str | None:  # noqa: FBT001
+def validate_epoch(staged: StagedEpoch, required_types: Sequence[str], needs_dvtbudget: bool) -> str | None:  # ruff: ignore[FBT001]
     """計算前の安価な検証。エラー文字列(skip理由)か None を返す。
 
     固定リストではなく「config が参照する type」駆動(docs/batch_design.md 8節)。
+
+    Returns:
+        skip 理由の文字列(ステージング時のエラー、または必須ファイルの
+        欠落一覧)。問題が無ければ None。
+
     """
     if staged.error:
         return staged.error

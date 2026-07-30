@@ -27,7 +27,12 @@ SCREEN_TEST = "5. テスト実行・エクスポート"
 
 @pytest.fixture
 def at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppTest:
-    """AppTest でアプリを起動して返す。"""
+    """AppTest でアプリを起動して返す。
+
+    Returns:
+        初回 run を終えた(例外なしを確認済みの)AppTest インスタンス。
+
+    """
     apptest = pytest.importorskip("streamlit.testing.v1").AppTest
     # ユーザの実際の下書きファイルに触れないよう保存先を差し替える
     monkeypatch.setattr(state, "DRAFTS_DIR", tmp_path / "drafts")

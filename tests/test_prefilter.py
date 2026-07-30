@@ -18,7 +18,12 @@ from scorelib_param.models import DvtBudgetCoefFile, GroupDef, ScorePart
 
 
 def _part(**overrides: str | list[str] | dict[str, object] | None) -> ScorePart:
-    """暗黙 __relative__ + 先頭 filter 2つの典型形(dVtBudget_R2A 相当の FBC 版)。"""
+    """暗黙 __relative__ + 先頭 filter 2つの典型形(dVtBudget_R2A 相当の FBC 版)。
+
+    Returns:
+        overrides でフィールドを上書きした典型形の ScorePart。
+
+    """
     base = {
         "name": "p",
         "type": "FBC",
@@ -46,21 +51,24 @@ def _part(**overrides: str | list[str] | dict[str, object] | None) -> ScorePart:
 class TestHoistableDetection:
     """_hoistable_prefilters の対象判定のテスト。"""
 
-    def test_leading_filters_are_hoisted_in_order(self) -> None:
+    @staticmethod
+    def test_leading_filters_are_hoisted_in_order() -> None:
         """先頭に並ぶ filter が順序どおり前出しされることを検証する。"""
         assert _hoistable_prefilters(_part()) == [
             ("Read_Label", "read_level_upper1"),
             ("State", "A2B"),
         ]
 
-    def test_no_relative_still_hoists(self) -> None:
+    @staticmethod
+    def test_no_relative_still_hoists() -> None:
         """Relative が無くても filter の前出しは有効(split軸等の除外が無いだけ)。"""
         assert _hoistable_prefilters(_part(relative=None)) == [
             ("Read_Label", "read_level_upper1"),
             ("State", "A2B"),
         ]
 
-    def test_explicit_relative_part_also_hoists(self) -> None:
+    @staticmethod
+    def test_explicit_relative_part_also_hoists() -> None:
         """明示配置の __relative__ より後ろの filter も前に出す(可換なため)。"""
         p = _part(order=["Read_Label", "__relative__", "State", "WL", "STR", "Board", "Chip", "Block"])
         assert _hoistable_prefilters(p) == [
@@ -68,7 +76,8 @@ class TestHoistableDetection:
             ("State", "A2B"),
         ]
 
-    def test_filters_beyond_non_filter_steps_are_hoisted(self) -> None:
+    @staticmethod
+    def test_filters_beyond_non_filter_steps_are_hoisted() -> None:
         """途中に集計ステップが挟まっても、その先の filter は前に出す。"""
         p = _part(order=["Read_Label", "WL", "State", "STR", "Board", "Chip", "Block"])
         assert _hoistable_prefilters(p) == [
@@ -76,7 +85,8 @@ class TestHoistableDetection:
             ("State", "A2B"),
         ]
 
-    def test_denominator_pre_aggregation_axis_blocks(self) -> None:
+    @staticmethod
+    def test_denominator_pre_aggregation_axis_blocks() -> None:
         """分母事前集計で潰される軸の手前で走査が止まることを検証する。"""
         p = _part(
             relative={
@@ -90,7 +100,8 @@ class TestHoistableDetection:
         # State は分母で潰される軸なので Read_Label で走査が止まる
         assert _hoistable_prefilters(p) == [("Read_Label", "read_level_upper1")]
 
-    def test_derived_axis_of_preaggregated_source_blocks(self) -> None:
+    @staticmethod
+    def test_derived_axis_of_preaggregated_source_blocks() -> None:
         """WL を分母事前集計するとき、WL 由来の派生軸 WLgroup の filter も前に出さない。"""
         group_defs = {"WLgroup": GroupDef(axis="WL", groups={"g": (0, 5)}, definedInLogical=True)}
         p = _part(
@@ -123,8 +134,8 @@ class TestHoistableDetection:
 class TestEquivalence:
     """前絞りの有無で結果が変わらないことのテスト。"""
 
+    @staticmethod
     def _both_ways(
-        self,
         data_dir: Path,
         part: ScorePart,
         monkeypatch: pytest.MonkeyPatch,
@@ -230,7 +241,8 @@ class TestEquivalence:
 class TestDiagnosticsChange:
     """前絞りが診断に与える変化のテスト。"""
 
-    def test_partial_coef_suffices_when_state_is_filtered(self, data_dir_mini: Path) -> None:
+    @staticmethod
+    def test_partial_coef_suffices_when_state_is_filtered(data_dir_mini: Path) -> None:
         """Filter 前絞りの診断上の変化(意図した仕様)を確認する。
 
         State を filter で1つに絞るパーツは、dVtBudget 係数がその State の
@@ -269,7 +281,8 @@ class TestDiagnosticsChange:
 class TestCacheSafety:
     """前絞りが prefix_cache を混線させないことのテスト。"""
 
-    def test_parts_differing_only_in_prefilter_do_not_share_cache(self, data_dir_mini: Path) -> None:
+    @staticmethod
+    def test_parts_differing_only_in_prefilter_do_not_share_cache(data_dir_mini: Path) -> None:
         """State filter の値だけ違う2パーツでキャッシュが混線しないことを確認する。
 
         ステップ署名列は相対化まで同一なので、prefilters がキャッシュキーに

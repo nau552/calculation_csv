@@ -17,6 +17,11 @@ def strip_jsonc_comments(text: str) -> str:
     """文字列リテラル内の `//` を壊さないよう、1文字ずつ状態を追いながらコメントを除去する。
 
     正規表現一発では文字列内と区別できない。
+
+    Returns:
+        `//` 行コメントと `/* */` ブロックコメントを取り除いたテキスト
+        (文字列リテラルの中身は保たれる)。
+
     """
     out = []
     i = 0
@@ -56,14 +61,24 @@ _TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
 
 
 def loads(text: str) -> object:
-    """与えられた jsonc 文字列をパースする(コメントと末尾カンマを除去して json.loads)。"""
+    """与えられた jsonc 文字列をパースする(コメントと末尾カンマを除去して json.loads)。
+
+    Returns:
+        json.loads の結果(トップレベルに応じて dict / list / スカラー)。
+
+    """
     no_comments = strip_jsonc_comments(text)
     no_trailing_commas = _TRAILING_COMMA_RE.sub(r"\1", no_comments)
     return json.loads(no_trailing_commas)
 
 
 def load(path: str | Path) -> object:
-    """指定パスの jsonc ファイルを読み込んでパースする。"""
+    """指定パスの jsonc ファイルを読み込んでパースする。
+
+    Returns:
+        ファイル内容のパース結果(トップレベルに応じて dict / list / スカラー)。
+
+    """
     return loads(Path(path).read_text(encoding="utf-8"))
 
 
@@ -73,5 +88,10 @@ def dump(obj: object, path: str | Path, indent: int = 4) -> None:
 
 
 def dumps(obj: object, indent: int = 4) -> str:
-    """オブジェクトを JSON 文字列にする(indent つき・非ASCIIはそのまま)。"""
+    """オブジェクトを JSON 文字列にする(indent つき・非ASCIIはそのまま)。
+
+    Returns:
+        整形済みの JSON テキスト。
+
+    """
     return json.dumps(obj, indent=indent, ensure_ascii=False)

@@ -6,8 +6,13 @@ BASE = Path(__file__).parent / ".." / "result_tmp"
 
 
 # キーワード専用化は呼び出し側の書き方が変わるため今回は見送り(位置引数のまま容認)
-def read_map(path: Path, has_header: bool = False) -> dict[str, str]:  # noqa: FBT001, FBT002
-    """マップ csv を {コード: テキスト} の辞書として読む(has_header=True なら非数値先頭セルの行を飛ばす)。"""
+def read_map(path: Path, has_header: bool = False) -> dict[str, str]:  # ruff: ignore[FBT001, FBT002]
+    """マップ csv を {コード: テキスト} の辞書として読む(has_header=True なら非数値先頭セルの行を飛ばす)。
+
+    Returns:
+        1列目のコードをキー、2列目のテキスト(無い行は空文字)を値とする辞書。
+
+    """
     m = {}
     with path.open(newline="", encoding="utf-8") as f:
         reader = csv.reader(f)
@@ -24,7 +29,12 @@ def read_map(path: Path, has_header: bool = False) -> dict[str, str]:  # noqa: F
 
 
 def load_parameter_label(path: Path) -> dict[tuple[str, str, str, str, str], dict[str, str]]:
-    """parameterLabel_FBC.csv を (InBatchEpoch,Board,Chip,Block,Measure) キーの行辞書として読む。"""
+    """parameterLabel_FBC.csv を (InBatchEpoch,Board,Chip,Block,Measure) キーの行辞書として読む。
+
+    Returns:
+        5軸タプルをキー、csv の1行(列名 → 値の dict)を値とする辞書。
+
+    """
     d = {}
     with path.open(newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -42,8 +52,13 @@ def load_parameter_label(path: Path) -> dict[tuple[str, str, str, str, str], dic
 
 # dataName は実験データのファイル名・列名の語彙そのもの(dataName_FBC.csv, DataName 列)。
 # 綴りを揃えることを優先し snake_case 化しない(以降の noqa: N802/N806 も同じ理由)
-def load_dataName(path: Path) -> dict[tuple[str, str, str, str, str], str]:  # noqa: N802
-    """dataName_FBC.csv を (InBatchEpoch,Board,Chip,Block,Measure) → DataName の辞書として読む。"""
+def load_dataName(path: Path) -> dict[tuple[str, str, str, str, str], str]:  # ruff: ignore[N802]
+    """dataName_FBC.csv を (InBatchEpoch,Board,Chip,Block,Measure) → DataName の辞書として読む。
+
+    Returns:
+        5軸タプルをキー、DataName 列の値(列が無い行は空文字)を値とする辞書。
+
+    """
     d = {}
     with path.open(newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -63,18 +78,18 @@ def main() -> None:
     """FBC.csv を map/ラベル各 csv で読み替え、FBC_expanded.csv を書き出す。"""
     fbc_path = BASE / "FBC.csv"
     param_path = BASE / "parameterLabel_FBC.csv"
-    dataName_path = BASE / "dataName_FBC.csv"  # noqa: N806
-    map_dataName_path = BASE / "map_DataName.csv"  # noqa: N806
+    dataName_path = BASE / "dataName_FBC.csv"  # ruff: ignore[N806]
+    map_dataName_path = BASE / "map_DataName.csv"  # ruff: ignore[N806]
     map_label_path = BASE / "map_Label.csv"
     map_state_path = BASE / "map_State.csv"
 
-    map_dataName = read_map(map_dataName_path)  # noqa: N806
+    map_dataName = read_map(map_dataName_path)  # ruff: ignore[N806]
     map_label = read_map(map_label_path)
     map_state = read_map(map_state_path)
     map_override = read_map(BASE / "map_Override.csv")
 
     param_map = load_parameter_label(param_path)
-    dataName_map = load_dataName(dataName_path)  # noqa: N806
+    dataName_map = load_dataName(dataName_path)  # ruff: ignore[N806]
 
     out_path = BASE / "FBC_expanded.csv"
 
@@ -118,8 +133,8 @@ def main() -> None:
             )
 
             # DataName numeric from dataName_FBC.csv, map to text
-            dataName_num = dataName_map.get(key, "")  # noqa: N806
-            dataName_text = map_dataName.get(dataName_num, "") if dataName_num != "" else ""  # noqa: N806
+            dataName_num = dataName_map.get(key, "")  # ruff: ignore[N806]
+            dataName_text = map_dataName.get(dataName_num, "") if dataName_num else ""  # ruff: ignore[N806]
 
             param = param_map.get(key, None)
             # parameterLabel_FBC.csv columns: Erase_Label, Erase_Override, Program_Label,
@@ -132,20 +147,20 @@ def main() -> None:
             read_override_num = param.get("Read_Override", "") if param else ""
 
             # map numeric labels to text where possible
-            erase_label_text = map_label.get(erase_label_num, "") if erase_label_num != "" else ""
-            prog_label_text = map_label.get(prog_label_num, "") if prog_label_num != "" else ""
-            read_label_text = map_label.get(read_label_num, "") if read_label_num != "" else ""
+            erase_label_text = map_label.get(erase_label_num, "") if erase_label_num else ""
+            prog_label_text = map_label.get(prog_label_num, "") if prog_label_num else ""
+            read_label_text = map_label.get(read_label_num, "") if read_label_num else ""
 
             # map overrides to boolean-like True/False (normalize to Title case)
             def map_override_value(code: str) -> str:
-                if code == "":
+                if not code:
                     return ""
                 v = map_override.get(code, code)
                 if isinstance(v, str):
                     vv = v.strip().lower()
-                    if vv in ("true", "t", "1"):
+                    if vv in {"true", "t", "1"}:
                         return "True"
-                    if vv in ("false", "f", "0"):
+                    if vv in {"false", "f", "0"}:
                         return "False"
                 # fallback: return original
                 return v
@@ -156,7 +171,7 @@ def main() -> None:
 
             # map State to text
             state_num = r.get("State", "").strip()
-            state_text = map_state.get(state_num, "") if state_num != "" else ""
+            state_text = map_state.get(state_num, "") if state_num else ""
 
             out_row = {
                 "InBatchEpoch": r.get("InBatchEpoch", ""),

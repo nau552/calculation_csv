@@ -79,6 +79,11 @@ def _named_axes(score_part: ScorePart) -> set[str]:
 
     ui/state.py の _part_axis_names は「編集途中の(不完全かもしれない)dict」
     を対象にした対になる実装 — 意図的な並行であり、統合を試みないこと。
+
+    Returns:
+        軸名の集合(order の構成軸・変換ステップの by 軸・相対化の split 軸・
+        分母事前集計の軸と by 軸を合わせたもの)。
+
     """
     axes: set[str] = set()
     for entry in score_part.order:
@@ -97,7 +102,16 @@ def _named_axes(score_part: ScorePart) -> set[str]:
 
 
 def _referenced_group_defs(score_part: ScorePart, group_defs: dict[str, GroupDef] | None) -> dict[str, GroupDef]:
-    """このパーツが派生軸として実際に使うグループ定義。"""
+    """このパーツが派生軸として実際に使うグループ定義。
+
+    Returns:
+        パーツが軸名として言及している定義だけに絞った {定義名: GroupDef}。
+        group_defs が空・None なら空辞書。
+
+    Raises:
+        ValueError: 使われている定義の名前がその元軸名と同名のとき。
+
+    """
     if not group_defs:
         return {}
     used = {n: group_defs[n] for n in _named_axes(score_part) if n in group_defs}
@@ -113,6 +127,11 @@ def _required_axes(score_part: ScorePart, group_defs: dict[str, GroupDef] | None
 
     グループ派生軸名はその元軸に読み替える(グループ列は読み込み後に
     元軸から作られる)。
+
+    Returns:
+        読み込むべき軸名の集合(dVtBudget パーツでは Board / State を必ず
+        含む)。
+
     """
     named = _named_axes(score_part)
     derived = _referenced_group_defs(score_part, group_defs)
@@ -130,6 +149,16 @@ def _with_group_columns(
     以降は普通の軸として集計される。派生のためだけに読み込んだ元軸は再び
     落とす: パーツ自身のエントリに無い軸は暗黙集約(混ぜる)が仕様であり、
     列が残ると最終の collapse がエラーになってしまうため。
+
+    Returns:
+        派生列を追加し、派生のためだけに読んだ元軸列を落とした LazyFrame
+        (参照する定義が無ければ入力をそのまま返す)。
+
+    Raises:
+        ValueError: 参照する定義が Physical 記法のまま(definedInLogical=
+            false)のとき、またはどのグループにも入らない軸の値が
+            あるとき。
+
     """
     derived = _referenced_group_defs(score_part, group_defs)
     if not derived:
@@ -166,7 +195,13 @@ def _combined_key(v: object) -> str:
 
 
 def _combine_selection(sel: dict, axes: list[str]) -> str:
-    """辞書選択1つ(ScorePart 検証済み)を、融合列に一致する内部の連結キー文字列へ変換する。"""
+    """辞書選択1つ(ScorePart 検証済み)を、融合列に一致する内部の連結キー文字列へ変換する。
+
+    Returns:
+        構成軸の値を order エントリの軸順で "&" 連結した文字列
+        (bool は "true"/"false" に揃える)。
+
+    """
     return COMBINED_SEP.join(_combined_key(sel[a]) for a in axes)
 
 
@@ -174,6 +209,14 @@ def _effective_order(score_part: ScorePart) -> list[str]:
     """ユーザが明示配置しなかった暗黙のパイプラインステップを補完する。
 
     補完位置: 相対化は先頭、dVtBudget 変換は相対化の直後。
+
+    Returns:
+        暗黙ステップを補完した後の order のコピー(元のリストは変更しない)。
+
+    Raises:
+        ValueError: order に __relative__ があるのに relative 設定が無いとき、
+            または __dvtbudget__ があるのに type が dVtBudget でないとき。
+
     """
     order = list(score_part.order)
     relative_enabled = score_part.relative is not None
@@ -221,6 +264,10 @@ def _hoistable_prefilters(
     診断への影響: 行が先に減るため、後段ステップの検証が「filter で残る
     行」だけを対象にするようになる(例: dVtBudget 係数は filter 後に残る
     State の分だけあればよい。従来は全 State 分を要求していた)。
+
+    Returns:
+        前出しできる filter の (軸名, 選択値) の並び(order での出現順)。
+
     """
 
     def expand(name: str) -> set:
@@ -256,7 +303,13 @@ def _hoistable_prefilters(
 
 
 def _source_type(score_part: ScorePart) -> str:
-    """実際に読む csv の type(dVtBudget パーツは FBC.csv を読む)。"""
+    """実際に読む csv の type(dVtBudget パーツは FBC.csv を読む)。
+
+    Returns:
+        読み込み対象の type 名(type="dVtBudget" なら "FBC"、それ以外は
+        score_part.type そのまま)。
+
+    """
     return "FBC" if score_part.type == "dVtBudget" else score_part.type
 
 
@@ -266,15 +319,19 @@ def _dummy_axis_values(data_dir: str | Path, axis: str, spec: AggregationSpec | 
     map ファイル → 同じ epoch の他の測定csvの実在値 → 集計指示の選択リスト →
     [0] の順で決める。sum の結果は要素数に依存するため、map のある軸
     (SGWLD 等)は実物と同じ要素数になる。
+
+    Returns:
+        軸の取りうる値のリスト(どの情報源からも決まらなければ [0])。
+
     """
     data_dir = Path(data_dir)
     # 同一パッケージ内部での意図的な利用(map ファイル探索の実装は axis_resolve に1つだけ持つ)
-    map_path = axis_resolve._map_file_for_axis(data_dir, axis)  # noqa: SLF001
+    map_path = axis_resolve._map_file_for_axis(data_dir, axis)  # ruff: ignore[SLF001]
     if map_path is not None:
         m = pl.read_csv(map_path, has_header=False, new_columns=["code", "text"])
         return m["text"].to_list()
     # introspect は UI 向けメタデータ導出モジュール。vthSkip のダミー計算経路でのみ使うため、使うときだけ読み込む
-    from .introspect import detect_types  # noqa: PLC0415
+    from .introspect import detect_types  # ruff: ignore[PLC0415]
 
     for type_ in detect_types(data_dir):
         f = axis_resolve.data_file(data_dir, f"{type_}.csv")
@@ -285,7 +342,7 @@ def _dummy_axis_values(data_dir: str | Path, axis: str, spec: AggregationSpec | 
             if axis in lf.collect_schema().names():
                 return lf.select(pl.col(axis).unique().sort()).collect()[axis].to_list()
         # 読めない・軸列の無い csv はダミー軸値の情報源から静かに外し、次の type の走査を続ける
-        except Exception:  # noqa: S112, BLE001
+        except Exception:  # ruff: ignore[S112, BLE001]
             continue
     if spec is not None and isinstance(spec.value, list) and spec.value:
         return list(spec.value)
@@ -307,6 +364,15 @@ def compute_dummy_part(
     (選択リスト・集計時重み・sum/mean 等)だけを通常どおり適用する。
     フローの vthSkip 慣習(例: KLD のダミー 0 は log 適用後の量に対する値)を
     そのまま受け入れるための意味論(docs/score_gui_design.md 参照)。
+
+    Returns:
+        ダミー値を敷き詰めた合成フレームに集計だけを適用して畳んだ
+        パーツ値。
+
+    Raises:
+        ValueError: パーツが相対化つき、または type=dVtBudget のとき
+            (ダミー計算は素の集計パーツのみ対応)。
+
     """
     score_part = score_part.resolve_selection_refs(selection_sets or {}, weight_sets or {})
     if score_part.relative is not None or score_part.type == "dVtBudget":
@@ -320,7 +386,7 @@ def compute_dummy_part(
     axis_values = {a: _dummy_axis_values(data_dir, a, score_part.aggregations.get(a)) for a in axes}
 
     # ダミー計算(vthSkip)経路でのみ使うため、使うときだけ読み込む
-    import itertools  # noqa: PLC0415
+    import itertools  # ruff: ignore[PLC0415]
 
     rows = list(itertools.product(*axis_values.values())) if axes else [()]
     data: dict[str, list] = {a: [r[i] for r in rows] for i, a in enumerate(axis_values)}
@@ -348,9 +414,13 @@ def derive_axis_counts(data_dir: str | Path, axes: set[str]) -> dict[str, int]:
     したがってデータ(ダミー一式含む)の最大値+1 が軸の総数として正確で、
     {Generation}.json が無くても Physical 記法の読み替えができる。
     同じ軸を持つ type が複数あれば最大を取る。
+
+    Returns:
+        {軸名: 本数}。どの csv からも読めなかった軸は含まれない。
+
     """
     # introspect は UI 向けメタデータ導出モジュール。Physical 記法の読み替え経路でのみ使うため、使うときだけ読み込む
-    from .introspect import detect_types  # noqa: PLC0415
+    from .introspect import detect_types  # ruff: ignore[PLC0415]
 
     data_dir = Path(data_dir)
     counts: dict[str, int] = {}
@@ -360,7 +430,7 @@ def derive_axis_counts(data_dir: str | Path, axes: set[str]) -> dict[str, int]:
             lf = pl.scan_csv(f)
             cols = lf.collect_schema().names()
         # 読めない csv は軸本数の情報源から静かに外し、次の type の走査を続ける
-        except Exception:  # noqa: S112, BLE001
+        except Exception:  # ruff: ignore[S112, BLE001]
             continue
         take = [a for a in axes if a in cols]
         if not take:
@@ -374,9 +444,15 @@ def derive_axis_counts(data_dir: str | Path, axes: set[str]) -> dict[str, int]:
 
 
 def load_axis_counts(generation_info_path: str | Path) -> dict[str, int]:
-    """世代情報 json から軸ごとの本数({"WL": 120, "STR": 4} など)を読む。"""
+    """世代情報 json から軸ごとの本数({"WL": 120, "STR": 4} など)を読む。
+
+    Returns:
+        {軸名: 本数}(json に numWLs / numStrings 等の対応キーが無い軸は
+        含まれない)。
+
+    """
     # 世代情報 json を読むこの経路でのみ使うため、使うときだけ読み込む
-    from . import jsonc  # noqa: PLC0415
+    from . import jsonc  # ruff: ignore[PLC0415]
 
     info = jsonc.load(generation_info_path)
     counts: dict[str, int] = {}
@@ -399,6 +475,15 @@ def resolve_group_defs(
     上書き可)の numWLs / numStrings から取り、**ファイルが無ければ測定csvから
     導出**する(derive_axis_counts。本数は世代で固定・フローは全数を測定する
     ため、データの最大値+1 が総数として正確)。全定義が Logical なら何も読まない。
+
+    Returns:
+        {定義名: GroupDef}(すべて Logical 範囲へ読み替え済み。
+        definedInLogical=True に揃う)。
+
+    Raises:
+        ValueError: Physical 記法の定義があるのに、その軸の総数を世代情報
+            json からも測定csvからも決められなかったとき。
+
     """
     defs = run_config.group_defs()
     if all(gd.definedInLogical for gd in defs.values()):
@@ -463,7 +548,13 @@ class SharedComputeContext:
         self.prefix_cache: dict[tuple, object] = {}
 
     def resolved(self, source_type: str) -> pl.DataFrame:
-        """Source type の csv を全パーツの軸の和集合で1回だけ解決した DataFrame。"""
+        """Source type の csv を全パーツの軸の和集合で1回だけ解決した DataFrame。
+
+        Returns:
+            解決済み DataFrame(初回に読み込み・結合してキャッシュし、
+            2回目以降は同じオブジェクトを返す)。
+
+        """
         if source_type not in self._resolved:
             self._resolved[source_type] = axis_resolve.resolve_axes(
                 self.data_dir, source_type, self._union_axes[source_type]
@@ -476,6 +567,14 @@ def _apply_axis_step(lf: pl.LazyFrame, value_col: str, step: str, score_part: Sc
 
     単一軸ならそのまま、複合軸("A&B")なら構成列を一時的な1本のキー列に
     融合し、既存の軸単位opが値の組に対して働くようにする。
+
+    Returns:
+        当該エントリの集計指示を適用した後の LazyFrame。
+
+    Raises:
+        ValueError: 複合軸エントリに対応する集計指示が aggregations に
+            無いとき。
+
     """
     axes = _step_axes(step)
     if len(axes) == 1:
@@ -499,7 +598,13 @@ def _apply_axis_step(lf: pl.LazyFrame, value_col: str, step: str, score_part: Sc
 
 
 def _step_signature(score_part: ScorePart, step: str) -> tuple:
-    """prefix_cache のキーに使う、1ステップの設定内容の署名。"""
+    """prefix_cache のキーに使う、1ステップの設定内容の署名。
+
+    Returns:
+        ステップ種別と設定内容(JSON 化した spec など)を並べたタプル。
+        そこまでの設定が完全一致するパーツ同士でだけ等しくなる。
+
+    """
     if step == RELATIVE_STEP:
         return ("relative", score_part.relative.model_dump_json())
     if step == DVTBUDGET_STEP:
@@ -532,6 +637,18 @@ def compute_score_part(
     識別値ごとに1行の DataFrame を返す(空タプル=従来どおり float を返す)。
     識別列は order に置かないため「残っている全列がグループキー」の仕組みに
     より、全集計・相対化ペア照合が自動的に識別値ごとに分かれて実行される。
+
+    Returns:
+        パーツ値のスカラー(identity_axes 指定時は識別値ごとに1行の
+        DataFrame)。
+
+    Raises:
+        ValueError: identity_axes を shared_ctx 無し・custom パーツ・2軸
+            以上で使ったとき、custom パーツなのに custom_module が無い
+            とき、dVtBudget パーツに generation / dvtbudget_coef /
+            board_temperatures が揃っていないとき、または order の仮想
+            ステップに対応する集計指示が無いとき。
+
     """
     if identity_axes:
         if shared_ctx is None:
@@ -611,7 +728,7 @@ def compute_score_part(
             prefilters_sig,
         )
         cache_keys = {
-            i: (base_sig, tuple(sigs[: i + 1])) for i, s in enumerate(steps) if s in (RELATIVE_STEP, DVTBUDGET_STEP)
+            i: (base_sig, tuple(sigs[: i + 1])) for i, s in enumerate(steps) if s in {RELATIVE_STEP, DVTBUDGET_STEP}
         }
 
     # いちばん後ろのキャッシュ点から再開できるところを探す
@@ -672,7 +789,16 @@ def compute_score_file(
     custom_parts_path: str | Path | None = None,
     generation_info_path: str | Path | None = None,
 ) -> dict[str, float]:
-    """Config の全スコアパーツを計算し、expression を評価して {"Score": ..., パーツ名: ...} を返す。"""
+    """Config の全スコアパーツを計算し、expression を評価して {"Score": ..., パーツ名: ...} を返す。
+
+    Returns:
+        {"Score": 合成式の値(式が無ければ None), パーツ名: パーツ値, ...}。
+
+    Raises:
+        ValueError: type="custom" のパーツがあるのに custom_parts.py が
+            見つからないとき。
+
+    """
     score_file = run_config.to_score_file()
     group_defs = resolve_group_defs(run_config, data_dir, generation_info_path)
 
@@ -744,7 +870,7 @@ def compute_score_file(
 def main(argv: list[str] | None = None) -> None:
     """コマンドライン実行の入り口(引数解析 → 計算 → stdout へ JSON 出力)。"""
     # 版数表示(--version / stderr)でのみ使うため、使うときだけ読み込む
-    from . import __version__  # noqa: PLC0415
+    from . import __version__  # ruff: ignore[PLC0415]
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", action="version", version=f"scorelib_param {__version__}")

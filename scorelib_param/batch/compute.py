@@ -84,7 +84,16 @@ class BatchComputeContext(SharedComputeContext):
         self._epochs = epochs
 
     def resolved(self, source_type: str) -> pl.DataFrame:
-        """全 epoch の source_type を解決し、Epoch 列付きで縦結合した共有フレームを返す。"""
+        """全 epoch の source_type を解決し、Epoch 列付きで縦結合した共有フレームを返す。
+
+        Returns:
+            バッチ内全 epoch の解決結果を Epoch 列付きで縦結合した
+            DataFrame(初回に collect してキャッシュし、以降は同じ実体)。
+
+        Raises:
+            ValueError: バッチ内のどの epoch にも {source_type}.csv が無いとき。
+
+        """
         if source_type not in self._resolved:
             axes = self._union_axes[source_type]
             # type ファイルの無い epoch は結合対象外(vthSkip 中の epoch は
@@ -110,7 +119,13 @@ class BatchComputeContext(SharedComputeContext):
 
 
 def _check_epoch_col_free(run_config: RunConfig) -> None:
-    """予約名 EPOCH_COL がスコア設計内の軸・グループ定義と衝突していないか。"""
+    """予約名 EPOCH_COL がスコア設計内の軸・グループ定義と衝突していないか。
+
+    Raises:
+        ValueError: グループ定義名またはスコアパーツの軸名が予約名
+            EPOCH_COL と衝突しているとき。
+
+    """
     if EPOCH_COL in run_config.group_defs():
         msg = f"group def name '{EPOCH_COL}' collides with the batch identity axis"
         raise ValueError(msg)
@@ -122,7 +137,7 @@ def _check_epoch_col_free(run_config: RunConfig) -> None:
 
 def _load_custom_module(run_config: RunConfig, custom_parts_path: str | Path | None) -> ModuleType | None:
     # Path はモジュールトップでは型注釈用(TYPE_CHECKING)のみ。実行時に使うこの関数内で読み込む
-    from pathlib import Path  # noqa: PLC0415
+    from pathlib import Path  # ruff: ignore[PLC0415]
 
     if not any(p.type == CUSTOM_TYPE for p in run_config.optimization.score_parts):
         return None
@@ -166,6 +181,11 @@ def _per_epoch_fallback(
     epoch ごとの逐次計算(compute_score_file — バッチと数値等価)に落とし、
     原因 epoch を特定して除外し、正常 epoch の値は救う
     (docs/batch_design.md 8節2項)。
+
+    Returns:
+        逐次計算で救えた epoch のスコア行と、原因 epoch → 理由の failed を
+        収めた BatchResult。
+
     """
     print(
         f"batch computation failed ({batch_error}); retrying per epoch to locate the offending epoch(s)",
@@ -188,7 +208,7 @@ def _per_epoch_fallback(
                 generation_info_path=generation_info_path,
             )
             rows.append({**_epoch_row(se), **values})
-        except Exception as err:  # noqa: BLE001 — epoch単位で理由ごと報告する
+        except Exception as err:  # ruff: ignore[BLE001] — epoch単位で理由ごと報告する
             failed[se.ref.epoch_id] = str(err)
     return BatchResult(_result_frame(rows, part_names), failed)
 
@@ -208,6 +228,11 @@ def compute_score_batch(
       バックして原因 epoch を特定する(結果は数値等価)。
     - `generation_info_path`: Physical 記法のグループ定義の読み替えに使う
       世代情報 json。省略時は先頭 epoch のデータディレクトリ内を探す。
+
+    Returns:
+        このバッチの BatchResult(1 epoch = 1 行の scores と、
+        除外 epoch → 理由の failed、ダミー値使用の dummy_used)。
+
     """
     _check_epoch_col_free(run_config)
     score_file = run_config.to_score_file()
@@ -232,7 +257,7 @@ def compute_score_batch(
                     axis_resolve.data_file(se.data_dir, "initial_temperature.csv")
                 )
                 ok_epochs.append(se)
-            except Exception as err:  # noqa: BLE001
+            except Exception as err:  # ruff: ignore[BLE001]
                 failed[se.ref.epoch_id] = f"initial_temperature.csv unreadable: {err}"
         epochs = ok_epochs
     if not epochs:
@@ -268,7 +293,7 @@ def compute_score_batch(
                                 params=part.params or {},
                             ),
                         )
-                    except Exception as err:  # noqa: BLE001
+                    except Exception as err:  # ruff: ignore[BLE001]
                         failed[se.ref.epoch_id] = f"custom part '{part.name}': {err}"
                 part_values[part.name] = values
                 continue
@@ -315,7 +340,7 @@ def compute_score_batch(
                             f"{st}.csv not found (no vthSkip dummy value configured)",
                         )
             part_values[part.name] = values_map
-    except Exception as err:  # noqa: BLE001 — バッチ全体エラー → epoch 逐次で切り分け
+    except Exception as err:  # ruff: ignore[BLE001] — バッチ全体エラー → epoch 逐次で切り分け
         fb = _per_epoch_fallback(
             epochs,
             run_config,
@@ -348,7 +373,7 @@ def compute_score_batch(
         if score_file.expression:
             try:
                 score = evaluate_expression(score_file.expression, values)
-            except Exception as err:  # noqa: BLE001
+            except Exception as err:  # ruff: ignore[BLE001]
                 failed[epoch_id] = f"expression evaluation failed: {err}"
                 continue
         rows.append({**_epoch_row(se), "Score": score, **values})

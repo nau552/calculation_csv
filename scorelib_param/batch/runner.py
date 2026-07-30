@@ -48,8 +48,13 @@ Fetcher = Callable[[EpochRef, Path], Path]
 
 
 # staging_root は差し替え可能な fetch 実装の共通シグネチャ(上の Fetcher 契約)。pass-through では使わない
-def passthrough_fetcher(ref: EpochRef, staging_root: Path) -> Path:  # noqa: ARG001
-    """ローカル/共有マウント済みデータをそのまま使う(コピーも削除もしない)。"""
+def passthrough_fetcher(ref: EpochRef, staging_root: Path) -> Path:  # ruff: ignore[ARG001]
+    """ローカル/共有マウント済みデータをそのまま使う(コピーも削除もしない)。
+
+    Returns:
+        `ref.source_dir` そのもの(ステージング領域には何も作らない)。
+
+    """
     return ref.source_dir
 
 
@@ -62,23 +67,33 @@ def available_memory_bytes() -> int | None:
 
     Linux は /proc/meminfo(追加依存なし・古い Ubuntu でも可)、それ以外は
     psutil があれば使用、どちらも無ければ None(advisory をスキップ)。
+
+    Returns:
+        利用可能メモリのバイト数。どの手段でも取得できなければ None。
+
     """
     meminfo = Path("/proc/meminfo")
     if meminfo.exists():
-        for line in meminfo.read_text().splitlines():
+        for line in meminfo.read_text(encoding="utf-8").splitlines():
             if line.startswith("MemAvailable:"):
                 return int(line.split()[1]) * 1024
     try:
         # psutil は任意依存(無ければ except に落ちて advisory をスキップする)。あるときだけ読み込む
-        import psutil  # noqa: PLC0415
+        import psutil  # ruff: ignore[PLC0415]
 
         return int(psutil.virtual_memory().available)
-    except Exception:  # noqa: BLE001 — advisory なので静かに諦める
+    except Exception:  # ruff: ignore[BLE001] — advisory なので静かに諦める
         return None
 
 
 def estimate_epoch_bytes(sample: StagedEpoch, run_config: RunConfig) -> int | None:
-    """最初の epoch を実際に解決してメモリ足跡を実測する(advisory 用)。"""
+    """最初の epoch を実際に解決してメモリ足跡を実測する(advisory 用)。
+
+    Returns:
+        1 epoch 分の解決済みフレームの実測バイト数。custom のみの設定や
+        見積もり中のエラーで測れなかった場合は None。
+
+    """
     try:
         score_file = run_config.to_score_file()
         parts = [p for p in score_file.score_parts if p.type != "custom"]
@@ -86,8 +101,8 @@ def estimate_epoch_bytes(sample: StagedEpoch, run_config: RunConfig) -> int | No
             return None
         ctx = BatchComputeContext([sample], parts, run_config.group_defs())
         # 同一パッケージ内部での意図的な利用(compute の実測サイズ見積もりを advisory に使う)
-        return sum(ctx.resolved(st).estimated_size() for st in ctx._union_axes)  # noqa: SLF001
-    except Exception:  # noqa: BLE001 — 見積もり失敗は advisory を諦めるだけ
+        return sum(ctx.resolved(st).estimated_size() for st in ctx._union_axes)  # ruff: ignore[SLF001]
+    except Exception:  # ruff: ignore[BLE001] — 見積もり失敗は advisory を諦めるだけ
         return None
 
 
@@ -95,6 +110,13 @@ def _advise_batch_size(requested: int | str, epoch_bytes: int | None, n_epochs: 
     """batch_size の解決と助言メッセージ(docs/batch_design.md 6.3節)。
 
     実行をブロックしない。
+
+    Returns:
+        (確定した batch_size, stderr に出す助言メッセージのリスト)のタプル。
+
+    Raises:
+        ValueError: batch_size に 1 未満の整数が指定されたとき。
+
     """
     msgs: list[str] = []
     available = available_memory_bytes()
@@ -179,7 +201,7 @@ class BatchRunner:
         self.staging_root.mkdir(parents=True, exist_ok=True)
 
         # cli 側の補助関数はこの初期化経路でのみ使うため、使うときだけ読み込む
-        from scorelib_param.cli import _source_type  # noqa: PLC0415
+        from scorelib_param.cli import _source_type  # ruff: ignore[PLC0415]
 
         parts = run_config.optimization.score_parts
         # vthSkip でダミー値が設定された type はファイルが無くても計算できる
@@ -193,11 +215,17 @@ class BatchRunner:
     # --- 1 epoch の準備(fetch → ステージング → 検証)。worker スレッドで走る ---
 
     def _prepare_epoch(self, ref: EpochRef) -> tuple[StagedEpoch, Path | None]:
-        """戻り値: (staged, 削除すべき fetch 先ディレクトリ or None)。"""
+        """戻り値: (staged, 削除すべき fetch 先ディレクトリ or None)。
+
+        Returns:
+            (ステージング済み epoch, 計算後に削除すべき fetch 先ディレクトリ)の
+            タプル。pass-through などで削除対象が無ければ後者は None。
+
+        """
         fetched_dir: Path | None = None
         try:
             local = Path(self.fetcher(ref, self.staging_root))
-        except Exception as err:  # noqa: BLE001 — epoch 単位で理由ごと報告
+        except Exception as err:  # ruff: ignore[BLE001] — epoch 単位で理由ごと報告
             return StagedEpoch(ref, ref.source_dir, error=f"fetch failed: {err}"), None
         if local != ref.source_dir:
             ref = replace(ref, source_dir=local)
@@ -237,7 +265,15 @@ class BatchRunner:
     # --- 実行 ---
 
     def run_iter(self) -> Iterator[BatchResult]:
-        """バッチごとに BatchResult を yield する。先行取得つきパイプライン。"""
+        """バッチごとに BatchResult を yield する。先行取得つきパイプライン。
+
+        Yields:
+            1バッチ分の計算結果(scores/failed/dummy_used を持つ BatchResult)。
+
+        Raises:
+            StrictBatchError: strict モードで不良 epoch を検出したとき。
+
+        """
         refs = enumerate_epochs(self.histories)
         size = self._resolve_batch_size(refs)
         batches = [refs[i : i + size] for i in range(0, len(refs), size)]
@@ -292,7 +328,16 @@ class BatchRunner:
         return result
 
     def run(self) -> BatchResult:
-        """全バッチを実行して結果を1つに結合する。全滅時はエラー。"""
+        """全バッチを実行して結果を1つに結合する。全滅時はエラー。
+
+        Returns:
+            全バッチの scores を縦結合し failed / dummy_used を統合した
+            BatchResult(History, EpochNo でソート済み)。
+
+        Raises:
+            RuntimeError: 全 epoch が失敗して返せるスコア行が1つも無いとき。
+
+        """
         frames: list[pl.DataFrame] = []
         failed: dict = {}
         dummy_used: dict = {}

@@ -21,7 +21,12 @@ _TAIL_AGGS = {a: {"op": "mean"} for a in _TAIL_ORDER}
 
 
 def _override_part() -> ScorePart:
-    """旧仕様の形: Read_Label で測定を選び、Read_Override で分子/分母を分ける。"""
+    """旧仕様の形: Read_Label で測定を選び、Read_Override で分子/分母を分ける。
+
+    Returns:
+        この形を組み立てた検証済みの ScorePart。
+
+    """
     return ScorePart.model_validate(
         {
             "name": "by_override",
@@ -42,6 +47,10 @@ def _measure_part(**relative_overrides: dict[str, str]) -> ScorePart:
     """新仕様の形: Measure 番号だけで分子/分母を指定する。
 
     (Read_Label filter 不要 — 番号が測定を一意に指すため)
+
+    Returns:
+        relative_overrides で相対化設定を上書きした ScorePart。
+
     """
     relative = {
         "split_axis": "Measure",
@@ -143,7 +152,8 @@ def test_measure_filter_is_in_selects_multiple(data_dir_mini: Path) -> None:
 class TestPrefilterWithMeasure:
     """Measure 軸と filter 前絞りの組み合わせのテスト。"""
 
-    def test_measure_filter_is_hoisted(self) -> None:
+    @staticmethod
+    def test_measure_filter_is_hoisted() -> None:
         """Measure の filter が前出しされることを検証する。"""
         p = ScorePart.model_validate(
             {
@@ -155,7 +165,8 @@ class TestPrefilterWithMeasure:
         )
         assert _hoistable_prefilters(p) == [("Measure", [0, 1])]
 
-    def test_measure_split_blocks_measure_hoist(self) -> None:
+    @staticmethod
+    def test_measure_split_blocks_measure_hoist() -> None:
         """split_axis=Measure のとき Measure filter は前に出さない。
 
         (従来の split 軸除外がそのまま働く)
@@ -174,8 +185,9 @@ class TestPrefilterWithMeasure:
         )
         assert _hoistable_prefilters(p) == [("State", "A2B")]
 
+    @staticmethod
     def test_is_in_prefilter_same_value_and_cache_key_hashable(
-        self, data_dir_mini: Path, monkeypatch: pytest.MonkeyPatch
+        data_dir_mini: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """リスト値 filter の前絞りが同値で、キャッシュキーも壊れないことを確認する。
 

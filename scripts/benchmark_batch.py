@@ -38,9 +38,15 @@ from pathlib import Path
 
 
 def _peak_memory_gib() -> float | None:
-    """自プロセスのピークメモリ(working set / RSS)。取れない環境は None。"""
+    """自プロセスのピークメモリ(working set / RSS)。取れない環境は None。
+
+    Returns:
+        ピークメモリ量(GiB)。resource モジュールも Windows API も使えない
+        環境では None。
+
+    """
     try:
-        import resource  # noqa: PLC0415 — Unix 専用モジュール。ImportError で有無を判定するため関数内で import
+        import resource  # ruff: ignore[PLC0415] — Unix 専用モジュール。ImportError で有無を判定するため関数内で import
 
         peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         # Linux は KiB、macOS はバイト
@@ -48,7 +54,7 @@ def _peak_memory_gib() -> float | None:
     except ImportError:
         pass
     if sys.platform == "win32":
-        import ctypes  # noqa: PLC0415 — Windows 専用パス。該当 OS のときだけ import する
+        import ctypes  # ruff: ignore[PLC0415] — Windows 専用パス。該当 OS のときだけ import する
 
         class PMC(ctypes.Structure):
             _fields_ = [("cb", ctypes.c_uint32), ("PageFaultCount", ctypes.c_uint32)] + [
@@ -79,9 +85,13 @@ def _run_one(args: argparse.Namespace) -> None:
     """子プロセスモード: 1つのバッチサイズで計算して結果を1行出力する。"""
     # エンジンは子プロセスでだけ import する(親プロセスの起動を軽く保ち、
     # 子プロセス単位のピークメモリ計測に親の事情を持ち込まないため)
-    from scorelib_param import io_jsonc  # noqa: PLC0415 — 上記コメントの意図的な遅延 import
-    from scorelib_param.batch import BatchRunner  # noqa: PLC0415 — 同上
-    from scorelib_param.batch.__main__ import _parse_histories  # noqa: PLC0415 — 同上
+    from scorelib_param import io_jsonc  # ruff: ignore[PLC0415] — 上記コメントの意図的な遅延 import
+    from scorelib_param.batch import BatchRunner  # ruff: ignore[PLC0415] — 同上
+
+    # _parse_histories は CLI と同じ履歴解釈を再利用するための意図的な内部借用
+    from scorelib_param.batch.__main__ import (  # ruff: ignore[PLC0415] — 同上
+        _parse_histories,
+    )
 
     config = io_jsonc.load_run_config(args.config)
     coef = io_jsonc.load_dvtbudget_coef(args.dvtbudget_coef) if args.dvtbudget_coef else None

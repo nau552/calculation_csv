@@ -44,7 +44,12 @@ def _part(pair_agg: dict[str, object]) -> ScorePart:
 
 @pytest.fixture
 def dvt_kwargs(dvtbudget_coef_path: Path, data_dir_mini: Path) -> dict[str, object]:
-    """パーツ計算に必要な dVtBudget の共通キーワード引数を返す。"""
+    """パーツ計算に必要な dVtBudget の共通キーワード引数を返す。
+
+    Returns:
+        generation・dvtbudget_coef・board_temperatures を詰めた dict。
+
+    """
     return {
         "generation": "B9LS",
         "dvtbudget_coef": io_jsonc.load_dvtbudget_coef(dvtbudget_coef_path),

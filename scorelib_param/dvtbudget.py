@@ -32,6 +32,15 @@ def load_board_temperatures(initial_temperature_path: str | Path) -> dict[int, f
     列順や余分な列(InBatchEpoch等)は問わない。温度列名は Temp / Temperature
     のどちらでもよい。ヘッダなし2列(Board, 温度)の旧参照データ形式も
     受け付ける(1行目の先頭セルが数値ならヘッダなしと判定)。
+
+    Returns:
+        Board 番号 → 実測温度(float)の辞書。
+
+    Raises:
+        ValueError: ファイルが空の時、ヘッダに Board / Temp(Temperature)列が
+            見つからない時、同じ Board に矛盾する温度が並んでいる時、
+            または温度の行が1行も無い時。
+
     """
     df = pl.read_csv(initial_temperature_path, has_header=False, infer_schema=False)
     rows = [[("" if v is None else str(v).strip()) for v in r] for r in df.rows()]
@@ -89,6 +98,15 @@ def apply_dvtbudget(
     `epoch_col`(識別軸名。例: "Epoch")を指定し
     `board_temperatures = {epoch値: {Board: 温度}}` の2段ネストで渡すと、
     係数対応表を (epoch, Board, State) キーで引く。
+
+    Returns:
+        `value_col` を dVtBudget 値(-log10(相対値) / b * 1000)に置き換えた
+        LazyFrame。係数の作業列は落としてある。
+
+    Raises:
+        ValueError: Board / State(epoch_col 指定時はその列も)がすでに
+            集計で潰れていて `lf` に残っていない時。
+
     """
     schema_cols = lf.collect_schema().names()
     needed = {"Board", "State"} | ({epoch_col} if epoch_col else set())

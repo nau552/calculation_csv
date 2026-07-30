@@ -13,6 +13,10 @@ def _write_temps(tmp_path: Path) -> Path:
     """実データの温度と同じ内容の initial_temperature.csv をその場で作る。
 
     (リポジトリに登録しない実データディレクトリへの依存を避ける)。
+
+    Returns:
+        書き出した initial_temperature.csv のパス。
+
     """
     p = tmp_path / "initial_temperature.csv"
     p.write_text("0,-28.236\n1,82.934\n", encoding="utf-8")

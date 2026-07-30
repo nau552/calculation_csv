@@ -19,7 +19,12 @@ REPO_FILES = {"coef": "dvtbudget_coef.jsonc", "sample": "sample.jsonc"}
 
 @pytest.fixture
 def full_dir(tmp_path: Path, data_dir_mini: Path, dvtbudget_coef_path: Path, fixtures_dir: Path) -> Path:
-    """Mini data + coef jsonc + a run-config jsonc, like a real run directory."""
+    """Mini data + coef jsonc + a run-config jsonc, like a real run directory.
+
+    Returns:
+        測定データ・係数・設定ファイルを1か所に揃えた一時ディレクトリのパス。
+
+    """
     d = tmp_path / "run"
     shutil.copytree(data_dir_mini, d)
     shutil.copy(dvtbudget_coef_path, d / "dvtbudget_coef.jsonc")

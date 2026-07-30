@@ -20,13 +20,24 @@ if TYPE_CHECKING:
 
 
 def _mean(*xs: float) -> float:
-    """mean(1, 2, 3) と mean([1, 2, 3]) の両方を受ける。"""
+    """mean(1, 2, 3) と mean([1, 2, 3]) の両方を受ける。
+
+    Returns:
+        与えられた値の算術平均。
+
+    """
     values = xs[0] if len(xs) == 1 and isinstance(xs[0], (list, tuple)) else xs
     return sum(values) / len(values)
 
 
 def _make_functions() -> dict[str, Any]:
-    """式の中で使える関数の登録(log は log10 に割り当てる慣習に注意)。"""
+    """式の中で使える関数の登録(log は log10 に割り当てる慣習に注意)。
+
+    Returns:
+        simpleeval に渡す 関数名 → 呼び出し可能オブジェクト の辞書
+        (simpleeval 既定の関数 + 数学関数・集計関数)。
+
+    """
     functions = dict(DEFAULT_FUNCTIONS)
     functions.update(
         {
@@ -46,6 +57,11 @@ def _make_functions() -> dict[str, Any]:
 
 
 def evaluate_expression(expr: str, variables: Mapping[str, Any]) -> float:
-    """式 `expr` を、`variables` を変数名前空間として評価する。"""
+    """式 `expr` を、`variables` を変数名前空間として評価する。
+
+    Returns:
+        式を評価した結果の数値。
+
+    """
     evaluator = EvalWithCompoundTypes(functions=_make_functions(), names=dict(variables))
     return evaluator.eval(expr)

@@ -1,7 +1,7 @@
 # Copyright (c) 2026
 # dVtBudget は設定・データの語彙(dVtBudget 係数)に由来する綴り。
 # scripts/convert_dvtbudget_coef.py もこの変数名を前提に読むため改名しない
-dVtBudget_coef = {  # noqa: N816
+dVtBudget_coef = {  # ruff: ignore[N816]
     "B9LS": {
         -30: {
             "R2A": {"a": 0.13, "b": -0.22},

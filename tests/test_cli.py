@@ -23,13 +23,24 @@ if TYPE_CHECKING:
 
 @pytest.fixture
 def run_config(fixtures_dir: Path) -> RunConfig:
-    """tests/fixtures/config.jsonc を読み込んだ RunConfig を返す。"""
+    """tests/fixtures/config.jsonc を読み込んだ RunConfig を返す。
+
+    Returns:
+        検証済みの RunConfig モデル。
+
+    """
     return io_jsonc.load_run_config(fixtures_dir / "config.jsonc")
 
 
 @pytest.fixture
 def dvt_inputs(dvtbudget_coef_path: Path, data_dir_mini: Path) -> dict[str, DvtBudgetCoefFile | dict[int, float]]:
-    """係数と初期温度など dVtBudget 計算に必要な入力一式を返す。"""
+    """係数と初期温度など dVtBudget 計算に必要な入力一式を返す。
+
+    Returns:
+        dvtbudget_coef と board_temperatures を詰めた、パーツ計算関数に
+        そのまま渡せるキーワード引数の dict。
+
+    """
     return {
         "dvtbudget_coef": io_jsonc.load_dvtbudget_coef(dvtbudget_coef_path),
         "board_temperatures": load_board_temperatures(data_dir_mini / "initial_temperature.csv"),
@@ -46,6 +57,10 @@ def _expected_fbc_part(expanded_mini_dir: Path, wlgroup: dict[str, tuple[int, in
     存在する扱い: 分母事前集計と相対化のペアリングもグループ内で閉じる
     (グループ横断の分母にしたい場合は denominator_pre_aggregation に
     WLgroup 自体を足す書き方になる)。
+
+    Returns:
+        独立再計算で得たパーツのスコア値。
+
     """
     df = pl.read_csv(expanded_mini_dir / "FBC_expanded.csv")
     cols = ["Board", "Chip", "Block", "WL", "STR", "State", "Read_Label", "Read_Override", "FBC"]

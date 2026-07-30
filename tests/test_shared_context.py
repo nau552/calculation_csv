@@ -21,13 +21,24 @@ from scorelib_param.models import DvtBudgetCoefFile, RelativeConfig, RunConfig, 
 
 @pytest.fixture
 def mini_config(fixtures_dir: Path) -> RunConfig:
-    """Fixtures の config.jsonc を読み込んだ RunConfig。"""
+    """Fixtures の config.jsonc を読み込んだ RunConfig。
+
+    Returns:
+        検証済みの RunConfig モデル。
+
+    """
     return io_jsonc.load_run_config(fixtures_dir / "config.jsonc")
 
 
 @pytest.fixture
 def dvt_inputs(dvtbudget_coef_path: Path, data_dir_mini: Path) -> dict[str, DvtBudgetCoefFile | dict[int, float]]:
-    """係数と Board 温度の組(dVtBudget 計算に必要な入力)。"""
+    """係数と Board 温度の組(dVtBudget 計算に必要な入力)。
+
+    Returns:
+        dvtbudget_coef と board_temperatures を詰めた、計算関数に
+        そのまま渡せるキーワード引数の dict。
+
+    """
     return {
         "dvtbudget_coef": io_jsonc.load_dvtbudget_coef(dvtbudget_coef_path),
         "board_temperatures": load_board_temperatures(data_dir_mini / "initial_temperature.csv"),

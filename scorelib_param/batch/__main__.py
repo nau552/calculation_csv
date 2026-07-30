@@ -37,6 +37,15 @@ def _parse_histories(entries: list[str]) -> list | dict[str, str]:
     """エントリに "label=path" 形式が1つでもあれば {label: path}、無ければパスのリスト。
 
     (リスト形式のラベルは Step/Loop 構造から自動導出される)
+
+    Returns:
+        全エントリにラベルがあれば {ラベル: パス} の辞書、ラベルが1つも
+        無ければパスのリスト(入力の並び順を保つ)。
+
+    Raises:
+        SystemExit: "label=path" と素のパスが混在したとき、または
+            ラベルが重複したとき。
+
     """
     if not any("=" in e for e in entries):
         return entries
@@ -64,7 +73,13 @@ def _batch_size(value: str) -> int | str:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """CLI エントリポイント: 引数を解析してバッチ計算を実行し、CSV に書き出す。"""
+    """CLI エントリポイント: 引数を解析してバッチ計算を実行し、CSV に書き出す。
+
+    Raises:
+        SystemExit: --max-threads が 1 未満のとき、または strict モードで
+            不良 epoch を検出したとき(いずれもエラーメッセージ付きで終了)。
+
+    """
     parser = argparse.ArgumentParser(
         prog="python -m scorelib_param.batch",
         description=__doc__,
@@ -119,7 +134,7 @@ def main(argv: list[str] | None = None) -> None:
         # 固定するため、計算モジュールの import より前に設定する
         os.environ["POLARS_MAX_THREADS"] = str(args.max_threads)
     # POLARS_MAX_THREADS の設定(上)を polars の初回 import より前に済ませるため、ここで読み込む
-    from .runner import BatchRunner, StrictBatchError  # noqa: PLC0415
+    from .runner import BatchRunner, StrictBatchError  # ruff: ignore[PLC0415]
 
     run_config = io_jsonc.load_run_config(args.config)
     coef = io_jsonc.load_dvtbudget_coef(args.dvtbudget_coef) if args.dvtbudget_coef else None

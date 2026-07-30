@@ -9,7 +9,12 @@ def create_dataframe_with_cyclic_fbc(
     fbc_max: int = 20,
     output_csv: str = "output.csv",
 ) -> pd.DataFrame:
-    """軸範囲の全組み合わせに 0..fbc_max を巡回する tR 列を足して csv に保存し、DataFrame を返す。"""
+    """軸範囲の全組み合わせに 0..fbc_max を巡回する tR 列を足して csv に保存し、DataFrame を返す。
+
+    Returns:
+        column_ranges の軸列と巡回 tR 列を持つ DataFrame(output_csv へ保存済みの内容と同じもの)。
+
+    """
     columns = list(column_ranges.keys())
     value_lists = [range(start, end + 1) for start, end in column_ranges.values()]
 

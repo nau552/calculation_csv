@@ -33,7 +33,7 @@ def _read_header(path: Path) -> list[str]:
     try:
         return pl.scan_csv(path).collect_schema().names()
     # ヘッダの読めないファイルは [] = Board 列なしとして扱い、複製せずそのままコピーする側に回す
-    except Exception:  # noqa: BLE001
+    except Exception:  # ruff: ignore[BLE001]
         return []
 
 
@@ -53,6 +53,15 @@ def expand_boards_chips(src_dir: str | Path, dest_dir: str | Path, chip_counts: 
 
     `chip_counts[b]` = Board b の Chip 数(長さ = Board 数。Board ごとに違う
     Chip 数を許す)。Board 番号・Chip 番号とも 0 始まり連番になる。
+
+    Returns:
+        展開後の一式を書き出したディレクトリ(`dest_dir` を Path にしたもの)。
+
+    Raises:
+        ValueError: `src_dir` がディレクトリとして存在しない時、`chip_counts` が
+            空か 1 未満の値を含む時、または複製元の csv がすでに複数の
+            Board/Chip を含んでいる時。
+
     """
     src = Path(src_dir)
     dest = Path(dest_dir)
@@ -102,6 +111,13 @@ def make_pseudo_dummy(src_dir: str | Path, dest_dir: str | Path) -> Path:
     """実データ一式から Board/Chip を1つへ削った疑似ダミーを `dest_dir` に書き出す(開発・検証用)。
 
     Board/Chip とも最小番号の行のみ残し、番号は 0 に正規化する。
+
+    Returns:
+        疑似ダミー一式を書き出したディレクトリ(`dest_dir` を Path にしたもの)。
+
+    Raises:
+        ValueError: `src_dir` がディレクトリとして存在しない時。
+
     """
     src = Path(src_dir)
     dest = Path(dest_dir)

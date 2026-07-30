@@ -70,6 +70,11 @@ def _sidebar_user() -> str | None:
     認証ヘッダがあればそれ(表示のみ)、
     無ければ名前入力欄。未入力の間は None = 下書きの自動保存・復元は停止
     (共用サーバで1ファイルを取り合わないための分離 — state.draft_path_for)。
+
+    Returns:
+        認証ヘッダまたは名前入力欄から得たユーザ名(前後空白は除去)。
+        どちらからも得られない間は None。
+
     """
     header_user = _header_user()
     if header_user:
@@ -239,6 +244,11 @@ def _with_group_axes(catalog: dict, sf: dict) -> dict:
 
     雛形生成は生のカタログを使い続けるので、グループ軸が勝手にパーツへ
     入り込むことはない。
+
+    Returns:
+        `catalog` の複製に、score_file の groupDefs 由来の派生軸
+        (値候補 = グループ名のリスト)を加えた辞書。元の `catalog` は変えない。
+
     """
     merged = dict(catalog)
     for name, gd in sf.get("groupDefs", {}).items():
@@ -272,7 +282,7 @@ def _import_wlgroup_toast(ss: SessionStateProxy) -> None:
 
 def _handle_load(
     ss: SessionStateProxy,
-    paths_mode: bool,  # noqa: FBT001 -- キーワード専用化(*,)は呼び出し側の書き方が変わるため見送り(将来の品質向上パスで検討)
+    paths_mode: bool,  # ruff: ignore[FBT001] -- キーワード専用化(*,)は呼び出し側の書き方が変わるため見送り(将来の品質向上パスで検討)
     data_mode: str,
     up_start: UploadedFile | None,
     config_in: str,
@@ -289,6 +299,12 @@ def _handle_load(
     ①(設定)と②(データ)を組み合わせて
     context / score_file を作る。①の設定が RunConfig 形式なら config としても
     最優先で使う(zip 内の設定より優先)。
+
+    Raises:
+        ValueError: 選んだモードに必要な入力が欠けている時(設定 jsonc・
+            一式 zip・パス指定の不足や、指定パスの実体が無い場合)。
+            関数末尾の except で捕捉され st.error 表示に変換される。
+
     """
     try:
         # ① の設定テキスト(アップロード or パス)
@@ -301,14 +317,14 @@ def _handle_load(
             p = Path(str(config_in).strip())
             if not p.is_file():
                 msg = f"設定 jsonc が見つかりません: {p}"
-                raise ValueError(msg)  # noqa: TRY301 -- 読み込みエラーは外側の except で st.error 表示に集約する構造のため(関数抽出は見送り)
+                raise ValueError(msg)  # ruff: ignore[TRY301] -- 読み込みエラーは外側の except で st.error 表示に集約する構造のため(関数抽出は見送り)
             start_text = p.read_text(encoding="utf-8")
             start_path = str(p)
 
         if data_mode == _DATA_MODES[2]:  # データなし = 設定のみ編集
             if start_text is None:
                 msg = "① に設定 jsonc を入れてください(データを使う場合は ② で選択)"
-                raise ValueError(msg)  # noqa: TRY301 -- 読み込みエラーは外側の except で st.error 表示に集約する構造のため(関数抽出は見送り)
+                raise ValueError(msg)  # ruff: ignore[TRY301] -- 読み込みエラーは外側の except で st.error 表示に集約する構造のため(関数抽出は見送り)
             sf, cfg_ctx = state.load_config_only(start_text)
             ss.score_file = sf
             state.ensure_uids(ss.score_file)
@@ -333,10 +349,10 @@ def _handle_load(
                 }
             elif paths_mode:
                 msg = "測定結果ディレクトリのパスを入力してください"
-                raise ValueError(msg)  # noqa: TRY301 -- 読み込みエラーは外側の except で st.error 表示に集約する構造のため(関数抽出は見送り)
+                raise ValueError(msg)  # ruff: ignore[TRY301] -- 読み込みエラーは外側の except で st.error 表示に集約する構造のため(関数抽出は見送り)
             else:
                 msg = "一式 zip をアップロードしてください"
-                raise ValueError(msg)  # noqa: TRY301 -- 読み込みエラーは外側の except で st.error 表示に集約する構造のため(関数抽出は見送り)
+                raise ValueError(msg)  # ruff: ignore[TRY301] -- 読み込みエラーは外側の except で st.error 表示に集約する構造のため(関数抽出は見送り)
         else:  # ダミー
             counts = state.parse_chip_counts(chips_text, int(n_boards))
             if up_dummy is not None:
@@ -347,10 +363,10 @@ def _handle_load(
                 dummy_source = str(paths["dummy_dir"]).strip()
             elif paths_mode:
                 msg = "ダミー一式ディレクトリのパスを入力してください"
-                raise ValueError(msg)  # noqa: TRY301 -- 読み込みエラーは外側の except で st.error 表示に集約する構造のため(関数抽出は見送り)
+                raise ValueError(msg)  # ruff: ignore[TRY301] -- 読み込みエラーは外側の except で st.error 表示に集約する構造のため(関数抽出は見送り)
             else:
                 msg = "ダミー一式 zip をアップロードしてください"
-                raise ValueError(msg)  # noqa: TRY301 -- 読み込みエラーは外側の except で st.error 表示に集約する構造のため(関数抽出は見送り)
+                raise ValueError(msg)  # ruff: ignore[TRY301] -- 読み込みエラーは外側の except で st.error 表示に集約する構造のため(関数抽出は見送り)
             found = {
                 "data_dir": state.expand_dummy_bundle(src, counts),
                 "config_path": None,
@@ -849,7 +865,7 @@ def screen_parts() -> None:
     for r, p in zip(rows, sf["score_parts"], strict=False):
         uid_ = p["_uid"]
         r["検証"] = "⚠ NG" if uid_ in invalid else ("⚠ データ無し" if uid_ in no_data else "OK")
-    invalid = invalid | no_data
+    invalid |= no_data
     parts_dnd = False
     if widgets.HAS_SORTABLES and len(sf["score_parts"]) > 1:
         labels = state.part_list_labels(sf, sel_uid, invalid, rows=rows)

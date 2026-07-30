@@ -46,6 +46,11 @@ def _json_key(k: object) -> object:
 
     json.dump は str/int/float/bool/None 以外のキーを受けない(int 等は json 側が
     文字列化する)ため、numpy int64 等のキーを Python 型へ戻す。
+
+    Returns:
+        json.dump がキーとして受けられる値。numpy スカラーは item() で素の
+        Python 型へ戻し、元から受けられる型はそのまま返す。
+
     """
     if not isinstance(k, (str, int, float, bool)) and k is not None and hasattr(k, "item"):
         return k.item()
@@ -62,6 +67,11 @@ def _jsonable(obj: object) -> object:
     数値型)。そのままでは json.dump が失敗するため、ここで素の Python 型へ
     戻す。エンジンが読むフィールドは to_dict で手書きの config と同じ形に戻り、
     読まないフィールドは dump を壊さなければ何でもよい(読み込み時に無視)。
+
+    Returns:
+        json.dump にそのまま渡せる形へ再帰変換した値(dict / list / 素のスカラー。
+        どの変換にも当てはまらない値は str 化される)。
+
     """
     if isinstance(obj, dict):
         return {_json_key(k): _jsonable(v) for k, v in obj.items()}
@@ -83,6 +93,13 @@ def _find_scorelib_parent() -> str:
 
     例: このコードが kicOpt/optlib/ 内のスクリプトに貼られていて scorelib_param が
     kicOpt/scorelib_param にある場合、optlib → kicOpt の順に探して見つかる。
+
+    Returns:
+        scorelib_param/ ディレクトリを直下に含む場所の絶対パス(str)。
+
+    Raises:
+        ValueError: 親方向へ3階層まで探しても scorelib_param/ が見つからないとき。
+
     """
     d = Path(__file__).resolve().parent
     cand = d
@@ -108,7 +125,7 @@ def compute_batch_scores(
     batch_size: int | str = "auto",  # "auto" 推奨(メモリから自動選択)
     max_threads: int | None = None,  # マシンを共有する場合に CPU スレッド数を制限
     max_prefetch: int = 2,
-    strict: bool = False,  # noqa: FBT001, FBT002 — キーワード専用化は呼び出し側の変更を伴うため見送り
+    strict: bool = False,  # ruff: ignore[FBT001, FBT002] — キーワード専用化は呼び出し側の変更を伴うため見送り
     generation_info: str | None = None,  # {Generation}.json のパス。Physical記法のグループ定義
     # (WLgroupDefinLogical=False)がある場合のみ必要
     # (各 epoch ディレクトリ内にあれば省略可)
@@ -124,6 +141,16 @@ def compute_batch_scores(
       Generation / optimization 以外のキーを無視する)
     - エンジンの進捗・警告(batch-size advisory 等)は <out_csv>.log に保存される
     - 失敗(returncode != 0)は RuntimeError(ログ末尾つき)
+
+    Returns:
+        (scores, failed) のタプル。scores は epoch ごとの結果 dict のリスト
+        (数値列は float/int に変換済み)、failed は {Epoch: 除外理由} の dict
+        (空 dict なら全 epoch 成功)。
+
+    Raises:
+        RuntimeError: エンジンの subprocess が異常終了(returncode != 0)したとき。
+            メッセージにログファイルの末尾を含める。
+
     """
     if scorelib_parent is None:
         scorelib_parent = _find_scorelib_parent()
@@ -172,7 +199,7 @@ def compute_batch_scores(
         # stderr(版数表示・advisory・進捗・除外理由)はログファイルへ保存する。
         # コンソールで直接見たい場合は stderr=None にして継承させてもよい
         log_path = out_csv + ".log"
-        with Path(log_path).open("w") as log:
+        with Path(log_path).open("w", encoding="utf-8") as log:
             proc = subprocess.run(
                 cmd,
                 env=env,
@@ -182,7 +209,7 @@ def compute_batch_scores(
                 check=False,  # returncode は直後に自前検査する
             )
         if proc.returncode != 0:
-            with Path(log_path).open() as f:
+            with Path(log_path).open(encoding="utf-8") as f:
                 tail = "".join(f.readlines()[-15:])
             msg = f"scorelib_param.batch failed (exit {proc.returncode}). log tail ({log_path}):\n{tail}"
             raise RuntimeError(msg)
@@ -192,22 +219,22 @@ def compute_batch_scores(
                 Path(tmp_config).unlink()
 
     scores = []
-    with Path(out_csv).open(newline="") as f:
+    with Path(out_csv).open(newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             parsed = {}
             for key, value in row.items():
-                if key in ("Epoch", "History"):
+                if key in {"Epoch", "History"}:
                     parsed[key] = value
                 elif key == "EpochNo":
                     parsed[key] = int(value)
                 else:  # Score と全スコアパーツ
-                    parsed[key] = float(value) if value != "" else None
+                    parsed[key] = float(value) if value else None
             scores.append(parsed)
 
     failed = {}
     failed_csv = out_csv + ".failed.csv"
     if Path(failed_csv).exists():
-        with Path(failed_csv).open(newline="") as f:
+        with Path(failed_csv).open(newline="", encoding="utf-8") as f:
             for row in csv.DictReader(f):
                 failed[row["Epoch"]] = row["reason"]
     return scores, failed

@@ -18,13 +18,23 @@ MINI_TYPES = ["FBC", "KLD", "PROGLOOP", "PROGSTATUS", "dVthSGWLD", "tPROG", "tR"
 
 @pytest.fixture
 def catalog(data_dir_mini: Path) -> dict[str, list | None]:
-    """FBC の軸カタログ(mini データ)を返す。"""
+    """FBC の軸カタログ(mini データ)を返す。
+
+    Returns:
+        軸名をキーに、その軸の取りうる値一覧(列挙しない軸は None)を並べた dict。
+
+    """
     return axis_catalog(data_dir_mini, "FBC")
 
 
 @pytest.fixture
 def sf() -> dict[str, Any]:
-    """空の ScoreFile dict を返す。"""
+    """空の ScoreFile dict を返す。
+
+    Returns:
+        パーツも式も入っていない初期状態の ScoreFile dict。
+
+    """
     return state.empty_score_file()
 
 
@@ -928,7 +938,12 @@ def test_import_error_names_the_part() -> None:
 
 @pytest.fixture
 def custom_parts_path(fixtures_dir: Path) -> Path:
-    """カスタムパーツ定義 fixtures/custom_parts.py のパスを返す。"""
+    """カスタムパーツ定義 fixtures/custom_parts.py のパスを返す。
+
+    Returns:
+        フィクスチャ内の custom_parts.py の絶対パス。
+
+    """
     return fixtures_dir / "custom_parts.py"
 
 
@@ -975,7 +990,13 @@ def test_switch_part_type_strips_mismatched_fields(sf: dict[str, Any], catalog: 
 
 
 def _bundle_zip(data_dir_mini: Path, fixtures_dir: Path, custom_parts_path: Path, layout: str) -> bytes:
-    """layout: arcname prefix for the measurement csvs (companions at root)."""
+    """layout: arcname prefix for the measurement csvs (companions at root).
+
+    Returns:
+        測定 csv 一式と同梱ファイル(config・世代 json・custom_parts.py)を
+        詰めた zip アーカイブのバイト列。
+
+    """
     import io
     import zipfile
 

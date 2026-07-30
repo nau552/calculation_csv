@@ -126,6 +126,14 @@ class AggregationSpec(BaseModel):
         """旧表記の吸収: *_subset は自動変換、values は value の別名。
 
         廃止した group_reduce は移行案内つきでエラーにする。
+
+        Returns:
+            旧表記を現行表記へ書き換えた入力データ(dict 以外はそのまま)。
+
+        Raises:
+            ValueError: 廃止済みの op 'group_reduce' が指定されたとき、
+                または 'values' と 'value' が同時に与えられたとき。
+
         """
         if isinstance(data, dict):
             if data.get("op") == "group_reduce":
@@ -148,7 +156,17 @@ class AggregationSpec(BaseModel):
 
     @model_validator(mode="after")
     def _check_value_shape(self) -> AggregationSpec:
-        """Op ごとの value 形状検査(間違えやすい箇所なのでエラーは具体的に)。"""
+        """Op ごとの value 形状検査(間違えやすい箇所なのでエラーは具体的に)。
+
+        Returns:
+            検証を通った自身(filter の単一要素リストはスカラーへ、
+            mean/sum/min/max のスカラー選択はリストへ正規化済み)。
+
+        Raises:
+            ValueError: value / ref / by / weight / floor / expr の
+                組み合わせや形状が op の要求に合わないとき。
+
+        """
         op, v = self.op, self.value
 
         def _num(x: object) -> bool:
@@ -318,6 +336,14 @@ class RelativeConfig(BaseModel):
         None の側は「値 None の行」への等値 filter になり必ず0行マッチする —
         設定忘れをエンジンの手前で明確に検出する(UIは分子/分母未選択のまま
         保存された設定をこのエラーで表示する)。
+
+        Returns:
+            検証を通った自身(値の変更は行わない)。
+
+        Raises:
+            ValueError: numerator_when / denominator_when のどちらかが
+                None のとき。
+
         """
         if self.numerator_when is None or self.denominator_when is None:
             msg = (
@@ -359,7 +385,17 @@ class ScorePart(BaseModel):
 
     @model_validator(mode="after")
     def _check_custom_fields(self) -> ScorePart:
-        """集計パイプラインのフィールドと Custom 指定の混在を拒否する。"""
+        """集計パイプラインのフィールドと Custom 指定の混在を拒否する。
+
+        Returns:
+            検証を通った自身(値の変更は行わない)。
+
+        Raises:
+            ValueError: type="custom" なのに order / aggregations / relative
+                があるとき、または custom でないのに function / params が
+                あるとき。
+
+        """
         if self.type == CUSTOM_TYPE:
             if self.order or self.aggregations or self.relative:
                 msg = (
@@ -378,6 +414,15 @@ class ScorePart(BaseModel):
 
         複合軸は辞書選択のみ(位置指定リストは「1組か複数選択か」が曖昧に
         なるため不可)、単一軸は辞書選択不可。
+
+        Returns:
+            検証を通った自身(値の変更は行わない)。
+
+        Raises:
+            ValueError: 単一軸エントリに辞書選択があるとき、複合軸の辞書の
+                キーが構成軸と一致しないとき、または複合軸に辞書でない
+                選択があるとき。
+
         """
         for entry in self.order:
             if entry.startswith("__"):
@@ -418,6 +463,11 @@ class ScorePart(BaseModel):
         (optimization.WLgroupWeight / weightSets)から解決する。
         パーツ全体を再検証するので、解決後の選択はインラインで書いた場合と
         全く同じ検査を通る。
+
+        Returns:
+            解決後の内容で再検証した新しい ScorePart(ref / weight_ref が
+            1つも無ければ自身をそのまま返す)。
+
         """
         weight_sets = weight_sets or {}
         specs = list(self.aggregations.values())
@@ -485,10 +535,20 @@ class GroupDef(BaseModel):
     axis: str
     groups: dict[str, tuple[int, int]] = Field(default_factory=dict)
     # mixedCase は設定 jsonc のキー名そのもの(pydantic がこの名前で読み書きし、改名すると既存の設定が読めなくなる)
-    definedInLogical: bool = True  # noqa: N815
+    definedInLogical: bool = True  # ruff: ignore[N815]
 
     def resolved_groups(self, axis_count: int | None = None) -> dict[str, tuple[int, int]]:
-        """Logical 番号での範囲。Physical 定義は [lo, hi] → [N-1-hi, N-1-lo]。"""
+        """Logical 番号での範囲。Physical 定義は [lo, hi] → [N-1-hi, N-1-lo]。
+
+        Returns:
+            {グループ名: (下限, 上限)}(Logical 定義は groups のコピー、
+            Physical 定義は axis_count で読み替えた範囲)。
+
+        Raises:
+            ValueError: Physical 記法の定義なのに axis_count が与えられ
+                なかったとき。
+
+        """
         if self.definedInLogical:
             return dict(self.groups)
         if axis_count is None:
@@ -520,14 +580,14 @@ class ScoreFile(BaseModel):
     score_parts: list[ScorePart] = Field(default_factory=list)
     expression: str = ""
     # mixedCase は設定 jsonc のキー名そのもの(pydantic がこの名前で読み書きし、改名すると既存の設定が読めなくなる)
-    constraintThreshold: dict[str, ConstraintThresholdEntry] = Field(default_factory=dict)  # noqa: N815
+    constraintThreshold: dict[str, ConstraintThresholdEntry] = Field(default_factory=dict)  # ruff: ignore[N815]
     # パーツが `ref` やグループ派生軸を使っていてもエクスポートが自己完結する
     # よう、選択セット・グループ定義・重みセットを同梱する
-    selectionSets: dict[str, list[Any]] = Field(default_factory=dict)  # noqa: N815
-    groupDefs: dict[str, GroupDef] = Field(default_factory=dict)  # noqa: N815
+    selectionSets: dict[str, list[Any]] = Field(default_factory=dict)  # ruff: ignore[N815]
+    groupDefs: dict[str, GroupDef] = Field(default_factory=dict)  # ruff: ignore[N815]
     # 変換op(TRANSFORM_OPS)の ref が参照する名前付き重み: 値は数値
     # (全行同一の定数)か {軸の値: 数値}(by 軸の値ごとの定数)
-    weightSets: dict[str, Any] = Field(default_factory=dict)  # noqa: N815
+    weightSets: dict[str, Any] = Field(default_factory=dict)  # ruff: ignore[N815]
 
     @model_validator(mode="before")
     @classmethod
@@ -542,6 +602,15 @@ class ScoreFile(BaseModel):
         「どちらが使われるか」の迷いが生じない(定義の在り処は常に1つ)。
         groupDefs / weightSets に同名があればそちらが勝つ(RunConfig の
         group_defs() / weight_sets() と同じ優先順位)。
+
+        Returns:
+            旧形式キーを groupDefs / weightSets へ移し替えた入力データ
+            (対象キーが無ければそのまま)。
+
+        Raises:
+            ValueError: WLgroupDefinLogical が "true"/"false" 以外の文字列の
+                とき。
+
         """
         if not isinstance(data, dict) or not any(
             k in data for k in ("WLgroup", "WLgroupDefinLogical", "WLgroupWeight")
@@ -553,7 +622,7 @@ class ScoreFile(BaseModel):
         ww = data.pop("WLgroupWeight", None)
         if isinstance(din, str):
             low = din.strip().lower()
-            if low not in ("true", "false"):
+            if low not in {"true", "false"}:
                 msg = f"WLgroupDefinLogical must be true or false, got {din!r}"
                 raise ValueError(msg)
             din = low == "true"
@@ -585,11 +654,17 @@ class VthSkipConfig(BaseModel):
 
     epochs: int | None = None
     # mixedCase は実験 config のキー名そのもの(pydantic がこの名前で読み書きし、改名すると既存の設定が読めなくなる)
-    dummyKLDValue: float | None = None  # noqa: N815
-    dummyDVthValue: float | None = None  # noqa: N815
+    dummyKLDValue: float | None = None  # ruff: ignore[N815]
+    dummyDVthValue: float | None = None  # ruff: ignore[N815]
 
     def dummy_values(self) -> dict[str, float]:
-        """Type 名 → ダミー値(設定されているものだけ)。"""
+        """Type 名 → ダミー値(設定されているものだけ)。
+
+        Returns:
+            {測定 type 名: float に揃えたダミー値}。dummyKLDValue 等が
+            None の type は含まれない。
+
+        """
         out: dict[str, float] = {}
         for type_, key in VTHSKIP_TYPE_KEYS.items():
             v = getattr(self, key)
@@ -609,8 +684,8 @@ class OptimizationConfig(BaseModel):
     score_function: str | None = None
     # mixedCase は実験 config のキー名そのもの(pydantic がこの名前で読み書きし、改名すると既存の設定が読めなくなる)
     # 測定フロー側の vthSkip 設定(あれば): ファイル不在時のダミー値の出所
-    vthSkip: VthSkipConfig | None = None  # noqa: N815
-    constraintThreshold: dict[str, ConstraintThresholdEntry] = Field(default_factory=dict)  # noqa: N815
+    vthSkip: VthSkipConfig | None = None  # ruff: ignore[N815]
+    constraintThreshold: dict[str, ConstraintThresholdEntry] = Field(default_factory=dict)  # ruff: ignore[N815]
     WLgroup: dict[str, tuple[int, int]] = Field(default_factory=dict)
     # WLgroup の範囲の記法: True(既定)= Logical 番号、False = Physical 番号
     # (データの Logical 番号を N-1-p で読み替える。N は {Generation}.json の
@@ -619,19 +694,29 @@ class OptimizationConfig(BaseModel):
     # WLgroup 各グループの重み({グループ名: 数値})または全グループ共通の
     # 数値1つ。名前 "WLgroupWeight" の重みセットとして ref から参照できる
     WLgroupWeight: Any | None = None
-    weightSets: dict[str, Any] = Field(default_factory=dict)  # noqa: N815
-    selectionSets: dict[str, list[Any]] = Field(default_factory=dict)  # noqa: N815
-    groupDefs: dict[str, GroupDef] = Field(default_factory=dict)  # noqa: N815
+    weightSets: dict[str, Any] = Field(default_factory=dict)  # ruff: ignore[N815]
+    selectionSets: dict[str, list[Any]] = Field(default_factory=dict)  # ruff: ignore[N815]
+    groupDefs: dict[str, GroupDef] = Field(default_factory=dict)  # ruff: ignore[N815]
     score_parts: list[ScorePart] = Field(default_factory=list)
     expression: str = ""
 
     @model_validator(mode="before")
     @classmethod
     def _parse_bool_strings(cls, data: object) -> object:
-        """現行 config は真偽値を "True"/"False" 文字列で書く流儀があるので吸収する。"""
+        """現行 config は真偽値を "True"/"False" 文字列で書く流儀があるので吸収する。
+
+        Returns:
+            WLgroupDefinLogical を bool へ変換した入力データ(文字列で
+            なければそのまま)。
+
+        Raises:
+            ValueError: WLgroupDefinLogical が "true"/"false" 以外の文字列の
+                とき。
+
+        """
         if isinstance(data, dict) and isinstance(data.get("WLgroupDefinLogical"), str):
             low = data["WLgroupDefinLogical"].strip().lower()
-            if low not in ("true", "false"):
+            if low not in {"true", "false"}:
                 msg = f"WLgroupDefinLogical must be true or false, got {data['WLgroupDefinLogical']!r}"
                 raise ValueError(msg)
             data = {**data, "WLgroupDefinLogical": low == "true"}
@@ -656,7 +741,13 @@ class RunConfig(BaseModel):
     optimization: OptimizationConfig
 
     def to_score_file(self) -> ScoreFile:
-        """設定の optimization ブロックの内容を ScoreFile として取り出す。"""
+        """設定の optimization ブロックの内容を ScoreFile として取り出す。
+
+        Returns:
+            旧 WLgroup 系キーも統合済みの groupDefs / weightSets を同梱した
+            ScoreFile。
+
+        """
         return ScoreFile(
             score_parts=self.optimization.score_parts,
             expression=self.optimization.expression,
@@ -674,6 +765,11 @@ class RunConfig(BaseModel):
 
         旧来の optimization.WLgroup は暗黙に「WLに対する定義」として読む
         (記法は WLgroupDefinLogical に従う)。名前が衝突したら groupDefs が勝つ。
+
+        Returns:
+            {定義名: GroupDef}(旧来の WLgroup は "WLgroup" という名前で
+            含まれる)。
+
         """
         defs: dict[str, GroupDef] = {}
         if self.optimization.WLgroup:
@@ -690,6 +786,11 @@ class RunConfig(BaseModel):
 
         旧来の optimization.WLgroupWeight は "WLgroupWeight" という名前の
         セットとして読む。衝突は weightSets が勝つ。
+
+        Returns:
+            {セット名: 重み(数値または {軸の値: 数値})}(旧来の
+            WLgroupWeight は "WLgroupWeight" という名前で含まれる)。
+
         """
         sets: dict[str, Any] = {}
         if self.optimization.WLgroupWeight is not None:

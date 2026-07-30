@@ -32,10 +32,10 @@ def test_relative_with_denominator_pre_aggregation_and_offset() -> None:
     # denominator: WL-mean per STR -> STR0:20, STR1:30; STR-mean -> 25; +offset(5) = 30
     # offset(5) is added to the numerator side as well
     result = {(row["WL"], row["STR"]): row["value"] for row in out.to_dicts()}
-    assert result[(0, 0)] == pytest.approx(105 / 30)
-    assert result[(0, 1)] == pytest.approx(205 / 30)
-    assert result[(1, 0)] == pytest.approx(305 / 30)
-    assert result[(1, 1)] == pytest.approx(405 / 30)
+    assert result[0, 0] == pytest.approx(105 / 30)
+    assert result[0, 1] == pytest.approx(205 / 30)
+    assert result[1, 0] == pytest.approx(305 / 30)
+    assert result[1, 1] == pytest.approx(405 / 30)
     assert "IsEval" not in out.columns
 
 

@@ -49,6 +49,10 @@ def _strip_jsonc(text: str) -> str:
     """コメント(// と /* */)・末尾カンマを除去する jsonc → json の簡易変換。
 
     診断用の簡易実装: 文字列リテラル内に "//" を含む config には非対応。
+
+    Returns:
+        コメントと末尾カンマを取り除いた、json.loads にそのまま渡せるテキスト。
+
     """
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
     text = re.sub(r"^\s*//.*$", "", text, flags=re.MULTILINE)
@@ -57,15 +61,24 @@ def _strip_jsonc(text: str) -> str:
 
 
 def load_config_file(path: str | Path) -> dict:
-    """実験 config ファイル(jsonc)を読み込んで dict を返す。"""
-    with Path(path).open(encoding="utf-8") as f:
-        return json.loads(_strip_jsonc(f.read()))
+    """実験 config ファイル(jsonc)を読み込んで dict を返す。
+
+    Returns:
+        コメント・末尾カンマを除去してからパースした config の中身の dict。
+
+    """
+    return json.loads(_strip_jsonc(Path(path).read_text(encoding="utf-8")))
 
 
 def _plain(obj: object) -> object:
     """比較用の正規化: Series/ndarray/numpy スカラー等を素の Python 型へ変換する。
 
     ブリッジ見本の _jsonable と同じ振る舞い判定。
+
+    Returns:
+        素の Python 型(dict / list / スカラー)へ再帰変換した比較用の値。
+        どの変換にも当てはまらない値は str 化される。
+
     """
     if isinstance(obj, dict):
         return {str(k): _plain(v) for k, v in obj.items()}
@@ -91,6 +104,11 @@ def report_engine_vocab_diff(
 
     状態: "メモリのみ" / "ファイルのみ(ローダが除去)" / "加工あり" / "一致"。
     `processed` は config 全体でも optimization の中身だけでも良い(自動判別)。
+
+    Returns:
+        (場所, キー, 状態) タプルのリスト。ファイル側・メモリ側の少なくとも
+        一方に存在したエンジン語彙キーだけを含む(どちらにも無いキーは載らない)。
+
     """
     file_cfg = load_config_file(config_path)
     file_opt = file_cfg.get("optimization", {})

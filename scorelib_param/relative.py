@@ -29,7 +29,13 @@ def apply_relative(
     value_col: str,
     relative: RelativeConfig,
 ) -> pl.LazyFrame:
-    """split_axis の値で各行を分子/分母に振り分け、比(mode="diff" なら差)を取る。"""
+    """split_axis の値で各行を分子/分母に振り分け、比(mode="diff" なら差)を取る。
+
+    Returns:
+        `value_col` が相対値(mode="diff" なら差)になった LazyFrame。
+        split_axis の列と分母側の作業列は落としてある。
+
+    """
     axis = relative.split_axis
 
     numerator = lf.filter(pl.col(axis) == relative.numerator_when).drop(axis)
@@ -37,7 +43,7 @@ def apply_relative(
 
     for step in relative.denominator_pre_aggregation:
         schema_cols = denominator.collect_schema().names()
-        group_keys = [c for c in schema_cols if c not in (value_col, step.axis)]
+        group_keys = [c for c in schema_cols if c not in {value_col, step.axis}]
         denominator = apply_axis_op(denominator, value_col, step.axis, step, group_keys)
 
     denominator = denominator.rename({value_col: "__denom__"})

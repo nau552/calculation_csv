@@ -34,7 +34,12 @@ class FakeSeries:
         self._data = data
 
     def to_dict(self) -> dict[str, "FakeScalar"]:
-        """素の dict を返す(pandas.Series.to_dict 相当)。"""
+        """素の dict を返す(pandas.Series.to_dict 相当)。
+
+        Returns:
+            保持しているデータのコピー(キーと値はそのまま)。
+
+        """
         return dict(self._data)
 
 
@@ -46,7 +51,12 @@ class FakeScalar:
         self._v = v
 
     def item(self) -> float:
-        """素の Python 値を返す(numpy スカラーの item 相当)。"""
+        """素の Python 値を返す(numpy スカラーの item 相当)。
+
+        Returns:
+            保持している数値そのもの。
+
+        """
         return self._v
 
 
@@ -58,7 +68,12 @@ class FakeArray:
         self._values = list(values)
 
     def tolist(self) -> list[FakeScalar]:
-        """素の list を返す(numpy ndarray の tolist 相当)。"""
+        """素の list を返す(numpy ndarray の tolist 相当)。
+
+        Returns:
+            保持している値の列のコピー。
+
+        """
         return list(self._values)
 
 

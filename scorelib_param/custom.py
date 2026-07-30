@@ -48,7 +48,12 @@ class CustomContext:
 
 
 def default_custom_parts_path() -> Path:
-    """リポジトリ直下の custom_parts.py(scorelib_param パッケージの1つ上)。"""
+    """リポジトリ直下の custom_parts.py(scorelib_param パッケージの1つ上)。
+
+    Returns:
+        固定の探索先の絶対パス(存在チェックはしない)。
+
+    """
     return Path(__file__).resolve().parent.parent / DEFAULT_FILENAME
 
 
@@ -57,6 +62,13 @@ def load_custom_module(path: str | Path) -> ModuleType:
 
     ファイルは SVN レビュー済みのもの(ユーザのアップロード入力ではない)が
     前提なので許容している。
+
+    Returns:
+        実行済みのユーザ関数モジュール(名前は scorelib_custom_parts)。
+
+    Raises:
+        ValueError: 指定パスから import 仕様(spec)を作れなかったとき。
+
     """
     path = Path(path)
     spec = importlib.util.spec_from_file_location("scorelib_custom_parts", path)
@@ -69,7 +81,12 @@ def load_custom_module(path: str | Path) -> ModuleType:
 
 
 def list_custom_functions(module: ModuleType) -> list[str]:
-    """モジュール自身で定義された公開関数名(import した名前・`_`始まりは除外)。"""
+    """モジュール自身で定義された公開関数名(import した名前・`_`始まりは除外)。
+
+    Returns:
+        スコアパーツとして呼べる関数名のソート済みリスト。
+
+    """
     return sorted(
         name
         for name, fn in vars(module).items()
@@ -82,7 +99,16 @@ def compute_custom_part(
     module: ModuleType,
     ctx: CustomContext,
 ) -> float:
-    """スコアパーツに対応するユーザ関数を呼び、戻り値を検証して返す。"""
+    """スコアパーツに対応するユーザ関数を呼び、戻り値を検証して返す。
+
+    Returns:
+        ユーザ関数が返した値を float に変換したもの。
+
+    Raises:
+        ValueError: 関数がモジュールに見つからないとき、関数が例外を
+            送出したとき、戻り値が有限な1スカラーでないとき。
+
+    """
     fname = score_part.function or score_part.name
     fn = getattr(module, fname, None)
     if not callable(fn):
@@ -91,7 +117,7 @@ def compute_custom_part(
             f"{getattr(module, '__file__', DEFAULT_FILENAME)} — available: {list_custom_functions(module)}"
         )
         # TypeError への変更は例外型が変わり呼び出し側の挙動に影響するため見送り(将来の品質向上パスで検討)
-        raise ValueError(msg)  # noqa: TRY004
+        raise ValueError(msg)  # ruff: ignore[TRY004]
     try:
         value = fn(ctx)
     except Exception as err:

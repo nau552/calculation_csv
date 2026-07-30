@@ -46,13 +46,18 @@ def derive_label(history_path: str | Path) -> str:
 
     Step/Loop 構造が想定と違う場合は警告した上で同じ規則の名前を使う
     (呼び出し側でラベルを明示指定すれば警告は出ない)。
+
+    Returns:
+        親3段の名前を "/" でつないだラベル。名前が1つも取れないパスでは
+        result_history ディレクトリ自身の名前。
+
     """
     p = Path(history_path).resolve()
     loop, step, exp = p.parent, p.parent.parent, p.parent.parent.parent
     names = [n for n in (exp.name, step.name, loop.name) if n]
     if not (loop.name.startswith("Loop") and step.name.startswith("Step")):
         # stacklevel の追加は警告の表示位置(報告される呼び出し元)が変わるため今回は見送り
-        warnings.warn(  # noqa: B028
+        warnings.warn(  # ruff: ignore[B028]
             f"result_history path does not follow the <exp>/Step*/Loop*/ layout: {p} "
             f"(using label '{'/'.join(names)}'; pass an explicit label to silence this)"
         )
@@ -69,6 +74,14 @@ def enumerate_epochs(
     - ラベルの重複はエラー(黙って連番を振らない)
     - `result.NNNN` 以外のエントリは無視(警告のみ)
     - epoch を1つも含まない history はエラー(パス間違いの可能性が高い)
+
+    Returns:
+        history の並び順・epoch 番号順に並んだ EpochRef のリスト。
+
+    Raises:
+        ValueError: ラベルが重複したとき、result_history ディレクトリが
+            存在しないとき、epoch を1つも含まない history があったとき。
+
     """
     if isinstance(histories, Mapping):
         labeled = {str(label): Path(path) for label, path in histories.items()}
@@ -99,7 +112,7 @@ def enumerate_epochs(
                 ignored.append(entry.name)
         if ignored:
             # stacklevel の追加は警告の表示位置(報告される呼び出し元)が変わるため今回は見送り
-            warnings.warn(  # noqa: B028
+            warnings.warn(  # ruff: ignore[B028]
                 f"ignoring non-epoch entries in {path}: {ignored[:_MAX_IGNORED_LISTED]}"
                 + (" ..." if len(ignored) > _MAX_IGNORED_LISTED else "")
             )

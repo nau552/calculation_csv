@@ -44,6 +44,11 @@ def data_file(data_dir: Path, filename: str) -> Path:
     解凍は不要(複数ファイルを固めた tar.gz は batch/staging.py が事前に展開し、
     ここには常に csv / csv.gz として見える)。どちらも無ければ非圧縮のパスを
     返す(呼び出し元が exists 判定やエラー文言に使う)。
+
+    Returns:
+        存在する非圧縮 csv のパス。無ければ存在する `.gz` 版のパス。
+        どちらも無ければ非圧縮側のパス(存在しない)。
+
     """
     plain = data_dir / filename
     if plain.exists():
@@ -85,6 +90,15 @@ def resolve_axes(
 
     Label/Override/State/DataName などは人間可読なテキストへ解決済み。
     必要なところにだけ join を入れる。
+
+    Returns:
+        値列(列名 = `type_`)と要求された軸の列だけを持つ LazyFrame。
+        要求されなかった結合キー等の付随列は落としてある。
+
+    Raises:
+        ValueError: 要求された軸が `{type_}.csv` / `parameterLabel_{type_}.csv` /
+            `dataName_{type_}.csv` のどこからも解決できない時。
+
     """
     data_dir = Path(data_dir)
     required_axes = set(required_axes)

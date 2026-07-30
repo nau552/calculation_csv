@@ -36,7 +36,7 @@ _EXPORTS = {
 }
 
 # PEP 562 の遅延 import のため __all__ は _EXPORTS から動的生成する(静的リストにすると追加漏れが起きる)
-__all__ = sorted(_EXPORTS)  # noqa: PLE0605
+__all__ = sorted(_EXPORTS)  # ruff: ignore[PLE0605]
 
 
 def __getattr__(name: str) -> object:

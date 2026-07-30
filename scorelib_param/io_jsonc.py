@@ -13,7 +13,12 @@ if TYPE_CHECKING:
 
 
 def load_run_config(path: str | Path) -> RunConfig:
-    """RunConfig を jsonc ファイルから読み込む。"""
+    """RunConfig を jsonc ファイルから読み込む。
+
+    Returns:
+        pydantic の検証を通った RunConfig インスタンス。
+
+    """
     return RunConfig.model_validate(jsonc.load(path))
 
 
@@ -23,7 +28,12 @@ def save_run_config(config: RunConfig, path: str | Path) -> None:
 
 
 def load_score_file(path: str | Path) -> ScoreFile:
-    """ScoreFile を jsonc ファイルから読み込む。"""
+    """ScoreFile を jsonc ファイルから読み込む。
+
+    Returns:
+        pydantic の検証を通った ScoreFile インスタンス。
+
+    """
     return ScoreFile.model_validate(jsonc.load(path))
 
 
@@ -33,5 +43,10 @@ def save_score_file(score_file: ScoreFile, path: str | Path) -> None:
 
 
 def load_dvtbudget_coef(path: str | Path) -> DvtBudgetCoefFile:
-    """係数表(dVtBudget)を jsonc ファイルから読み込む。"""
+    """係数表(dVtBudget)を jsonc ファイルから読み込む。
+
+    Returns:
+        pydantic の検証を通った DvtBudgetCoefFile インスタンス。
+
+    """
     return DvtBudgetCoefFile.model_validate(jsonc.load(path))

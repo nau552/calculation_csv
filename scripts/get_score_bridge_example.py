@@ -41,6 +41,11 @@ def _json_key(k: object) -> object:
 
     json.dump は str/int/float/bool/None 以外のキーを受けない(int 等は json 側が
     文字列化する)ため、numpy int64 等のキーを Python 型へ戻す。
+
+    Returns:
+        json.dump がキーとして受けられる値。numpy スカラーは item() で素の
+        Python 型へ戻し、元から受けられる型はそのまま返す。
+
     """
     if not isinstance(k, (str, int, float, bool)) and k is not None and hasattr(k, "item"):
         return k.item()
@@ -58,6 +63,11 @@ def _jsonable(obj: object) -> object:
     「dump を壊さない形」になってさえいればよい(読み込み時に無視される)。
     pandas / numpy は import せず振る舞いで判定する(このファイルを標準
     ライブラリだけで動く状態に保つため)。
+
+    Returns:
+        json.dump にそのまま渡せる形へ再帰変換した値(dict / list / 素のスカラー。
+        どの変換にも当てはまらない値は str 化される)。
+
     """
     if isinstance(obj, dict):
         return {_json_key(k): _jsonable(v) for k, v in obj.items()}
@@ -79,6 +89,13 @@ def _find_scorelib_parent() -> str:
 
     例: このコードが kicOpt/optlib/turbo.py に貼られていて scorelib_param が
     kicOpt/scorelib_param にある場合、optlib → kicOpt の順に探して見つかる。
+
+    Returns:
+        scorelib_param/ ディレクトリを直下に含む場所の絶対パス(str)。
+
+    Raises:
+        ValueError: 親方向へ3階層まで探しても scorelib_param/ が見つからないとき。
+
     """
     d = Path(__file__).resolve().parent
     cand = d
@@ -124,6 +141,15 @@ def compute_epoch_score(
       最適化スクリプトが持つ config 全体をそのまま渡してよい)
     - stdout には結果 JSON だけが出る(版数表示などは stderr)
     - 失敗(returncode != 0)は stderr 末尾つきの RuntimeError
+
+    Returns:
+        CLI が stdout へ出した結果 JSON をパースした dict。キーは "Score" と
+        各スコアパーツ名、値はそれぞれの計算値。
+
+    Raises:
+        RuntimeError: エンジンの subprocess が異常終了(returncode != 0)したとき。
+            メッセージに stderr の末尾を含める。
+
     """
     if scorelib_parent is None:
         scorelib_parent = _find_scorelib_parent()

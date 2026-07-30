@@ -428,3 +428,19 @@ v0.4.0 の機能群（集計時重み・変換ステップ拡張・Physical 記�
   語彙の変更なし)。テスト304件パス。コンテナの ruff 版数は未確認(写真に
   なし)、コンテナ内でこのリポジトリを開くとリポジトリ直下の ruff.toml が優先
   される。
+- 追記(2026-07-31): ruff の検査基準を preview まで拡張(feature/ruff-preview)。
+  実機報告「CLI ゼロなのにエディタに警告 35 件」の原因は、コンテナの VS Code
+  ruff 拡張が preview で動くこと(24件)+ Pylance(11件・別物)と判明。CLI・CI に
+  `--preview` を付けて基準を一致させ、全体 496 件を再ゼロ化(ruff.toml 本体は
+  チーム原本のまま、というユーザー方針でフラグ方式を採用)。内訳: docstring
+  Returns/Raises/Yields 追記 252 件(並列エージェント)・テストメソッドの
+  @staticmethod 化 32 件・encoding="utf-8" 明示 5 件(Linux は既定と同じ=挙動
+  不変)・set リテラル化/空文字比較/starmap 等の書き換え・noqa → ruff: ignore
+  [コード] 表記へ全変換(名前表記は素の実行で抑止が外れるためコードで統一、
+  RUF106 は設定で容認)。preview 専用ルールの容認(関数サイズ系 PLR0914/
+  PLW0717、テストの float 一致比較 RUF069 など)は per-file-ignores に理由付き
+  で追加。両モード(--preview 有無)とも警告ゼロ・テスト 304 件パス。版数は
+  動かさない(スタイル・docstring のみ)。Pylance は「チームは警告が出ない
+  コードを書いている」ため設定で消さずコードを直す方針に確定 — pyright 実測
+  414 件(汚染源は ANN401 対応の Any→object)、次の作業として実施予定。その次に
+  品質向上パス。

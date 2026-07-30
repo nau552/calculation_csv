@@ -31,6 +31,10 @@ def detect_types(data_dir: str | Path) -> list[str]:
     値列ルールは Measure 列の無い type(KLD / PROGLOOP など)も拾うために
     2026-07-29 に「Measure 列を持つ」から置き換えた: エンジン(resolve_axes)は
     値列 = type 名を前提とするので、値列を持たない csv は検出しても計算できない。
+
+    Returns:
+        検出した測定 type 名のソート済みリスト。
+
     """
     data_dir = Path(data_dir)
     types: set[str] = set()
@@ -47,7 +51,7 @@ def detect_types(data_dir: str | Path) -> list[str]:
         try:
             cols = pl.scan_csv(f).collect_schema().names()
         # ヘッダの読めない csv は測定 type 候補から静かに外し、残りの走査を続ける設計
-        except Exception:  # noqa: S112, BLE001
+        except Exception:  # ruff: ignore[S112, BLE001]
             continue
         if stem in cols:
             types.add(stem)
@@ -60,16 +64,20 @@ def find_dvtbudget_coefs(data_dir: str | Path) -> list[Path]:
     係数表の形は 世代 → 温度 → State → {a, b}。判別はファイル名ではなく形で
     行う。複数マッチしたときの扱いは呼び出し側の責務(UIは黙って選ばず
     エラーにする)。
+
+    Returns:
+        係数表として読めた jsonc ファイルのパスのリスト(ファイル名順)。
+
     """
     # io_jsonc は pydantic モデル(models)を引き込む。係数表の判別を使うときだけ読み込み、import を軽く保つ
-    from .io_jsonc import load_dvtbudget_coef  # noqa: PLC0415
+    from .io_jsonc import load_dvtbudget_coef  # ruff: ignore[PLC0415]
 
     found = []
     for f in sorted(Path(data_dir).glob("*.jsonc")):
         try:
             coef = load_dvtbudget_coef(f)
         # 係数表の形で読めない jsonc は候補から静かに外し、残りの走査を続ける設計
-        except Exception:  # noqa: S112, BLE001
+        except Exception:  # ruff: ignore[S112, BLE001]
             continue
         if coef.root and all(temps and all(states for states in temps.values()) for temps in coef.root.values()):
             # {a, b} のリーフ形が少なくとも1件マッチしていることまで要求する
@@ -81,6 +89,11 @@ def find_generation_info(data_dir: str | Path, generation: str | None) -> Path |
     """世代ごとのチップ情報json がデータディレクトリに置かれていればそのパス。
 
     対象は {Generation}.json(numWLs, numStrings, ...)。これだけファイル名ベース。
+
+    Returns:
+        存在すれば {Generation}.json のパス。generation 未指定または
+        ファイルが無ければ None。
+
     """
     if not generation:
         return None
@@ -94,13 +107,17 @@ def find_run_configs(data_dir: str | Path) -> list[Path]:
     find_dvtbudget_coefs と同じく形ベース。2つの形は排他的
     (係数表に "optimization" キーは無く、設定は3段 {a, b} 表の検証に通らない)
     なので取り違えは起きない。
+
+    Returns:
+        optimization ブロックを持つ jsonc のパスのリスト(ファイル名順)。
+
     """
     found = []
     for f in sorted(Path(data_dir).glob("*.jsonc")):
         try:
             content = jsonc.load(f)
         # jsonc として読めないファイルは候補から静かに外し、残りの走査を続ける設計
-        except Exception:  # noqa: S112, BLE001
+        except Exception:  # ruff: ignore[S112, BLE001]
             continue
         if isinstance(content, dict) and "optimization" in content:
             found.append(f)
@@ -118,6 +135,11 @@ def axis_catalog(data_dir: str | Path, type_: str) -> dict[str, list | None]:
     DataName は dataName_{type}.csv がある場合のみ。
 
     type_ == "dVtBudget" のときは FBC のカタログを返す(FBC.csv を読むため)。
+
+    Returns:
+        表示順に並んだ {軸名: 値候補のリスト} の辞書。自由入力のみの軸は
+        値が None。
+
     """
     data_dir = Path(data_dir)
     source_type = "FBC" if type_ == "dVtBudget" else type_
@@ -152,6 +174,10 @@ def measure_labels(data_dir: str | Path, type_: str) -> dict[int, str]:
     (docs/spec_change_dataname_measure.md 6.4節)。dataName_{type}.csv が無い・
     読めない場合は空 dict(番号のみ表示になる)。1:多(同じ dataName が複数
     番号に付くループ測定)はそのまま番号ごとの対応になる。
+
+    Returns:
+        {Measure 番号: dataName} の辞書。対応表が無い・読めない場合は空。
+
     """
     data_dir = Path(data_dir)
     source_type = "FBC" if type_ == "dVtBudget" else type_
@@ -166,7 +192,7 @@ def measure_labels(data_dir: str | Path, type_: str) -> dict[int, str]:
             .collect()
         )
     # 対応表が読めない場合は空 dict = 番号のみ表示に落とす仕様(docstring 参照)
-    except Exception:  # noqa: BLE001
+    except Exception:  # ruff: ignore[BLE001]
         return {}
     return {
         int(m): str(d)
@@ -190,7 +216,7 @@ def _candidates(data_dir: Path, source_type: str, axis: str, tcsv: Path | None) 
         try:
             present = set(resolve_axes(data_dir, source_type, {axis}).select(axis).unique().collect()[axis].to_list())
         # 実在値の照会に失敗したら map の全語彙へフォールバックする設計(上のコメント参照)
-        except Exception:  # noqa: BLE001
+        except Exception:  # ruff: ignore[BLE001]
             return full
         narrowed = [v for v in full if v in present]
         return narrowed or full

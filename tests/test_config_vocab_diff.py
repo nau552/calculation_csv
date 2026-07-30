@@ -25,7 +25,12 @@ class FakeSeries:
         self._data = data
 
     def to_dict(self) -> dict[str, float]:
-        """素の dict を返す(pandas.Series.to_dict 相当)。"""
+        """素の dict を返す(pandas.Series.to_dict 相当)。
+
+        Returns:
+            保持しているデータのコピー(キーと値はそのまま)。
+
+        """
         return dict(self._data)
 
 
@@ -59,11 +64,11 @@ def test_report_finds_memory_only_and_transformed(tmp_path: Path) -> None:
         (scope, key): status
         for scope, key, status in mod.report_engine_vocab_diff(cfg, processed, printer=lines.append)
     }
-    assert findings[("top", "Generation")] == "ファイルのみ(ローダが除去)"
-    assert findings[("optimization", "score_function")] == "一致"
-    assert findings[("optimization", "WLgroup")] == "加工あり"  # [0,3] vs [0,1,2,3]
-    assert findings[("optimization", "WLgroupWeight")] == "一致"  # Series は to_dict で一致
-    assert findings[("optimization", "vthSkip")] == "メモリのみ"  # 自動補完の疑い
+    assert findings["top", "Generation"] == "ファイルのみ(ローダが除去)"
+    assert findings["optimization", "score_function"] == "一致"
+    assert findings["optimization", "WLgroup"] == "加工あり"  # [0,3] vs [0,1,2,3]
+    assert findings["optimization", "WLgroupWeight"] == "一致"  # Series は to_dict で一致
+    assert findings["optimization", "vthSkip"] == "メモリのみ"  # 自動補完の疑い
     assert any("メモリにだけ存在" in ln for ln in lines)
 
 

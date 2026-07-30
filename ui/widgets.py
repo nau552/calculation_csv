@@ -62,6 +62,12 @@ def sortable_list(items: list[str], key: str) -> list[str] | None:
     key は項目テキスト由来にしてある: テキストが変わったら(別の場所での編集や
     こちらが適用した並べ替え)、古い内部状態を見せ続けずに新しい並びで
     再マウントさせるため。
+
+    Returns:
+        並べ替え後の項目リスト。コンポーネントが使えない・空リスト・
+        結果が元の項目集合と一致しない時は None(上下ボタンへの
+        フォールバック指示)。
+
     """
     if not HAS_SORTABLES or not items:
         return None
@@ -82,6 +88,11 @@ def measure_format(measure_labels: dict[int, str] | None) -> Callable[[object], 
     表示は「dataName (Measure N)」、名無しの番号は
     「Measure N」(docs/spec_change_dataname_measure.md 6.4節の複合表示。
     選択・保存されるのは常に番号そのもの)。
+
+    Returns:
+        Measure 番号を受け取り複合表示の文字列を返す関数
+        (selectbox 等の format_func にそのまま渡せる)。
+
     """
     m = measure_labels or {}
     return lambda v: f"{m[v]} (Measure {v})" if v in m else f"Measure {v}"
@@ -92,7 +103,13 @@ def _axis_format(axis: str, measure_labels: dict[int, str] | None) -> Callable[[
 
 
 def parse_scalar(text: str) -> bool | int | float | str:
-    """自由入力テキスト → 型付きの軸の値(bool / int / float / str)。"""
+    """自由入力テキスト → 型付きの軸の値(bool / int / float / str)。
+
+    Returns:
+        "true"/"false"(大文字小文字不問)は bool、数値に読めれば int または
+        float、それ以外は前後空白を除いた文字列のまま。
+
+    """
     t = text.strip()
     if t.lower() == "true":
         return True
@@ -118,6 +135,11 @@ def value_widget(
 
     候補が分かればプルダウン、無ければ自由入力
     (型付きスカラーにパース)。
+
+    Returns:
+        プルダウンなら選ばれた候補値、自由入力なら parse_scalar で型付けした
+        値。自由入力が空の間は None。
+
     """
     if candidates:
         index = candidates.index(current) if current in candidates else 0
@@ -133,7 +155,12 @@ def dict_selection_row(
     key: str,
     measure_labels: dict[int, str] | None = None,
 ) -> dict[str, Any]:
-    """複合軸の選択1つ: 軸ごとのプルダウンを1行に並べて辞書を返す。"""
+    """複合軸の選択1つ: 軸ごとのプルダウンを1行に並べて辞書を返す。
+
+    Returns:
+        軸名 → 入力された値 の辞書(全軸ぶん。未入力の軸は None)。
+
+    """
     cols = st.columns(len(axes))
     current = current if isinstance(current, dict) else {}
     return {
@@ -149,7 +176,12 @@ def selection_widget(
     key: str,
     measure_labels: dict[int, str] | None = None,
 ) -> object:
-    """単一軸・複合軸どちらにも対応した選択1つぶんの入力。"""
+    """単一軸・複合軸どちらにも対応した選択1つぶんの入力。
+
+    Returns:
+        単一軸なら値1つ(未入力なら None)、複合軸なら 軸名 → 値 の辞書。
+
+    """
     if len(axes) > 1:
         return dict_selection_row(axes, catalog, current, key, measure_labels)
     return value_widget(st, axes[0], catalog.get(axes[0]), current, key, _axis_format(axes[0], measure_labels))
@@ -165,6 +197,11 @@ def selection_list_widget(
     """可変長の選択リスト(mean/sum/min/max の対象選択と選択セット編集で使用)。
 
     行の追加・削除ができる。
+
+    Returns:
+        現在の選択値のリスト。候補の分かる単一軸なら multiselect の選択値、
+        それ以外は行ごとの selection_widget の値(複合軸なら辞書)を並べたもの。
+
     """
     if len(axes) == 1 and catalog.get(axes[0]):
         cands = catalog[axes[0]]
@@ -179,6 +216,7 @@ def selection_list_widget(
         with row_cols[0]:
             out.append(selection_widget(axes, catalog, v, f"{key}_r{i}", measure_labels))
         if row_cols[1].button("✕", key=f"{key}_del{i}", help="この行を削除"):
+            # 直後の st.rerun() が例外でループごと抜けるため、削除後に反復は続かない
             values.pop(i)
             st.rerun()
     if st.button("+ 行を追加", key=f"{key}_add"):
@@ -228,7 +266,7 @@ def _transform_editor(
         key=f"{key}_tmode",
         horizontal=True,
     )
-    default = 1.0 if op in ("mul", "div") else 0.0
+    default = 1.0 if op in {"mul", "div"} else 0.0
 
     if mode == modes[0]:
         spec.pop("by", None)
@@ -632,6 +670,7 @@ def relative_editor(
                 key=f"{key}_pre{i}_axis",
             )
             if c_del.button("✕", key=f"{key}_pre{i}_del", help="この事前集計を削除"):
+                # 直後の st.rerun() が例外でループごと抜けるため、削除後に反復は続かない
                 steps.pop(i)
                 st.rerun()
             agg_editor(step["axis"], step, catalog, set_names, key=f"{key}_pre{i}", measure_labels=measure_labels)

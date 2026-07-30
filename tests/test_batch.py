@@ -68,7 +68,13 @@ def _make_history(root: Path, exp: str, step: str, loop: str, shifts: dict) -> P
 
 @pytest.fixture(scope="module")
 def config_and_coef() -> tuple[RunConfig, DvtBudgetCoefFile]:
-    """config_mini と dVtBudget 係数を読み込んで返す。"""
+    """config_mini と dVtBudget 係数を読み込んで返す。
+
+    Returns:
+        リポジトリ直下の config_mini.jsonc から作った RunConfig と、
+        フィクスチャ係数の DvtBudgetCoefFile の組。
+
+    """
     config = io_jsonc.load_run_config(REPO_ROOT / "config_mini.jsonc")
     coef = io_jsonc.load_dvtbudget_coef(Path(__file__).resolve().parent / "fixtures" / "dvtbudget_coef.jsonc")
     return config, coef
@@ -76,7 +82,12 @@ def config_and_coef() -> tuple[RunConfig, DvtBudgetCoefFile]:
 
 @pytest.fixture(scope="module")
 def history_tree(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path, Path]:
-    """2つの実験(計5 epoch、摂動は全 epoch で異なる)。読み取り専用で共有。"""
+    """2つの実験(計5 epoch、摂動は全 epoch で異なる)。読み取り専用で共有。
+
+    Returns:
+        (ルート, expA の result_history, expB の result_history) の3パスの組。
+
+    """
     root = tmp_path_factory.mktemp("histories")
     hist_a = _make_history(root, "expA", "Step1", "Loop01", {1: 0, 2: 1, 3: 2})
     hist_b = _make_history(root, "expB", "Step2", "Loop03", {1: 3, 2: 4})
@@ -84,7 +95,12 @@ def history_tree(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path, 
 
 
 def _sequential_expected(history_tree: tuple[Path, Path, Path], config: RunConfig, coef: DvtBudgetCoefFile) -> dict:
-    """現行の単一 epoch 計算による正解: {epoch_id: {"Score": ..., パーツ: ...}}"""
+    """現行の単一 epoch 計算による正解: {epoch_id: {"Score": ..., パーツ: ...}}
+
+    Returns:
+        Epoch ID をキーに、compute_score_file の結果 dict を並べた辞書。
+
+    """
     _, hist_a, hist_b = history_tree
     expected = {}
     for hist, label in ((hist_a, "expA/Step1/Loop01"), (hist_b, "expB/Step2/Loop03")):

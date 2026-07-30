@@ -120,7 +120,8 @@ git config core.hooksPath scripts/hooks         # push前テストのフック�
   main 直コミットでよい
 - **コード規約（ruff）**: 社内チーム共通コンテナの設定に合わせる（リポジトリ直下の
   `ruff.toml` に転記済み。独自規約は作らない — 解説は docs/dev_workflow.md）。
-  push 前に `.venv/bin/ruff check .` と `.venv/bin/ruff format .` を流す
+  push 前に `.venv/bin/ruff check . --preview` と `.venv/bin/ruff format .` を流す
+  （`--preview` はコンテナのエディタと検査基準を揃えるため — 同 docs 参照）
 - **CI**: push / PR のたびに GitHub Actions（`.github/workflows/test.yml`）が
   本番エンジン環境と同じ Python 3.13 で ruff（lint・整形検査）と全テストを実行する。
   **社内 GitLab で運用する場合は `.gitlab-ci.yml`**（同内容の下書き作成済み。

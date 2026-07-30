@@ -120,7 +120,12 @@ def test_score_file_errors_without_vthskip(tmp_path: Path) -> None:
 
 @pytest.fixture
 def mixed_history(tmp_path: Path) -> Path:
-    """epoch1 = 全ファイルあり、epoch2 = KLD/dVthSGWLD 無し(vthSkip 中を模す)。"""
+    """epoch1 = 全ファイルあり、epoch2 = KLD/dVthSGWLD 無し(vthSkip 中を模す)。
+
+    Returns:
+        この2 epoch を含む result_history ディレクトリのパス。
+
+    """
     hist = tmp_path / "exp" / "Step1" / "Loop01" / "result_history"
     shutil.copytree(MINI, hist / "result.0001")
     shutil.copytree(MINI, hist / "result.0002")

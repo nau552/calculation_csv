@@ -25,6 +25,7 @@ test:
   script:
     - python --version
     - python -m pip install -e ".[dev]"
-    - python -m ruff check .
+    # --preview の理由は .github/workflows/test.yml の同項コメント参照
+    - python -m ruff check . --preview
     - python -m ruff format --check .
     - python -m pytest -q

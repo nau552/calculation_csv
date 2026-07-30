@@ -8,6 +8,7 @@ op の一覧は docs/score_gui_design.md 4.2節。
 
 from __future__ import annotations
 
+from itertools import starmap
 from typing import TYPE_CHECKING
 
 import polars as pl
@@ -26,6 +27,11 @@ def group_column_expr(axis: str, ranges: Mapping[str, tuple[int, int]]) -> pl.Ex
 
     各行の元軸の値が入る範囲のグループ名を割り当てる。データ読み込み直後に
     使われ、以降グループ列は普通の軸として集計される。
+
+    Returns:
+        各行に「元軸の値が入る範囲のグループ名」を割り当てる Utf8 の式。
+        どの範囲にも入らない行は null になる。
+
     """
     expr = pl.lit(None, dtype=pl.Utf8)
     for name, (lo, hi) in ranges.items():
@@ -59,6 +65,13 @@ def _per_value_operand(lf: pl.LazyFrame, axis: str, mapping: Mapping, what: str)
     辞書に無い値の行が存在すると定数が null になり静かに null が伝播して
     しまう — ほぼ確実に定義の古さが原因なので、該当値の一覧つきで失敗させる
     (グループ派生列の未カバー検出 cli._with_group_columns と同じ方針)。
+
+    Returns:
+        各行の axis 列の値に対応する定数を与える Float64 の式。
+
+    Raises:
+        ValueError: axis 列に辞書でカバーされない値の行が存在するとき。
+
     """
     operand = pl.lit(None, dtype=pl.Float64)
     for key, const in mapping.items():
@@ -87,6 +100,14 @@ def apply_transform(lf: pl.LazyFrame, value_col: str, spec: AggregationSpec) -> 
 
     単項op(UNARY_OPS)は定数を取らない行単位の関数:
     abs = |x|、log = ln(max(|x|, floor))(floor は必須・モデル検証済み)。
+
+    Returns:
+        値列を演算後の値で置き換えた LazyFrame(行数・軸列は変わらない)。
+
+    Raises:
+        ValueError: 定数演算 op に value が無いとき、by 軸がその時点で
+            残っていないとき、by 辞書に無い値の行が存在するとき。
+
     """
     if spec.op in UNARY_OPS:
         col = pl.col(value_col)
@@ -122,7 +143,17 @@ def apply_axis_op(
     spec: AggregationSpec,
     group_keys: Sequence[str],
 ) -> pl.LazyFrame:
-    """1つの軸を1つの集計指示で潰す(結果の frame から `axis` 列は消え、`group_keys` + 値列だけが残る)。"""
+    """1つの軸を1つの集計指示で潰す(結果の frame から `axis` 列は消え、`group_keys` + 値列だけが残る)。
+
+    Returns:
+        `axis` 列を潰した後の LazyFrame(残る列は `group_keys` + 値列)。
+
+    Raises:
+        ValueError: op が未知のとき、expr op に式が無いとき、by 参照で
+            グループ内に同じ軸の値が複数回現れたとき、集計時重みの辞書に
+            無い値の行が存在するとき。
+
+    """
     if spec.op == "filter":
         # リストは is_in(複数値選択): 該当行を残して軸列を落とす。残った行は
         # 後段集計に複製として流れ込む(例: 同じ dataName を持つ複数 Measure を
@@ -174,10 +205,7 @@ def apply_axis_op(
 
         if group_keys:
             df = lf.group_by(list(group_keys)).agg([pl.col(value_col), pl.col(axis)]).collect()
-            result = [
-                _eval(vals, axis_vals)
-                for vals, axis_vals in zip(df[value_col].to_list(), df[axis].to_list(), strict=False)
-            ]
+            result = list(starmap(_eval, zip(df[value_col].to_list(), df[axis].to_list(), strict=False)))
             return df.drop(value_col, axis).with_columns(pl.Series(value_col, result)).lazy()
         df = lf.select([pl.col(value_col), pl.col(axis)]).collect()
         result_value = _eval(df[value_col].to_list(), df[axis].to_list())
@@ -200,6 +228,14 @@ def apply_aggregations(
 
     重要: グループキーは「その時点で残っている全列」。order に置いた
     グループ派生列などが自然にキーとして生き残る仕組みの要。
+
+    Returns:
+        `order` の全軸を潰し終えた LazyFrame。
+
+    Raises:
+        ValueError: order に載っている軸に集計指示が無いとき、または
+            その軸がその時点の列に存在しないとき。
+
     """
     for axis in order:
         if axis not in aggregations:
@@ -210,7 +246,7 @@ def apply_aggregations(
         if axis not in schema_cols:
             msg = f"axis '{axis}' not present (already aggregated away?): columns = {schema_cols}"
             raise ValueError(msg)
-        group_keys = [c for c in schema_cols if c not in (value_col, axis)]
+        group_keys = [c for c in schema_cols if c not in {value_col, axis}]
         lf = apply_axis_op(lf, value_col, axis, spec, group_keys)
     return lf
 
@@ -222,6 +258,15 @@ def collapse(lf: pl.LazyFrame, value_col: str, identity_axes: Sequence[str] = ()
 
     identity_axes は現状常に空(単一epoch運用 → 1スカラー)。将来、過去epoch
     一括処理で Epoch 列をパイプライン全体に通す場合に使うための引数。
+
+    Returns:
+        identity 軸 + 値列だけを持つ collect 済みの DataFrame。
+
+    Raises:
+        ValueError: identity 軸以外の列が潰れずに残っているとき、
+            identity 軸なしで結果が1行に収束していないとき、
+            値列に null が含まれるとき(filter の空振りの疑い)。
+
     """
     df = lf.collect()
     expected = set(identity_axes) | {value_col}
@@ -244,7 +289,12 @@ def collapse(lf: pl.LazyFrame, value_col: str, identity_axes: Sequence[str] = ()
 
 
 def collapse_to_scalar(lf: pl.LazyFrame, value_col: str) -> float:
-    """全軸が潰れていることを検証して値列の1スカラーを返す。"""
+    """全軸が潰れていることを検証して値列の1スカラーを返す。
+
+    Returns:
+        1行に収束した値列の中身を float にした値。
+
+    """
     return float(collapse(lf, value_col)[value_col][0])
 
 
@@ -254,6 +304,11 @@ def aggregate_score_part(
     order: Sequence[str],
     aggregations: dict[str, AggregationSpec],
 ) -> float:
-    """1スコアパーツぶんの逐次集計パイプラインを最後まで実行してスカラーを返す。"""
+    """1スコアパーツぶんの逐次集計パイプラインを最後まで実行してスカラーを返す。
+
+    Returns:
+        全軸を畳み終えたスコアパーツの値(float)。
+
+    """
     lf = apply_aggregations(lf, value_col, order, aggregations)
     return collapse_to_scalar(lf, value_col)

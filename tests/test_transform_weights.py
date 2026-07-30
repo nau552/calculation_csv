@@ -19,7 +19,12 @@ from scorelib_param.models import AggregationSpec, GroupDef, RunConfig, ScorePar
 def _mean_part(
     name: str = "p", extra_order: Sequence[str] = (), extra_aggs: dict[str, dict[str, object]] | None = None
 ) -> ScorePart:
-    """FBC を WL 平均だけで畳む最小パーツ(他の軸は暗黙集約)。"""
+    """FBC を WL 平均だけで畳む最小パーツ(他の軸は暗黙集約)。
+
+    Returns:
+        extra_order / extra_aggs でステップを追加した ScorePart。
+
+    """
     return ScorePart(
         name=name,
         type="FBC",
@@ -62,7 +67,12 @@ def test_sign_flip_with_mul(data_dir_mini: Path) -> None:
 
 
 def _wl_split(data_dir_mini: Path) -> tuple[dict[str, tuple[int, int]], dict[str, float]]:
-    """Mini データの WL 範囲を2グループに割った定義と、素の csv からのグループ別 FBC 平均(独立再計算の正解)を返す。"""
+    """Mini データの WL 範囲を2グループに割った定義と、素の csv からのグループ別 FBC 平均(独立再計算の正解)を返す。
+
+    Returns:
+        (グループ名→WL 範囲の dict, グループ名→FBC 平均の dict) のタプル。
+
+    """
     df = _raw_fbc(data_dir_mini)
     wl_max = df["WL"].max()
     groups = {"gLow": (0, 1), "gHigh": (2, wl_max)}
@@ -224,7 +234,12 @@ def test_wlgroup_defin_logical_string_parsing() -> None:
 
 
 def _logical_physical_configs(data_dir_mini: Path) -> tuple[RunConfig, RunConfig, int]:
-    """同じ分割を Logical / Physical の両記法で書いた config の組。"""
+    """同じ分割を Logical / Physical の両記法で書いた config の組。
+
+    Returns:
+        (Logical 記法の RunConfig, Physical 記法の RunConfig, WL 本数) のタプル。
+
+    """
     df = _raw_fbc(data_dir_mini)
     n = int(df["WL"].max()) + 1
     logical = {"gLow": [0, 1], "gHigh": [2, n - 1]}

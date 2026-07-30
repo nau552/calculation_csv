@@ -26,32 +26,37 @@ def _lf() -> pl.LazyFrame:
 class TestApplyAxisOp:
     """apply_axis_op の集計時重みのテスト。"""
 
-    def test_weighted_max_scales_before_reduce(self) -> None:
+    @staticmethod
+    def test_weighted_max_scales_before_reduce() -> None:
         """集計 max の前に重みが乗算されることを検証する。"""
         spec = AggregationSpec(op="max", weight={"g0": 10.0, "g1": 1.0})
         out = apply_axis_op(_lf(), "v", "grp", spec, []).collect()
         # 重みなしなら max=5 だが、乗算後 (10, 20, 5) の max=20
         assert out["v"].to_list() == [20.0]
 
-    def test_weighted_mean_is_not_normalized(self) -> None:
+    @staticmethod
+    def test_weighted_mean_is_not_normalized() -> None:
         """加重 mean は正規化されない(mean(weight * value))ことを検証する。"""
         spec = AggregationSpec(op="mean", weight={"g0": 10.0, "g1": 1.0})
         out = apply_axis_op(_lf(), "v", "grp", spec, []).collect()
         assert out["v"][0] == pytest.approx((10.0 + 20.0 + 5.0) / 3)
 
-    def test_scalar_weight(self) -> None:
+    @staticmethod
+    def test_scalar_weight() -> None:
         """スカラー重みが全行に乗算されることを検証する。"""
         spec = AggregationSpec(op="sum", weight=2.0)
         out = apply_axis_op(_lf(), "v", "grp", spec, []).collect()
         assert out["v"][0] == pytest.approx(16.0)
 
-    def test_uncovered_value_raises(self) -> None:
+    @staticmethod
+    def test_uncovered_value_raises() -> None:
         """重みに無い軸値があればエラーになることを検証する。"""
         spec = AggregationSpec(op="mean", weight={"g0": 1.0})
         with pytest.raises(ValueError, match="no entry in the aggregation weights"):
             apply_axis_op(_lf(), "v", "grp", spec, []).collect()
 
-    def test_subset_selection_limits_coverage_check(self) -> None:
+    @staticmethod
+    def test_subset_selection_limits_coverage_check() -> None:
         """選択集合で絞った後の値だけ重みがあればよい。"""
         spec = AggregationSpec(op="mean", value=["g0"], weight={"g0": 3.0})
         out = apply_axis_op(_lf(), "v", "grp", spec, []).collect()
@@ -61,7 +66,8 @@ class TestApplyAxisOp:
 class TestEquivalenceWithTransformStep:
     """集計時重みと変換ステップ(by + mul)の同値性のテスト。"""
 
-    def test_inline_weight_equals_transform_step_before_collapse(self, data_dir_mini: Path) -> None:
+    @staticmethod
+    def test_inline_weight_equals_transform_step_before_collapse(data_dir_mini: Path) -> None:
         """集計時重みは、集計直前に置いた変換ステップ(by + mul)と同値。"""
         group_defs = {"WLgroup": GroupDef(axis="WL", groups={"lo": (0, 2), "hi": (3, 5)}, definedInLogical=True)}
         weights = {"lo": 1.0, "hi": 10.0}
@@ -122,7 +128,8 @@ class TestEquivalenceWithTransformStep:
 class TestWeightRef:
     """weight_ref の weightSets からの解決のテスト。"""
 
-    def _part(self, wlgroup_spec: dict[str, str]) -> ScorePart:
+    @staticmethod
+    def _part(wlgroup_spec: dict[str, str]) -> ScorePart:
         return ScorePart.model_validate(
             {
                 "name": "p",
@@ -155,17 +162,20 @@ class TestWeightRef:
 class TestValidation:
     """weight 指定の形状検査のテスト。"""
 
-    def test_weight_on_filter_rejected(self) -> None:
+    @staticmethod
+    def test_weight_on_filter_rejected() -> None:
         """集計でない filter op への weight 指定が拒否されることを検証する。"""
         with pytest.raises(ValueError, match="apply only to aggregation ops"):
             AggregationSpec(op="filter", value="A2B", weight={"a": 1.0})
 
-    def test_weight_and_weight_ref_rejected(self) -> None:
+    @staticmethod
+    def test_weight_and_weight_ref_rejected() -> None:
         """直書き weight と weight_ref の同時指定が拒否されることを検証する。"""
         with pytest.raises(ValueError, match="not both"):
             AggregationSpec(op="mean", weight={"a": 1.0}, weight_ref="W")
 
-    def test_non_numeric_weight_rejected(self) -> None:
+    @staticmethod
+    def test_non_numeric_weight_rejected() -> None:
         """数値でない weight が拒否されることを検証する。"""
         with pytest.raises(ValueError, match="dict of numbers"):
             AggregationSpec(op="mean", weight={"a": "x"})
