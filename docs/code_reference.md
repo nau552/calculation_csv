@@ -253,14 +253,16 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `parse_scalar(text)` | 自由入力 → bool/int/float/str |
 | `measure_format(mlabels)` / `_axis_format` | Measure 値の複合表示「dataName (Measure N)」（名無しは「Measure N」）。選択・保存は常に番号 |
 | `value_widget` / `dict_selection_row` / `selection_widget` / `selection_list_widget` | 値1個 / 複合軸1行 / どちらか自動 / 可変行リスト（単一軸+候補ありは multiselect）。Measure 軸は複合表示。**原則「描画は設定を変えない」**（2026-08-01・設計書追記参照）: 候補に無い既存値は multiselect では警告付きで（`_options_with_missing`）、プルダウンでは「(データに無し)」等の**印つき選択肢**として残す — 描画だけで index=0 の値へ書き換わる事故（実機で相対化の分子が化けた）の再発防止。セット/重みセット参照・by 軸・事前集計の軸も同じ定石 |
-| `_per_value_dict_editor` | 「値ごとの数値」辞書（集計時重み spec.weight / 変換の by 別定数 spec.value）の共通編集欄（2026-08-01 に一本化）。既存辞書は候補外キーも印つきで保持、触っていない新規キー（中立値のまま）は足さない。辞書がまだ無いとき（モード選択直後）だけ全候補を中立値で初期化（エンジンは全値カバーを要求するため） |
+| `per_value_dict_editor` | 「値ごとの数値」辞書（集計時重み spec.weight / 変換の by 別定数 spec.value / グループ定義の {name}Weight）の共通編集欄（2026-08-01 に一本化）。既存辞書は候補外キーも印つきで保持、触っていない新規キー（中立値のまま）は足さない。辞書がまだ無いとき（モード選択直後）だけ全候補を中立値で初期化（エンジンは全値カバーを要求するため） |
 | `agg_editor(entry, spec, ctx, key)` | 集計指示エディタ(画面側の文脈 — カタログ・セット名・by 候補・重みセット名・Measure ラベル — は frozen dataclass **`EditorContext`** で受ける。2026-07-31 に束ね直し、op 別の入力欄は `_unary_editor` / `_filter_editor` / `_diff_editor` / `_multi_op_editor` へ分割)。**opに応じた入力欄だけを出す**（value/values の混同がUI上起きない）。filter は候補のある単一軸で multiselect（複数=is_in、Measure 選択時は labels 注記も付与）。op変更時は古いフィールドを掃除。mean系の単一軸エントリには集計時重み欄（`_agg_weight_editor`: なし/重みセット/値ごと/定数。値ラベルは by_value_labels 優先=グループ派生軸対応）。仮想ステップの op は STEP_OPS: 定数演算は `_transform_editor`、単項op（abs/log — 0.6.0）は定数欄なし・log のみ floor 入力 |
 | `relative_editor(part, ctx, key)` | 相対化ブロックのエディタ(`EditorContext` 受け。ON/OFF・split行・mode行・分母事前集計をヘルパー分割 — 2026-07-31)。split軸は**任意の軸**から選択（旧 Override 限定は廃止）、分子/分母は候補プルダウン or 自由入力、Measure 分割時は labels 注記を自動付与。ON/OFF/split変更は state.py の整合関数を呼ぶ。分母事前集計は agg_editor をフル再利用 |
 
 ### `ui/app.py` — 5画面本体（ウィジェット配置と session_state だけ）
 | 区分 | 内容 |
 |---|---|
-| `_RESERVED_STATE` / `_init` | アプリデータのキー宣言と初期化（それ以外はウィジェット状態とみなし undo 時に破棄） |
+| `_init` | アプリデータの session_state キー初期化 |
+| `_wk(name)` | **undo 世代つきウィジェットキー**（2026-08-01）。設定から表示を作る全ウィジェットが使う。「元に戻す」のたびに世代が上がりキーが変わって部品ごと作り直される — キー固定だとブラウザ側が古い表示を持ち続け、復元した設定と食い違うため。世代0では従来表記（テスト互換） |
+| `_track_history` / `_undo` | undo 履歴（1操作=1エントリ、スナップショット+**編集していた画面と選択パーツ**）。`_undo` は score_file を復元し、世代を上げて全エディタを再マウントし、記録した場所へ跳ぶ（screen は radio 描画済みのため screen_pending で次run冒頭に反映）。旧方式の「状態の一括削除」は廃止（2026-08-01 — 設計書その4） |
 | `_snapshot` / `_track_history` / `_undo` | JSON文字列スナップショットによる undo（20件）。undo 時はウィジェット状態も破棄 |
 | `_offer_draft_restore` / `_autosave` / `_sidebar_user` / `_header_user` | 下書きの復元提案と自動保存を**ユーザ名ごと**に行う（draft_path_for）。ユーザ名は認証ヘッダ（既定 X-Remote-User、SCORELIB_UI_USER_HEADER で変更）があればそれ、無ければサイドバーの名前入力。未入力の間は保存・復元とも停止 |
 | `_merged_catalog` / `_catalog_for_part` / `_with_group_axes` | カタログの合成（パーツtype用+グループ派生軸の追加） |

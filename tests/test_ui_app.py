@@ -61,6 +61,17 @@ def _part_selector(at: AppTest) -> Selectbox:
     return next(s for s in at.selectbox if str(s.key).startswith("part_sel"))
 
 
+def _ek(at: AppTest, name: str) -> str:
+    """「元に戻す」の世代キー(app._wk)のテスト側対応。
+
+    Returns:
+        世代0なら name、以降は "name@世代番号"。
+
+    """
+    epoch = at.session_state["widget_epoch"]
+    return name if epoch == 0 else f"{name}@{epoch}"
+
+
 def _load_data(at: AppTest, data_dir: Path) -> None:
     # アップロードは AppTest から操作できないため「サーバ上のパスで指定」を使う
     at.toggle(key="paths_mode").set_value(True).run()
@@ -602,6 +613,68 @@ def test_undo_reverts_last_action(at: AppTest, data_dir_mini: Path) -> None:
     at.button(key="undo_btn").click().run()
     assert not at.exception
     assert at.session_state["score_file"]["score_parts"] == []
+
+
+def test_undo_restores_display_and_location(at: AppTest, data_dir_mini: Path) -> None:
+    """「元に戻す」が表示・場所・データを全部戻すことを検証する(実機報告 2026-08-01)。
+
+    旧実装は設定データだけ戻していた: キー固定のウィジェットはブラウザ側の
+    表示が残り(改名した入力欄が古い文字列のまま等)、別の画面/パーツを見て
+    いると取り消しが見えなかった。世代キー(_wk)でエディタを作り直し、編集
+    していた場所へ跳ぶ。表示は常に score_file から再生成されるため、見た目と
+    計算・エクスポートは食い違わない(エクスポート一致までここで固定)。
+    """
+    _load_data(at, data_dir_mini)
+    at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
+    at.button(key="add_part_btn").click().run()
+    uid = at.session_state["score_file"]["score_parts"][0]["_uid"]
+    at.text_input(key=f"{uid}_name").set_value("renamed").run()
+    # 別のパーツを足し、別の画面へ移動してから戻す
+    at.button(key="add_part_btn").click().run()
+    at.sidebar.radio(key="screen").set_value(SCREEN_COMPOSE).run()
+
+    at.button(key="undo_btn").click().run()  # パーツ追加の取り消し(編集していた画面2へ跳ぶ)
+    assert not at.exception
+    assert at.sidebar.radio(key="screen").value == SCREEN_PARTS
+    assert len(at.session_state["score_file"]["score_parts"]) == 1
+
+    at.button(key="undo_btn").click().run()  # 改名の取り消し
+    sf = at.session_state["score_file"]
+    assert sf["score_parts"][0]["name"] == "part_1"
+    assert at.session_state["widget_epoch"] == 2  # undo のたびにエディタが作り直される
+    name_input = at.text_input(key=_ek(at, f"{uid}_name"))
+    assert name_input.value == "part_1"  # 表示 = データ
+    assert '"part_1"' in state.score_file_to_jsonc(sf)  # 表示 = エクスポート jsonc
+    assert "renamed" not in state.score_file_to_jsonc(sf)
+
+
+def test_undo_restores_relative_selectbox_display(at: AppTest, data_dir_mini_no_override_true: Path) -> None:
+    """相対化の分子を変えて元に戻したとき、プルダウン表示も設定と一致して戻ることを検証する。
+
+    実機報告: True を False に変えて undo すると「True はデータに無い」の警告は
+    出るのにプルダウンは False のまま、という表示とデータの食い違いが起きていた。
+    """
+    _load_data(at, data_dir_mini_no_override_true)
+    rel_part = {
+        "_uid": "r1",
+        "name": "rel1",
+        "type": "FBC",
+        "relative": {"split_axis": "Read_Override", "numerator_when": True, "denominator_when": False},
+        "order": ["WL", "STR", "Board", "Chip", "Block"],
+        "aggregations": {a: {"op": "mean"} for a in ["WL", "STR", "Board", "Chip", "Block"]},
+    }
+    at.session_state["score_file"]["score_parts"] = [rel_part]
+    at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
+    at.selectbox(key=f"{rel_part['_uid']}_rel_num").set_value(False).run()
+    assert at.session_state["score_file"]["score_parts"][0]["relative"]["numerator_when"] is False
+
+    at.button(key="undo_btn").click().run()
+    sf_rel = at.session_state["score_file"]["score_parts"][0]["relative"]
+    assert sf_rel["numerator_when"] is True  # データが戻る
+    # 世代サフィックスは相対化エディタのキー接頭辞(f"{uid}_rel")側に付く
+    sel = at.selectbox(key=f"{_ek(at, f'{rel_part["_uid"]}_rel')}_num")
+    assert sel.value is True  # プルダウン表示も戻る(表示 = データ)
+    assert any("データにありません" in w.value for w in at.warning)  # 警告と表示が矛盾しない
 
 
 def test_draft_autosaved_and_restored(

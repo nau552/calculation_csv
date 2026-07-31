@@ -90,21 +90,10 @@ def _sidebar_user() -> str | None:
 
 
 HISTORY_LIMIT = 20
-# アプリデータを保持する session_state のキー。これ以外はウィジェット状態と
-# みなし、undo 時に全消しして score_file から値を読み直させる
-_RESERVED_STATE = {
-    "score_file",
-    "context",
-    "selected_part",
-    "draft_prompt_done",
-    "history",
-    "last_snapshot",
-    "screen",
-    "draft_user_input",
-}
 
 
 def _init() -> None:
+    """アプリデータの session_state キーを初期化する(未設定のときだけ既定値を入れる)。"""
     ss = st.session_state
     ss.setdefault("score_file", state.empty_score_file())
     ss.setdefault("context", None)
@@ -112,10 +101,28 @@ def _init() -> None:
     ss.setdefault("draft_prompt_done", False)
     ss.setdefault("history", [])
     ss.setdefault("last_snapshot", None)
+    ss.setdefault("widget_epoch", 0)
 
 
 def _snapshot(obj: dict[str, object]) -> str:
     return json.dumps(obj, sort_keys=True, ensure_ascii=False)
+
+
+def _wk(name: str) -> str:
+    """設定(score_file)から表示を作るウィジェットのキー(undo 世代つき)。
+
+    「元に戻す」のたびに世代番号が上がってキーが変わり、部品ごと作り直される —
+    キーが同じままだとブラウザ側が古い表示を持ち続け、復元した設定と画面が
+    食い違うため(streamlit の仕様。設計書 2026-08-01 その4)。表示は常に
+    score_file から再生成されるので、見た目と計算・エクスポートは一致する。
+    世代0では従来表記のまま(キーを直指定する既存テストを壊さない)。
+
+    Returns:
+        世代0なら name そのまま、以降は "name@世代番号"。
+
+    """
+    epoch = st.session_state.get("widget_epoch", 0)
+    return name if epoch == 0 else f"{name}@{epoch}"
 
 
 def _track_history() -> None:
@@ -124,13 +131,15 @@ def _track_history() -> None:
     落ち着いた(途中で
     st.rerun されなかった)実行の末尾でのみ記録する。スクリプト途中で
     rerun された実行はここに到達しないため、中間状態は積まれない。
+    エントリには「どの画面で・どのパーツを編集していたか」も記録する —
+    元に戻したとき、その場所へ跳んで取り消しが目の前で見えるように。
     """
     ss = st.session_state
     snap = _snapshot(ss.score_file)
     if ss.last_snapshot is None:
         ss.last_snapshot = snap
     elif snap != ss.last_snapshot:
-        ss.history.append(ss.last_snapshot)
+        ss.history.append({"snap": ss.last_snapshot, "screen": ss.get("screen"), "part_sel": ss.get("part_sel")})
         del ss.history[:-HISTORY_LIMIT]
         ss.last_snapshot = snap
 
@@ -139,14 +148,19 @@ def _undo() -> None:
     ss = st.session_state
     if not ss.history:
         return
-    prev = ss.history.pop()
-    ss.score_file = json.loads(prev)
-    ss.last_snapshot = prev
-    # ウィジェットは自分の状態を記憶しているので、これをしないと画面は
-    # undo 前の値を表示し続けてしまう
-    for k in list(ss.keys()):
-        if k not in _RESERVED_STATE:
-            del ss[k]
+    entry = ss.history.pop()
+    ss.score_file = json.loads(entry["snap"])
+    ss.last_snapshot = entry["snap"]
+    # 設定由来のウィジェットは世代キー(_wk)ごと作り直し、復元した score_file
+    # から再表示する。旧方式の「状態の一括削除」は廃止: キーが同じ部品は
+    # ブラウザ側の表示が残って食い違う上、画面1のパス入力など設定と無関係な
+    # 状態まで巻き添えで消していた(古い世代のキーは streamlit が自動回収する)
+    ss["widget_epoch"] = ss.get("widget_epoch", 0) + 1
+    # 編集していた場所へ跳ぶ(screen の radio は描画済みのため pending で
+    # 次の実行の冒頭に反映する — part_sel_pending と同じ理由)
+    ss["screen_pending"] = entry.get("screen")
+    if entry.get("part_sel"):
+        ss["part_sel_pending"] = entry["part_sel"]
     st.rerun()
 
 
@@ -894,7 +908,7 @@ def _order_button_list(part: dict, sel_key: str, uid: str) -> None:
 def _order_entry_editor(part: dict, catalog: dict, sf: dict, uid: str, measure_labels: dict) -> None:
     """選択中エントリの常時表示エディタ(枠つき)を描画する。"""
     order = part["order"]
-    entry = st.session_state.get(f"{uid}_sel_entry")
+    entry = st.session_state.get(_wk(f"{uid}_sel_entry"))
     if not entry or entry not in order:
         return
     with st.container(border=True):
@@ -922,7 +936,7 @@ def _order_entry_editor(part: dict, catalog: dict, sf: dict, uid: str, measure_l
                 weight_set_names=sorted(sf.get("weightSets", {})),
                 measure_labels=measure_labels,
             )
-            widgets.agg_editor(entry, spec, editor_ctx, key=f"{uid}_{entry}")
+            widgets.agg_editor(entry, spec, editor_ctx, key=_wk(f"{uid}_{entry}"))
 
 
 def _order_editor(part: dict, catalog: dict, sf: dict, uid: str, measure_labels: dict) -> None:
@@ -931,7 +945,7 @@ def _order_editor(part: dict, catalog: dict, sf: dict, uid: str, measure_labels:
     expander はラベルが変わるたびに閉じてしまい値の編集が
     苦痛になるため使わない。
     """
-    sel_key = f"{uid}_sel_entry"
+    sel_key = _wk(f"{uid}_sel_entry")
     order = part["order"]
     if st.session_state.get(sel_key) not in order:
         st.session_state[sel_key] = order[0] if order else None
@@ -953,7 +967,7 @@ def _custom_part_editor(part: dict[str, Any], ctx: dict[str, Any], uid: str) -> 
         st.error("custom_parts.py が読み込まれていません(画面1でパス指定するか、一式zipに同梱してください)")
     options = funcs + ([cur] if cur not in funcs else [])
     part["function"] = st.selectbox(
-        "関数", options, index=options.index(cur) if cur in options else 0, key=f"{uid}_func"
+        "関数", options, index=options.index(cur) if cur in options else 0, key=_wk(f"{uid}_func")
     )
     if funcs and part["function"] not in funcs:
         st.error(f"関数 '{part['function']}' は読み込んだ custom_parts.py にありません")
@@ -976,9 +990,12 @@ def _custom_params_editor(part: dict[str, Any], uid: str) -> None:
     new_items = []
     for i, (pk, pv) in enumerate(list(params.items())):
         c_k, c_v, c_rm = st.columns([3, 4, 1])
-        nk = c_k.text_input("名前", value=pk, key=f"{uid}_prm{i}_k")
+        nk = c_k.text_input("名前", value=pk, key=_wk(f"{uid}_prm{i}_k"))
         nv = c_v.text_input(
-            "値", value=str(pv), key=f"{uid}_prm{i}_v", help="true/false・数値は型付きで渡されます(それ以外は文字列)"
+            "値",
+            value=str(pv),
+            key=_wk(f"{uid}_prm{i}_v"),
+            help="true/false・数値は型付きで渡されます(それ以外は文字列)",
         )
         if c_rm.button("✕", key=f"{uid}_prm{i}_rm", help="このパラメータを削除"):
             params.pop(pk, None)
@@ -1136,7 +1153,7 @@ def _part_header_editor(sf: dict, ctx: dict[str, Any], idx: int) -> None:
     """選択中パーツの name / type 編集と雛形の再生成ボタンを描画する。"""
     part = sf["score_parts"][idx]
     uid = part["_uid"]
-    part["name"] = st.text_input("name", value=part.get("name", ""), key=f"{uid}_name")
+    part["name"] = st.text_input("name", value=part.get("name", ""), key=_wk(f"{uid}_name"))
     cur_type = part.get("type")
     # 前提ファイル未読み込みの type(custom ファイルや係数 jsonc が無い等)
     # でも現在の type は選択肢に残す — 残さないと selectbox がパーツの type
@@ -1144,7 +1161,7 @@ def _part_header_editor(sf: dict, ctx: dict[str, Any], idx: int) -> None:
     types = ctx["part_types"] + ([cur_type] if cur_type not in ctx["part_types"] else [])
     tsel, tregen = st.columns([3, 1])
     new_type = tsel.selectbox(
-        "type", types, index=types.index(cur_type) if cur_type in types else 0, key=f"{uid}_type"
+        "type", types, index=types.index(cur_type) if cur_type in types else 0, key=_wk(f"{uid}_type")
     )
     if new_type != cur_type:
         notice = state.switch_part_type(part, new_type)
@@ -1183,7 +1200,7 @@ def _part_body_editor(part: dict, ctx: dict[str, Any], sf: dict, uid: str) -> No
         widgets.relative_editor(
             part,
             widgets.EditorContext(catalog=catalog, set_names=sorted(sf["selectionSets"]), measure_labels=mlabels),
-            key=f"{uid}_rel",
+            key=_wk(f"{uid}_rel"),
         )
         st.divider()
         _order_editor(part, catalog, sf, uid, mlabels)
@@ -1293,7 +1310,7 @@ def _selection_sets_section(sf: dict, ctx: dict[str, object] | None) -> None:
     if not sets:
         return
     st.divider()
-    name = st.selectbox("編集するセット", sorted(sets), key="edit_set_name")
+    name = st.selectbox("編集するセット", sorted(sets), key=_wk("edit_set_name"))
     if name is None:
         # 到達しない防御: options(sets)は上の early return で非空を保証済み
         return
@@ -1314,14 +1331,14 @@ def _selection_set_editor(sf: dict, ctx: dict[str, object] | None, name: str) ->
         ["複合軸(軸ごとの値の組)", "単一軸の値リスト"],
         index=0 if (not values or isinstance(values[0], dict)) else 1,
         horizontal=True,
-        key=f"set_{name}_kind",
+        key=_wk(f"set_{name}_kind"),
     )
     if kind.startswith("複合軸"):
         axes = st.multiselect(
             "軸",
             all_axes or current_axes,
             default=current_axes or [a for a in ("State", "Read_Label") if a in catalog],
-            key=f"set_{name}_axes",
+            key=_wk(f"set_{name}_axes"),
         )
         if axes:
             if current_axes and sorted(axes) != current_axes and values:
@@ -1330,10 +1347,12 @@ def _selection_set_editor(sf: dict, ctx: dict[str, object] | None, name: str) ->
                     values.clear()
                     st.rerun()
             else:
-                sets[name] = widgets.selection_list_widget(axes, catalog, values, f"set_{name}_rows")
+                sets[name] = widgets.selection_list_widget(axes, catalog, values, _wk(f"set_{name}_rows"))
     else:
-        axis = st.selectbox("軸", all_axes, key=f"set_{name}_axis") if all_axes else None
-        sets[name] = widgets.selection_list_widget([axis] if axis else ["値"], catalog, values, f"set_{name}_vals")
+        axis = st.selectbox("軸", all_axes, key=_wk(f"set_{name}_axis")) if all_axes else None
+        sets[name] = widgets.selection_list_widget(
+            [axis] if axis else ["値"], catalog, values, _wk(f"set_{name}_vals")
+        )
 
 
 def _selection_set_actions(sf: dict, name: str) -> None:
@@ -1387,7 +1406,7 @@ def _group_defs_section(sf: dict, ctx: dict[str, object] | None) -> None:
 
     if not defs:
         return
-    name = st.selectbox("編集する定義", sorted(defs), key="edit_gdef_name")
+    name = st.selectbox("編集する定義", sorted(defs), key=_wk("edit_gdef_name"))
     if name is None:
         # 到達しない防御: options(defs)は上の early return で非空を保証済み
         return
@@ -1426,9 +1445,9 @@ def _group_rows_editor(gd: dict, name: str) -> None:
     new_items = []
     for i, (label, rng) in enumerate(list(groups.items())):
         c_l, c_lo, c_hi, c_rm = st.columns([3, 2, 2, 1])
-        lbl = c_l.text_input("グループ名", value=label, key=f"gdef_{name}_{i}_lbl")
-        lo = c_lo.number_input("開始", value=int(rng[0]), step=1, key=f"gdef_{name}_{i}_lo")
-        hi = c_hi.number_input("終了", value=int(rng[1]), step=1, key=f"gdef_{name}_{i}_hi")
+        lbl = c_l.text_input("グループ名", value=label, key=_wk(f"gdef_{name}_{i}_lbl"))
+        lo = c_lo.number_input("開始", value=int(rng[0]), step=1, key=_wk(f"gdef_{name}_{i}_lo"))
+        hi = c_hi.number_input("終了", value=int(rng[1]), step=1, key=_wk(f"gdef_{name}_{i}_hi"))
         if c_rm.button("✕", key=f"gdef_{name}_{i}_rm", help="このグループを削除"):
             groups.pop(label, None)
             _reset_gdef_row_widgets(name)
@@ -1454,7 +1473,7 @@ def _group_def_editor(sf: dict, name: str, numeric_axes: list[str]) -> None:
         "対象軸",
         axis_opts,
         index=axis_opts.index(cur_axis) if isinstance(cur_axis, str) and cur_axis in axis_opts else 0,
-        key=f"gdef_{name}_axis",
+        key=_wk(f"gdef_{name}_axis"),
         format_func=lambda a, _cur=cur_axis, _known=numeric_axes: (
             f"{a}(軸がありません)" if a == _cur and a not in _known else str(a)
         ),
@@ -1462,7 +1481,7 @@ def _group_def_editor(sf: dict, name: str, numeric_axes: list[str]) -> None:
     physical = st.checkbox(
         "範囲を Physical 番号で記入する(現行スクリプトの WLgroupDefinLogical=False 相当)",
         value=not gd.get("definedInLogical", True),
-        key=f"gdef_{name}_phys",
+        key=_wk(f"gdef_{name}_phys"),
         help="データの csv は Logical 番号なので、計算時に軸の総数 N を使って N-1-p で"
         "読み替えます(N はデータから自動導出)",
     )
@@ -1497,7 +1516,7 @@ def _group_weight_editor(sf: dict, name: str) -> None:
     enabled = st.checkbox(
         f"重みセット {wname} を定義する",
         value=wname in weights_all,
-        key=f"gdef_{name}_w_on",
+        key=_wk(f"gdef_{name}_w_on"),
         help="パーツの order に定数演算ステップ(掛け算など)を置き、「軸の値ごと」でこのセットを"
         " ref 参照すると、好きなタイミングでグループ別の重みを掛けられます。"
         "設定jsoncの WLgroupWeight はこの名前で取り込まれます",
@@ -1509,24 +1528,19 @@ def _group_weight_editor(sf: dict, name: str) -> None:
     scalar_mode = st.checkbox(
         "全グループ共通の1値にする",
         value=not isinstance(cur, dict),
-        key=f"gdef_{name}_w_scalar",
+        key=_wk(f"gdef_{name}_w_scalar"),
     )
     if scalar_mode:
         weights_all[wname] = st.number_input(
             "重み",
             value=float(cur) if isinstance(cur, (int, float)) else 1.0,
-            key=f"gdef_{name}_w_sv",
+            key=_wk(f"gdef_{name}_w_sv"),
         )
     else:
-        cur = cur if isinstance(cur, dict) else {}
-        weights_all[wname] = {
-            g: st.number_input(
-                g,
-                value=float(cur[g]) if isinstance(cur.get(g), (int, float)) else 1.0,
-                key=f"gdef_{name}_w_{i}",
-            )
-            for i, g in enumerate(groups)
-        }
+        # 値ごと辞書の共通編集欄(widgets.per_value_dict_editor): 候補外の
+        # 既存キー(改名前のグループ等)も印つきで保持し、描画だけでは辞書を
+        # 育てない・消さない
+        widgets.per_value_dict_editor(weights_all, wname, list(groups), 1.0, _wk(f"gdef_{name}_w_"))
 
 
 # ---------------------------------------------------- 画面4: スコア合成・制約
@@ -1541,17 +1555,17 @@ def _constraints_section(sf: dict, names: list[str]) -> None:
         entry = ct[key] if isinstance(ct[key], dict) else {"value": ct[key]}
         c1, c2, c3, c4 = st.columns([3, 2, 3, 1])
         c1.markdown(f"**{key}**" + ("" if key in names else "　:red[⚠ パーツがありません]"))
-        entry["value"] = c2.number_input("value", value=float(entry.get("value", 0)), key=f"ct_{key}_v")
+        entry["value"] = c2.number_input("value", value=float(entry.get("value", 0)), key=_wk(f"ct_{key}_v"))
         dynamic = c3.checkbox(
             "動的制約 (percentile)",
             value=str(entry.get("active", "")).lower() == "true",
-            key=f"ct_{key}_dyn",
+            key=_wk(f"ct_{key}_dyn"),
             help="実測値の percentile*coef と指定値の大きい方を閾値に使う",
         )
         if dynamic:
             entry["active"] = "True"
             entry["type"] = "percentile"
-            entry["coef"] = c3.number_input("coef", value=float(entry.get("coef") or 20), key=f"ct_{key}_coef")
+            entry["coef"] = c3.number_input("coef", value=float(entry.get("coef") or 20), key=_wk(f"ct_{key}_coef"))
         else:
             entry.pop("active", None)
             entry.pop("type", None)
@@ -1590,9 +1604,9 @@ def screen_compose() -> None:
             sf["expression"] = new_expr
             # 入力ウィジェットは自分の状態を記憶していて古い式を表示し続ける
             # ため、こちらも更新する(安全: ボタンは入力欄より先に描画される)
-            st.session_state["expr_input"] = new_expr
+            st.session_state[_wk("expr_input")] = new_expr
             st.rerun()
-    sf["expression"] = st.text_input("expression", value=sf["expression"], key="expr_input")
+    sf["expression"] = st.text_input("expression", value=sf["expression"], key=_wk("expr_input"))
 
     _constraints_section(sf, names)
 
@@ -1751,6 +1765,11 @@ def main() -> None:
     """エントリポイント: サイドバーと現在の画面を描画する。"""
     st.set_page_config(page_title="スコア設計 (score_gui Phase1)", layout="wide")
     _init()
+
+    # undo からの画面ジャンプ: radio("screen") の描画前に反映する必要がある
+    pending_screen = st.session_state.pop("screen_pending", None)
+    if pending_screen in SCREENS:
+        st.session_state["screen"] = pending_screen
 
     with st.sidebar:
         st.title("スコア設計")

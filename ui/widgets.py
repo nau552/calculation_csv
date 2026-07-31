@@ -433,11 +433,11 @@ def _transform_editor(spec: dict[str, Any], op: str, ctx: EditorContext, key: st
     spec.pop("ref", None)
     by_axis = spec.get("by")
     labels = (ctx.by_value_labels.get(by_axis) if isinstance(by_axis, str) else None) or []
-    if not _per_value_dict_editor(spec, "value", labels, default, f"{key}_tw"):
+    if not per_value_dict_editor(spec, "value", labels, default, f"{key}_tw"):
         st.caption("この軸の値の候補が分かりません。グループ派生軸を選ぶか、jsonc で直接記入してください")
 
 
-def _per_value_dict_editor(spec: dict[str, Any], field: str, labels: list[Any], default: float, key: str) -> bool:
+def per_value_dict_editor(spec: dict[str, Any], field: str, labels: list[Any], default: float, key: str) -> bool:
     """「値ごとの数値」辞書(集計時重み・変換の by 別定数)の共通編集欄。
 
     描画だけでは設定を変えない: 既存辞書は(候補に無いキーも印つきで)保持し、
@@ -482,8 +482,8 @@ def _per_value_dict_editor(spec: dict[str, Any], field: str, labels: list[Any], 
 
 
 def _weight_by_value_editor(spec: dict[str, Any], labels: list[Any], key: str) -> None:
-    """集計時重みの「値ごとに入力」欄(spec['weight'] を辞書で編集する — _per_value_dict_editor 共用)。"""
-    if not _per_value_dict_editor(spec, "weight", labels, 1.0, f"{key}_wv"):
+    """集計時重みの「値ごとに入力」欄(spec['weight'] を辞書で編集する — per_value_dict_editor 共用)。"""
+    if not per_value_dict_editor(spec, "weight", labels, 1.0, f"{key}_wv"):
         st.caption("この軸の値の候補が分かりません。重みセットを使うか、jsonc で直接記入してください")
 
 
