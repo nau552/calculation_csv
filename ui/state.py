@@ -793,6 +793,31 @@ def part_types_without_data(score_file: dict[str, Any], ctx: dict[str, Any] | No
     }
 
 
+def config_problem_messages(score_file: dict[str, Any], ctx: dict[str, Any] | None) -> list[str]:
+    """「設定の誤り」の全メッセージ(構造の誤り+データに無い値+データ無し type)。
+
+    サイドバーの件数と展開表示・テスト実行前のガードで共用する。ダミー一式は
+    本番データの構造を模す前提なので、データに無い値・無い type を使うのも
+    設定の誤りとして一本化して数える(2026-08-01 ユーザー合意 — 種類の
+    書き分けはパーツ一覧の ⚠ ラベルと各メッセージが担う)。
+
+    Returns:
+        メッセージのリスト(空 = 問題なし)。パーツ単位のものはパーツ名を
+        前置し、パーツ横断のもの(名前重複・式の参照切れ等)はそのまま。
+
+    """
+    msgs = list(validate_score_file(score_file))
+    names = {p.get("_uid"): p.get("name", "?") for p in score_file.get("score_parts", [])}
+    for uid, part_msgs in part_value_mismatches(score_file, ctx).items():
+        msgs += [f"{names.get(uid, '?')}: {m}" for m in part_msgs]
+    types = {p.get("_uid"): p.get("type") for p in score_file.get("score_parts", [])}
+    msgs += [
+        f"{names.get(uid, '?')}: type '{types.get(uid)}' の測定データがありません"
+        for uid in sorted(part_types_without_data(score_file, ctx), key=str)
+    ]
+    return msgs
+
+
 def source_data_type(part_type: object) -> object:
     """パーツの type → 実際に読む測定データの type(エンジン cli._source_type と同じ対応)。
 

@@ -257,6 +257,46 @@ def test_compute_score_file_error_names_the_part(data_dir_mini: Path) -> None:
         compute_score_file(data_dir_mini, rc)
 
 
+def test_compute_score_file_reports_all_failing_parts(data_dir_mini: Path) -> None:
+    """複数パーツの失敗が1回の例外にまとめて列挙されることを検証する。
+
+    従来は1個目の失敗で即座に落ちたため「1つ直して動かしたら次のエラー」の
+    往復になっていた(ユーザー要望 2026-08-01)。全パーツを計算し終えてから、
+    失敗した全パーツを1行ずつ名指しした例外で**必ず**落ちる(正常なパーツが
+    あっても部分結果は返さない)。
+    """
+    from scorelib_param.models import RunConfig
+
+    tail = ["WL", "STR", "State", "Board", "Chip", "Block"]
+
+    def part(name: str, label: str) -> dict:
+        return {
+            "name": name,
+            "type": "FBC",
+            "order": ["Read_Label", *tail],
+            "aggregations": {"Read_Label": {"op": "filter", "value": label}, **{a: {"op": "mean"} for a in tail}},
+        }
+
+    rc = RunConfig.model_validate(
+        {
+            "Generation": "B9LS",
+            "optimization": {
+                "score_parts": [
+                    part("bad_a", "nope_a"),
+                    part("good", "read_level_upper1"),  # 正常パーツが混ざっていても結果は返らない
+                    part("bad_b", "nope_b"),
+                ],
+            },
+        }
+    )
+    with pytest.raises(ValueError, match=r"2 score parts failed:") as exc:
+        compute_score_file(data_dir_mini, rc)
+    text = str(exc.value)
+    assert "score part 'bad_a'" in text
+    assert "score part 'bad_b'" in text
+    assert "score part 'good'" not in text  # 正常なパーツは列挙されない
+
+
 def test_relative_missing_side_error_names_the_cause(data_dir_mini_no_override_true: Path) -> None:
     """相対化の評価側が無いデータのエラーが原因を名指しすることを検証する(実機報告 2026-08-01)。
 

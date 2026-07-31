@@ -40,6 +40,7 @@ from .models import (
     DvtBudgetCoefFile,
     GroupDef,
     RunConfig,
+    ScoreFile,
     ScorePart,
 )
 from .relative import apply_relative
@@ -1116,6 +1117,41 @@ def compute_score_part(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略
         raise ValueError(msg) from err
 
 
+def _load_custom_module_if_needed(score_file: ScoreFile, custom_parts_path: str | Path | None) -> ModuleType | None:
+    """type="custom" のパーツがあれば custom_parts.py を読み込む(compute_score_file の下請け)。
+
+    リポジトリ直下の SVN 管理された custom_parts.py の関数を呼ぶ。config に
+    パスは持たせない(configから任意コードを実行できてしまうため)。
+    `custom_parts_path` はテスト・設計UI用の上書き。
+
+    Returns:
+        読み込んだモジュール(custom パーツが無ければ None)。
+
+    Raises:
+        ValueError: custom パーツがあるのにファイルが見つからないとき。
+
+    """
+    if not any(p.type == CUSTOM_TYPE for p in score_file.score_parts):
+        return None
+    path = Path(custom_parts_path) if custom_parts_path else custom.default_custom_parts_path()
+    if not path.is_file():
+        msg = f"score parts with type='{CUSTOM_TYPE}' need the custom parts file: {path}"
+        raise ValueError(msg)
+    return custom.load_custom_module(path)
+
+
+def _warn_unmatched_constraints(score_file: ScoreFile) -> None:
+    """どのパーツにも一致しない constraintThreshold キーを stderr に警告する(compute_score_file の下請け)。"""
+    part_names = {p.name for p in score_file.score_parts}
+    for key in score_file.constraintThreshold:
+        if key not in part_names:
+            print(
+                f"warning: constraintThreshold key '{key}' does not match any score part "
+                f"(defined parts: {sorted(part_names)})",
+                file=sys.stderr,
+            )
+
+
 def compute_score_file(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略可能キーワード引数は設計(束ねない方針 — docs/dev_workflow.md)
     data_dir: str | Path,
     run_config: RunConfig,
@@ -1132,33 +1168,19 @@ def compute_score_file(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略
 
     Raises:
         ValueError: type="custom" のパーツがあるのに custom_parts.py が
-            見つからないとき。また、パーツ計算中の ValueError は
-            「score part '名前': 元メッセージ」の形で失敗パーツを名指しして
-            再送出する(元メッセージが既に名指ししていればそのまま)。
+            見つからないとき。また、パーツ計算中の ValueError / TypeError は
+            「score part '名前': 元メッセージ」の形で失敗パーツを名指しする。
+            **エラーがあっても全パーツを計算し終えてから**落とす(「1つ直すと
+            次のエラー」の往復を避ける): 1件なら従来と同じ形・同じ型、複数なら
+            「N score parts failed:」+ 1行1パーツでまとめて送出。失敗が1件でも
+            あれば値の辞書は**返さない**(部分結果で実験が続くことはない)。
 
     """
     score_file = run_config.to_score_file()
     group_defs = resolve_group_defs(run_config, data_dir, generation_info_path)
 
-    # type="custom" のパーツは、リポジトリ直下の SVN 管理された custom_parts.py
-    # の関数を呼ぶ。config にパスは持たせない(configから任意コードを実行
-    # できてしまうため)。`custom_parts_path` はテスト・設計UI用の上書き
-    custom_module = None
-    if any(p.type == CUSTOM_TYPE for p in score_file.score_parts):
-        path = Path(custom_parts_path) if custom_parts_path else custom.default_custom_parts_path()
-        if not path.is_file():
-            msg = f"score parts with type='{CUSTOM_TYPE}' need the custom parts file: {path}"
-            raise ValueError(msg)
-        custom_module = custom.load_custom_module(path)
-
-    part_names = {p.name for p in score_file.score_parts}
-    for key in score_file.constraintThreshold:
-        if key not in part_names:
-            print(
-                f"warning: constraintThreshold key '{key}' does not match any score part "
-                f"(defined parts: {sorted(part_names)})",
-                file=sys.stderr,
-            )
+    custom_module = _load_custom_module_if_needed(score_file, custom_parts_path)
+    _warn_unmatched_constraints(score_file)
 
     # vthSkip(測定フロー側の設定): 指定 type のファイルが無い epoch は
     # ダミー値で計算する(models.VthSkipConfig / compute_dummy_part)
@@ -1167,6 +1189,10 @@ def compute_score_file(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略
 
     shared_ctx = SharedComputeContext(data_dir, score_file.score_parts, group_defs)
     values: dict[str, float] = {}
+    # パーツのエラーは集めて最後まで計算を続ける: 「1つ直して動かしたら次の
+    # エラー」の往復を避けるため。ただし1件でもあれば**必ず例外で終わる** —
+    # 部分的な values を返して実験が続いてしまう経路は作らない
+    part_errors: list[Exception] = []
     for score_part in score_file.score_parts:
         st = _source_type(score_part)
         use_dummy = (
@@ -1197,19 +1223,27 @@ def compute_score_file(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略
                     weight_sets=score_file.weightSets,
                     custom_module=custom_module,
                 )
-        except ValueError as err:
+        except (ValueError, TypeError) as err:
             # どのパーツで失敗したかを常に名指しする(深部のエラー — null 集計
             # など — はパーツ名を知らないため。既に名指し済みなら包み直さない)
             if f"'{score_part.name}'" not in str(err):
-                msg = f"score part '{score_part.name}': {err}"
-                raise ValueError(msg) from err
-            raise
+                named = type(err)(f"score part '{score_part.name}': {err}")
+                named.__cause__ = err
+                err = named
+            part_errors.append(err)
+            continue
         if use_dummy:
             print(
                 f"note: part '{score_part.name}' computed with vthSkip dummy value "
                 f"{dummy_values[st]} ({st}.csv not found in {data_dir})",
                 file=sys.stderr,
             )
+
+    if len(part_errors) == 1:
+        raise part_errors[0]  # 従来と同じ形・同じ型で落とす
+    if part_errors:
+        msg = f"{len(part_errors)} score parts failed:\n" + "\n".join(f"  {e}" for e in part_errors)
+        raise ValueError(msg)
 
     score = evaluate_expression(score_file.expression, values) if score_file.expression else None
     return {"Score": score, **values}

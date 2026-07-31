@@ -1027,14 +1027,15 @@ def _sync_part_selection(ss: SessionStateProxy, sf: dict) -> list[str]:
 
 
 def _part_list_overview(sf: dict, ctx: dict[str, Any], sel_uid: str | None) -> set:
-    """パーツ一覧(D&D 並べ替えリスト or 表)と検証マーカーを描画する。
+    """パーツ一覧(D&D 並べ替えリスト or 表)と状態マーカーを描画する。
 
     Returns:
-        ⚠ 表示対象(検証NG またはデータ無し type)のパーツ _uid の集合。
+        ⚠ 表示対象(設定エラー・データ無し type・データに無い値)のパーツ
+        _uid の集合。
 
     """
     rows = state.part_summary_rows(sf)
-    # 検証マーカー: D&D部品は文字列しか描画できず項目単位の色分けが
+    # 状態マーカー: D&D部品は文字列しか描画できず項目単位の色分けが
     # 不可能なため、⚠ の接頭記号を見た目の代替にする
     invalid = {
         p["_uid"] for p in sf["score_parts"] if state.validate_part(p, sf["selectionSets"], sf.get("weightSets"))
@@ -1048,11 +1049,11 @@ def _part_list_overview(sf: dict, ctx: dict[str, Any], sel_uid: str | None) -> s
     for r, p in zip(rows, sf["score_parts"], strict=False):
         uid_ = p["_uid"]
         if uid_ in invalid:
-            r["検証"] = "⚠ NG"
+            r["状態"] = "⚠ 設定エラー"
         elif uid_ in no_data:
-            r["検証"] = "⚠ データ無し"
+            r["状態"] = "⚠ データ無し"
         else:
-            r["検証"] = "⚠ データ不一致" if uid_ in mismatch else "OK"
+            r["状態"] = "⚠ データに無い値" if uid_ in mismatch else "OK"
     invalid |= no_data | set(mismatch)
     parts_dnd = False
     if widgets.HAS_SORTABLES and len(sf["score_parts"]) > 1:
@@ -1164,13 +1165,15 @@ def _part_header_editor(sf: dict, ctx: dict[str, Any], idx: int) -> None:
 
 
 def _part_body_editor(part: dict, ctx: dict[str, Any], sf: dict, uid: str) -> None:
-    """選択中パーツの本体エディタ(custom or 集計エディタ群)と検証結果を描画する。"""
-    if part.get("type") != "custom" and part.get("type") not in ctx.get("catalogs", {}):
+    """選択中パーツの本体エディタ(custom or 集計エディタ群)と問題の表示を描画する。"""
+    no_data = part.get("type") != "custom" and part.get("type") not in ctx.get("catalogs", {})
+    if no_data:
         st.warning(
             f"type '{part.get('type')}' の測定データがありません — このパーツは"
             "テスト計算できません(編集・保存は可能。不要なら削除してください)"
         )
-    for w in state.part_value_mismatches({"score_parts": [part]}, ctx).get(uid, []):
+    mismatches = state.part_value_mismatches({"score_parts": [part]}, ctx).get(uid, [])
+    for w in mismatches:
         st.warning(w)
     if part.get("type") == "custom":
         _custom_part_editor(part, ctx, uid)
@@ -1189,8 +1192,10 @@ def _part_body_editor(part: dict, ctx: dict[str, Any], sf: dict, uid: str) -> No
     problems = state.validate_part(part, sf["selectionSets"], sf.get("weightSets"))
     for p in problems:
         st.error(p)
-    if not problems:
-        st.success("このパーツの検証: OK")
+    # 「問題なし」は誤りが一切ないときだけ(サイドバーと同じ一本化 —
+    # 上に警告が出ているのに OK と書いてある同居をなくす)
+    if not problems and not mismatches and not no_data:
+        st.success("このパーツ: 問題なし")
 
 
 def screen_parts() -> None:
@@ -1595,7 +1600,7 @@ def screen_compose() -> None:
     for p in problems:
         st.error(p)
     if not problems:
-        st.success("検証: OK")
+        st.success("問題なし")
 
 
 # ------------------------------------------ 画面5: テスト実行・エクスポート
@@ -1608,9 +1613,9 @@ def _run_test_compute(ctx: dict[str, Any] | None, sf: dict, test_dir: str, gener
     elif not sf["score_parts"]:
         st.error("スコアパーツがありません")
     else:
-        problems = state.validate_score_file(sf)
+        problems = state.config_problem_messages(sf, ctx)
         if problems:
-            st.error("検証エラーがあるため実行できません(画面2/4を確認してください)")
+            st.error("設定に誤りがあるため実行できません(内容は以下とサイドバー)")
             for p in problems:
                 st.error(p)
         else:
@@ -1725,6 +1730,23 @@ def screen_test_export() -> None:
 # --------------------------------------------------------------------- main
 
 
+def _sidebar_status(sf: dict) -> None:
+    """サイドバーの設定状態(問題なし / 設定の誤り N 件+全メッセージ)を描画する。
+
+    構造の誤り・データに無い値・データ無し type を「設定の誤り」に一本化する
+    (種類の書き分けはパーツ一覧の ⚠ ラベルと各メッセージが担う)。
+    「問題なし」は誤りゼロのときだけ出す — OK と警告の同居をなくす。
+    """
+    problems = state.config_problem_messages(sf, st.session_state.get("context"))
+    if problems:
+        st.error(f"設定の誤り {len(problems)} 件")
+        with st.expander("内容を表示"):
+            for p_msg in problems:
+                st.caption(p_msg)
+    else:
+        st.success("問題なし")
+
+
 def main() -> None:
     """エントリポイント: サイドバーと現在の画面を描画する。"""
     st.set_page_config(page_title="スコア設計 (score_gui Phase1)", layout="wide")
@@ -1745,12 +1767,7 @@ def main() -> None:
             _undo()
         st.caption(f"パーツ: {len(sf['score_parts'])} / 選択セット: {len(sf['selectionSets'])}")
         if sf["score_parts"]:
-            n = len(state.validate_score_file(sf))
-            (st.success if n == 0 else st.error)("検証 OK" if n == 0 else f"検証エラー {n} 件")
-            # 検証(設定の構造)とは別勘定の、読み込み中データとの突き合わせ結果
-            m = len(state.part_value_mismatches(sf, st.session_state.get("context")))
-            if m:
-                st.warning(f"データ不一致 {m} パーツ")
+            _sidebar_status(sf)
         st.caption(
             f"engine scorelib_param {scorelib_param.__version__}",
             help="このUIに同梱されたエンジンの版。実験実行側(SVNの scorelib)と一致しているかの確認用",

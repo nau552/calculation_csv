@@ -155,7 +155,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `_apply_axis_step` | 複合軸なら列を `&` で融合してから aggregate に渡す |
 | `compute_score_part(...)` | 1パーツの計算。type=custom は関数呼び出しへ分岐。実装は下請けヘルパー(`_compute_custom_part` / `_base_frame` / `_apply_prefilters` / `_prefix_cache_keys` / `_resume_from_cache` / `_apply_steps` / `_apply_pipeline_step`)へ分割済み(2026-07-31、結果不変)。**省略可能引数(group_defs 以降)はキーワード専用**(公開 API 共通 — 品質向上パスで位置渡しを廃止)。最終結果が null / NaN のとき(`CollapseNullError`)は **`_diagnose_pipeline` がエラー経路限定でパイプラインを歩き直し、原因ステップを名指し**した ValueError に変換(2026-08-01。成功時のコストはゼロ。診断が二次エラーで失敗したら元のエラーをそのまま出す) |
 | `_dummy_axis_values(dir, axis, spec)` / `compute_dummy_part(dir, part, dummy_value, ...)` | vthSkip のダミー計算（0.6.0）: type ファイルが無い epoch 用に、軸の全組み合わせ（要素は map → 他 csv の実在値 → 選択リスト → [0] の順で決定）へダミー値を敷き詰め、**変換ステップをスキップ**して集計だけ適用する（ダミー値=「変換後の値」の意味論 — 設計書12節）。relative / dVtBudget パーツは非対応（明示エラー） |
-| `compute_score_file(dir, run_config, ...)` | 全パーツ計算+expression 評価 → `{"Score": ..., パーツ名: ...}`。`optimization.vthSkip` があり type ファイルが無いパーツは compute_dummy_part で計算し stderr に note を出す。**省略可能引数(dvtbudget_coef 以降)はキーワード専用**(compute_dummy_part・apply_dvtbudget の epoch_col も同様)。パーツ計算中の ValueError は**失敗パーツを名指し**して再送出(「score part '名前': …」— 深部のエラーはパーツ名を知らないため。2026-08-01) |
+| `compute_score_file(dir, run_config, ...)` | 全パーツ計算+expression 評価 → `{"Score": ..., パーツ名: ...}`。`optimization.vthSkip` があり type ファイルが無いパーツは compute_dummy_part で計算し stderr に note を出す。**省略可能引数(dvtbudget_coef 以降)はキーワード専用**(compute_dummy_part・apply_dvtbudget の epoch_col も同様)。パーツ計算のエラーは**全パーツ分を集めてから必ず例外で落ちる**(「1つ直すと次のエラー」の往復を解消 — 2026-08-01。1件なら従来と同じ形・同じ型、複数なら「N score parts failed:」+1行1パーツ。失敗が1件でもあれば値は返さない=部分結果で実験が続くことはない)。各メッセージは失敗パーツを名指し(「score part '名前': …」) |
 | `main()` | argparse。`--config --data-dir --dvtbudget-coef --initial-temperature --custom-parts --version`。stdout は結果JSONのみ（版は stderr） |
 
 ---
@@ -215,7 +215,8 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `validate_part(part)` | 単一パーツ用の包み |
 | `part_types_without_data(sf, ctx)` | データに測定ファイルの無い type を使うパーツの検出（0.6.0）。別実験の config を読むと起きる正当な状態なのでパーツは残し、一覧の ⚠（「データ無し」）と編集画面の警告に使う。custom は対象外・設定のみ編集モードでは常に空 |
 | `source_data_type(part_type)` | パーツの type → 実際に読む測定データの type（dVtBudget → FBC。エンジン `cli._source_type` と同じ対応）。part_value_mismatches と app の `_catalog_for_part` が共用（2026-08-01 に一本化） |
-| `part_value_mismatches(sf, ctx)` | filter/diff/選択リスト・相対化の分子/分母の値がデータの候補に無いパーツの検出（2026-08-01。設定として有効でも計算は必ず失敗する状態 — 読み込み直後から一覧の ⚠「データ不一致」・編集画面の警告・サイドバーの件数表示に使う）。カタログは `source_data_type` で引く。判定は候補が取れる軸の直接指定値のみ: グループ派生軸・候補不明の軸・選択セット参照(ref)・仮想ステップは対象外（Override 軸の候補が実データ由来になった 2026-08-01 以降、「評価側の測定が無いデータ」の相対化もここで検出できる）。サイドバーの「検証 OK/NG」（設定の構造検証）とは別勘定 |
+| `config_problem_messages(sf, ctx)` | **「設定の誤り」の全メッセージ**（構造の誤り=validate_score_file + データに無い値 + データ無し type。2026-08-01 の一本化 — ダミーは本番構造を模す前提なので、データに無い要素を使うのも設定の誤り）。パーツ単位はパーツ名前置・横断（名前重複・式の参照切れ等）はそのまま。サイドバーの件数と展開表示・テスト実行前ガードで共用 |
+| `part_value_mismatches(sf, ctx)` | filter/diff/選択リスト・相対化の分子/分母の値がデータの候補に無いパーツの検出（2026-08-01。設定として有効でも計算は必ず失敗する状態 — 読み込み直後から一覧の ⚠「データに無い値」・編集画面の警告・サイドバーの「設定の誤り」件数に使う）。カタログは `source_data_type` で引く。判定は候補が取れる軸の直接指定値のみ: グループ派生軸・候補不明の軸・選択セット参照(ref)・仮想ステップは対象外（Override 軸の候補が実データ由来になった 2026-08-01 以降、「評価側の測定が無いデータ」の相対化もここで検出できる）。サイドバーの「検証 OK/NG」（設定の構造検証）とは別勘定 |
 
 **コンテキスト（画面1）**
 | 関数 | 内容 |

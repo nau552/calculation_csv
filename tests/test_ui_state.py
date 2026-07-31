@@ -736,6 +736,37 @@ def test_part_value_mismatches_flags_values_not_in_data(data_dir_mini: Path, sf:
     assert set(state.part_value_mismatches(sf, ctx)) == {"u2"}
 
 
+def test_config_problem_messages_unifies_all_kinds(data_dir_mini: Path, sf: dict[str, Any]) -> None:
+    """「設定の誤り」に構造の誤り・データに無い値・データ無し type が一本化されることを検証する。
+
+    サイドバーの件数・展開表示とテスト実行前ガードの共通実体(2026-08-01
+    ユーザー合意: ダミーは本番構造を模す前提なので、データに無い要素を使うのも
+    設定の誤り)。パーツ単位のメッセージにはパーツ名が前置される。
+    """
+    ctx = state.build_context(str(data_dir_mini))
+    sf["score_parts"] = [
+        # 構造の誤り(filter に value が無い)
+        {"_uid": "a", "name": "p_broken", "type": "FBC", "order": ["WL"], "aggregations": {"WL": {"op": "filter"}}},
+        # データに無い値
+        {
+            "_uid": "b",
+            "name": "p_missing",
+            "type": "FBC",
+            "order": ["Read_Label", "WL"],
+            "aggregations": {"Read_Label": {"op": "filter", "value": "upper1"}, "WL": {"op": "mean"}},
+        },
+        # データに無い type
+        {"_uid": "c", "name": "p_gone", "type": "GONE", "order": [], "aggregations": {}},
+    ]
+    msgs = state.config_problem_messages(sf, ctx)
+    assert len(msgs) == 3
+    assert any("p_broken" in m for m in msgs)
+    assert any(m.startswith("p_missing: ") and "upper1" in m for m in msgs)
+    assert any(m.startswith("p_gone: ") and "GONE" in m for m in msgs)
+    sf["score_parts"] = []
+    assert state.config_problem_messages(sf, ctx) == []
+
+
 def test_build_context_missing_dir() -> None:
     """存在しないディレクトリ指定が ValueError で拒否されることを検証する。"""
     with pytest.raises(ValueError, match="見つかりません"):

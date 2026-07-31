@@ -128,8 +128,8 @@ def test_load_and_create_part(at: AppTest, data_dir_mini: Path) -> None:
     assert not at.exception
     sf = at.session_state["score_file"]
     assert [p["name"] for p in sf["score_parts"]] == ["part_1"]
-    # 雛形は検証に通る → 画面に OK マーカーが出る
-    assert any("検証" in s.value and "OK" in s.value for s in at.success)
+    # 雛形は問題なく通る → サイドバーとパーツ編集画面に「問題なし」が出る
+    assert any("問題なし" in s.value for s in at.success)
 
 
 def test_part_with_absent_type_shows_warning(at: AppTest, data_dir_mini: Path) -> None:
@@ -156,8 +156,10 @@ def test_part_value_mismatch_visible_and_value_preserved(
     """データに無い値で filter するパーツの扱いを検証する(ユーザー報告のシナリオ)。
 
     従来は (1) 編集対象に選ぶまで一覧に ⚠ が出ない、(2) エディタを開くと候補に
-    無い値が黙って消える、(3) テスト計算のエラーがパーツ名を名指ししない、の
-    三重で原因に辿り着けなかった。3点とも固定する。
+    無い値が黙って消える、(3) テスト計算まで走ってから原因の分からないエラーに
+    なる、の三重で原因に辿り着けなかった。3点とも固定する(計算前ガードの
+    全メッセージ列挙は 2026-08-01 の一本化合意。エンジン側の名指しは
+    test_cli.py が担保)。
     """
     from ui import widgets
 
@@ -179,21 +181,22 @@ def test_part_value_mismatch_visible_and_value_preserved(
     at.session_state["score_file"]["score_parts"].append(bad)
     at.run()
     assert not at.exception
-    # (1) 編集対象に選ばなくても一覧に「データ不一致」が出る(選択中は1つ目のパーツ)
+    # (1) 編集対象に選ばなくても一覧に「データに無い値」が出る(選択中は1つ目のパーツ)
     rows = at.dataframe[0].value
-    assert list(rows["検証"]) == ["OK", "⚠ データ不一致"]
-    # サイドバーの「検証 OK」(設定の構造)とは別勘定で、不一致の件数も出る
-    assert any("検証 OK" in s.value for s in at.success)
-    assert any("データ不一致 1 パーツ" in w.value for w in at.warning)
+    assert list(rows["状態"]) == ["OK", "⚠ データに無い値"]
+    # サイドバーは「設定の誤り」に一本化(誤りがあるので「問題なし」は出ない)
+    assert any("設定の誤り 1 件" in e.value for e in at.error)
+    assert not any("問題なし" in s.value for s in at.sidebar.success)
     # (2) 編集対象に選ぶと警告が出て、候補に無い値は保持される(黙って消えない)
     _part_selector(at).set_value("x2").run()
     assert any("データにありません" in w.value for w in at.warning)
     assert at.session_state["score_file"]["score_parts"][1]["aggregations"]["Read_Label"]["value"] == "upper1"
-    # (3) テスト計算のエラーが失敗パーツを名指しする
+    # (3) テスト計算は誤りがあるうちは実行されず、原因がパーツ名つきで列挙される
     at.sidebar.radio(key="screen").set_value(SCREEN_TEST).run()
     at.text_input(key="test_dir").set_value(str(data_dir_mini))
     at.button(key="run_btn").click().run()
-    assert any("score part 'p_bad'" in e.value for e in at.error)
+    assert any("設定に誤りがあるため実行できません" in e.value for e in at.error)
+    assert any("p_bad" in e.value and "upper1" in e.value for e in at.error)
 
 
 def test_render_never_mutates_score_file(at: AppTest, data_dir_mini_no_override_true: Path) -> None:
@@ -1107,7 +1110,7 @@ def test_run_and_export_guards_via_ui(at: AppTest, data_dir_mini: Path) -> None:
     at.sidebar.radio(key="screen").set_value(SCREEN_TEST).run()
     at.button(key="run_btn").click().run()
     assert not at.exception
-    assert any("検証エラーがあるため実行できません" in e.value for e in at.error)
+    assert any("設定に誤りがあるため実行できません" in e.value for e in at.error)
     assert any("エクスポートできません" in w.value for w in at.warning)
     assert len(at.download_button) == 0
     at.session_state["score_file"]["expression"] = "part_1"
