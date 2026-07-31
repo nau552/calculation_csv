@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -494,7 +495,8 @@ def move_entry(lst: list, index: int, delta: int) -> int:
 def import_config_group_defs(
     score_file: dict[str, Any],
     wlgroup: dict[str, Any] | None,
-    defin_logical: bool = True,  # ruff: ignore[FBT001, FBT002] -- キーワード専用化(*,)は呼び出し側の書き方が変わるため見送り(将来の品質向上パスで検討)
+    *,
+    defin_logical: bool = True,
     wlgroup_weight: object | None = None,
 ) -> bool:
     """設定jsoncの WLgroup 一式を編集可能な定義として取り込む。
@@ -829,6 +831,163 @@ def _resolve_optional_file(
     return (found[0], "自動検出") if found else (None, None)
 
 
+def _resolve_data_dir(data_dir: str) -> Path:
+    """測定結果ディレクトリの入力を検証し、実在する絶対パスにして返す。
+
+    Returns:
+        存在確認済みの絶対パス。
+
+    Raises:
+        ValueError: パスが未入力、またはディレクトリが存在しないとき。
+
+    """
+    if not str(data_dir).strip():
+        # Path("") はカレントディレクトリ扱いになり、起動場所を誤って走査してしまう
+        msg = "測定結果ディレクトリのパスを入力してください"
+        raise ValueError(msg)
+    d = Path(str(data_dir).strip()).resolve()
+    if not d.is_dir():
+        msg = f"ディレクトリが見つかりません: {d}"
+        raise ValueError(msg)
+    return d
+
+
+def _resolve_coef_file(coef_path: str | None, d: Path) -> tuple[Path | None, str | None]:
+    """dVtBudget係数jsonc の解決と読み込み検証。
+
+    Returns:
+        (解決したパス, 入手経路) のタプル。該当ファイルが無ければ (None, None)。
+
+    Raises:
+        ValueError: 候補が複数見つかった、または読み込み・検証に失敗したとき。
+
+    """
+    coef_file, coef_source = _resolve_optional_file(
+        coef_path, lambda: introspect.find_dvtbudget_coefs(d), "dVtBudget係数jsonc"
+    )
+    if coef_file is not None:
+        try:
+            io_jsonc.load_dvtbudget_coef(coef_file)
+        except Exception as err:
+            msg = f"dVtBudget係数jsoncを読み込めません ({coef_file}): {err}"
+            raise ValueError(msg) from err
+    return coef_file, coef_source
+
+
+def _config_context_entries(config_file: Path) -> dict[str, Any]:
+    """optimization設定jsonc を読み込み、context に載せる項目を返す。
+
+    Returns:
+        generation / wlgroup / wlgroup_defin_logical / wlgroup_weight
+        (+ スコア設定があれば existing_score_file)の dict。
+
+    Raises:
+        ValueError: 設定の読み込み・検証に失敗したとき
+            (pydantic の検証エラーはパーツ名つきの整形済みメッセージ入り)。
+
+    """
+    try:
+        run_config = io_jsonc.load_run_config(config_file)
+    except ValidationError as err:
+        # パーツ名つきの読めるメッセージにするため、生の dict を読み直して整形する
+        try:
+            raw = jsonc.loads(Path(config_file).read_text(encoding="utf-8"))
+        except Exception:
+            raw = None
+        details = "; ".join(_format_pydantic_error(err, raw if isinstance(raw, dict) else None))
+        msg = f"optimization設定jsoncを読み込めません ({config_file}): {details}"
+        raise ValueError(msg) from err
+    except Exception as err:
+        msg = f"optimization設定jsoncを読み込めません ({config_file}): {err}"
+        raise ValueError(msg) from err
+    entries: dict[str, Any] = {
+        "generation": run_config.Generation,
+        "wlgroup": dict(run_config.optimization.WLgroup),
+        "wlgroup_defin_logical": run_config.optimization.WLgroupDefinLogical,
+        "wlgroup_weight": run_config.optimization.WLgroupWeight,
+    }
+    existing = run_config.to_score_file()
+    if existing.score_parts or existing.selectionSets or existing.expression:
+        entries["existing_score_file"] = existing.model_dump(exclude_none=True)
+    return entries
+
+
+def _parse_geninfo(geninfo_file: Path) -> dict[str, Any]:
+    """世代情報json を読み、トップレベルのオブジェクト(dict)を返す。
+
+    Returns:
+        世代情報の dict。
+
+    Raises:
+        TypeError: トップレベルがオブジェクトではないとき。
+
+    """
+    geninfo = jsonc.loads(geninfo_file.read_text(encoding="utf-8"))
+    if not isinstance(geninfo, dict):
+        msg = "トップレベルがオブジェクトではありません"
+        raise TypeError(msg)
+    return geninfo
+
+
+def _resolve_geninfo(
+    geninfo_path: str | None, d: Path, generation: str | None
+) -> tuple[dict[str, Any] | None, Path | None, str | None]:
+    """世代情報json の解決と読み込み。
+
+    Returns:
+        (世代情報 dict, 解決したパス, 入手経路) のタプル。
+        該当ファイルが無ければ (None, None, None)。
+
+    Raises:
+        ValueError: 候補が複数見つかった、または読み込みに失敗したとき。
+
+    """
+    geninfo_file, geninfo_source = _resolve_optional_file(
+        geninfo_path,
+        lambda: [p for p in [introspect.find_generation_info(d, generation)] if p],
+        "世代情報json",
+    )
+    if geninfo_file is None:
+        return None, None, None
+    try:
+        geninfo = _parse_geninfo(geninfo_file)
+    except Exception as err:
+        msg = f"世代情報jsonを読み込めません ({geninfo_file}): {err}"
+        raise ValueError(msg) from err
+    return geninfo, geninfo_file, geninfo_source
+
+
+def _resolve_custom_functions(custom_path: str | None, d: Path) -> tuple[Path | None, str | None, list[str]]:
+    """自作関数ファイル(custom_parts.py)の解決と読み込み。
+
+    SVN 管理された自作関数(scorelib_param/custom.py)。読み込み = import =
+    トップレベルコードの実行になるが、レビュー済みリポジトリ由来のファイルが
+    前提(任意ユーザの入力ではない)ので許容。
+
+    Returns:
+        (解決したパス, 入手経路, 関数名リスト) のタプル。
+        該当ファイルが無ければ (None, None, [])。
+
+    Raises:
+        ValueError: 候補が複数見つかった、または読み込みに失敗したとき。
+
+    """
+    custom_file, custom_source = _resolve_optional_file(
+        custom_path,
+        lambda: [p for p in [d / scorelib_custom.DEFAULT_FILENAME] if p.is_file()],
+        "自作関数ファイル",
+    )
+    if custom_file is None:
+        return None, None, []
+    try:
+        module = scorelib_custom.load_custom_module(custom_file)
+        functions = scorelib_custom.list_custom_functions(module)
+    except Exception as err:
+        msg = f"自作関数ファイルを読み込めません ({custom_file}): {err}"
+        raise ValueError(msg) from err
+    return custom_file, custom_source, functions
+
+
 def build_context(
     data_dir: str,
     config_path: str | None = None,
@@ -841,39 +1000,22 @@ def build_context(
     測定結果ディレクトリは同系統の過去実験の出力(設計書 5.1節)。
     result_tmp には通常測定結果しか入らないため、optimization設定jsonc と
     dVtBudget係数jsonc 等は別の(任意の)パスとして受け取る。たまたま
-    ディレクトリ内に置いてある場合のための自動検出も残してある。
+    ディレクトリ内に置いてある場合のための自動検出も残してある
+    (解決と読み込みは同梱ファイルごとの _resolve_* ヘルパーが担う)。
+
+    データディレクトリが未入力・不存在、同梱ファイルの候補が複数、または
+    各同梱ファイルの読み込み・検証に失敗したときは、各ヘルパーが
+    ValueError を送出する(メッセージは従来どおり)。
 
     Returns:
         data_dir / types / part_types / catalogs / measure_labels、各同梱
         ファイルのパスと入手経路、WLgroup 系、existing_score_file、
         custom_functions 等を持つ context dict。
 
-    Raises:
-        ValueError: データディレクトリが未入力・不存在、同梱ファイルの候補が
-            複数、または各同梱ファイルの読み込み・検証に失敗したとき。
-
     """
-    if not str(data_dir).strip():
-        # Path("") はカレントディレクトリ扱いになり、起動場所を誤って走査してしまう
-        msg = "測定結果ディレクトリのパスを入力してください"
-        raise ValueError(msg)
-    d = Path(str(data_dir).strip()).resolve()
-    if not d.is_dir():
-        msg = f"ディレクトリが見つかりません: {d}"
-        raise ValueError(msg)
-
+    d = _resolve_data_dir(data_dir)
     types = introspect.detect_types(d)
-
-    coef_file, coef_source = _resolve_optional_file(
-        coef_path, lambda: introspect.find_dvtbudget_coefs(d), "dVtBudget係数jsonc"
-    )
-    if coef_file is not None:
-        try:
-            io_jsonc.load_dvtbudget_coef(coef_file)
-        except Exception as err:
-            msg = f"dVtBudget係数jsoncを読み込めません ({coef_file}): {err}"
-            raise ValueError(msg) from err
-
+    coef_file, coef_source = _resolve_coef_file(coef_path, d)
     config_file, config_source = _resolve_optional_file(
         config_path, lambda: introspect.find_run_configs(d), "optimization設定jsonc"
     )
@@ -881,16 +1023,14 @@ def build_context(
     part_types = list(types)
     if "FBC" in types and coef_file is not None:
         part_types.append("dVtBudget")
-    catalogs = {t: introspect.axis_catalog(d, t) for t in part_types}
-    # Measure 番号 → dataName(UI の複合表示「dataName (Measure N)」と labels 注記用)
-    measure_label_map = {t: introspect.measure_labels(d, t) for t in part_types}
 
     ctx: dict[str, Any] = {
         "data_dir": str(d),
         "types": types,
         "part_types": part_types,
-        "catalogs": catalogs,
-        "measure_labels": measure_label_map,
+        "catalogs": {t: introspect.axis_catalog(d, t) for t in part_types},
+        # Measure 番号 → dataName(UI の複合表示「dataName (Measure N)」と labels 注記用)
+        "measure_labels": {t: introspect.measure_labels(d, t) for t in part_types},
         "coef_path": str(coef_file) if coef_file else None,
         "coef_source": coef_source,
         "config_path": str(config_file) if config_file else None,
@@ -909,66 +1049,19 @@ def build_context(
         "custom_functions": [],
     }
     if config_file:
-        try:
-            run_config = io_jsonc.load_run_config(config_file)
-        except ValidationError as err:
-            # パーツ名つきの読めるメッセージにするため、生の dict を読み直して整形する
-            try:
-                raw = jsonc.loads(Path(config_file).read_text(encoding="utf-8"))
-            except Exception:
-                raw = None
-            details = "; ".join(_format_pydantic_error(err, raw if isinstance(raw, dict) else None))
-            msg = f"optimization設定jsoncを読み込めません ({config_file}): {details}"
-            raise ValueError(msg) from err
-        except Exception as err:
-            msg = f"optimization設定jsoncを読み込めません ({config_file}): {err}"
-            raise ValueError(msg) from err
-        ctx["generation"] = run_config.Generation
-        ctx["wlgroup"] = dict(run_config.optimization.WLgroup)
-        ctx["wlgroup_defin_logical"] = run_config.optimization.WLgroupDefinLogical
-        ctx["wlgroup_weight"] = run_config.optimization.WLgroupWeight
-        existing = run_config.to_score_file()
-        if existing.score_parts or existing.selectionSets or existing.expression:
-            ctx["existing_score_file"] = existing.model_dump(exclude_none=True)
+        ctx.update(_config_context_entries(config_file))
 
-    geninfo_file, geninfo_source = _resolve_optional_file(
-        geninfo_path,
-        lambda: [p for p in [introspect.find_generation_info(d, ctx["generation"])] if p],
-        "世代情報json",
-    )
-    if geninfo_file is not None:
-        try:
-            geninfo = jsonc.loads(Path(geninfo_file).read_text(encoding="utf-8"))
-            if not isinstance(geninfo, dict):
-                msg = "トップレベルがオブジェクトではありません"
-                # 例外型は既存の ValueError を維持(TypeError 化は呼び出し側・テストに影響)。
-                # raise は外側の except で st.error 表示に集約する構造のため try 内が自然
-                raise ValueError(msg)  # ruff: ignore[TRY004, TRY301]
-        except Exception as err:
-            msg = f"世代情報jsonを読み込めません ({geninfo_file}): {err}"
-            raise ValueError(msg) from err
+    geninfo, geninfo_file, geninfo_source = _resolve_geninfo(geninfo_path, d, ctx["generation"])
+    if geninfo is not None:
         ctx["geninfo"] = geninfo
         ctx["geninfo_path"] = str(geninfo_file)
         ctx["geninfo_source"] = geninfo_source
 
-    # custom_parts.py: SVN 管理された自作関数(scorelib_param/custom.py)。
-    # 読み込み = import = トップレベルコードの実行になるが、レビュー済み
-    # リポジトリ由来のファイルが前提(任意ユーザの入力ではない)ので許容
-    custom_file, custom_source = _resolve_optional_file(
-        custom_path,
-        lambda: [p for p in [d / scorelib_custom.DEFAULT_FILENAME] if p.is_file()],
-        "自作関数ファイル",
-    )
+    custom_file, custom_source, custom_functions = _resolve_custom_functions(custom_path, d)
     if custom_file is not None:
-        try:
-            module = scorelib_custom.load_custom_module(custom_file)
-            functions = scorelib_custom.list_custom_functions(module)
-        except Exception as err:
-            msg = f"自作関数ファイルを読み込めません ({custom_file}): {err}"
-            raise ValueError(msg) from err
         ctx["custom_path"] = str(custom_file)
         ctx["custom_source"] = custom_source
-        ctx["custom_functions"] = functions
+        ctx["custom_functions"] = custom_functions
         # `catalogs` を作った後に足す: custom 擬似typeには軸カタログが無い。
         # += でなく新リストを作る(元のリストを共有している参照を書き換えないため)
         ctx["part_types"] = ctx["part_types"] + ["custom"]
@@ -1527,20 +1620,32 @@ def export_part(score_file: dict[str, Any], index: int) -> str:
     return score_file_to_jsonc(bundle)
 
 
+@dataclass(frozen=True)
+class TestComputeInputs:
+    """画面5のテスト計算に渡す任意入力(スコア設定・データディレクトリ以外)。
+
+    generation と coef_path は画面5の入力欄から、wlgroup / custom_path /
+    geninfo_path は context からの引き継ぎ。すべて未指定でも計算は動く
+    (dVtBudget 等、必要とするパーツがあればエンジン側のエラーになる)。
+    """
+
+    generation: str | None = None
+    wlgroup: dict[str, Any] | None = None
+    coef_path: str | None = None
+    custom_path: str | None = None
+    geninfo_path: str | None = None
+
+
 def run_test_compute(
     score_file: dict[str, Any],
     data_dir: str,
-    generation: str | None = None,
-    wlgroup: dict[str, Any] | None = None,
-    coef_path: str | None = None,
-    custom_path: str | None = None,
-    geninfo_path: str | None = None,
+    inputs: TestComputeInputs | None = None,
 ) -> dict[str, float | None]:
     """画面5: 実データでエンジンを走らせる。
 
     係数ファイルは指定があれば
-    `coef_path` から(通常 result_tmp の外にある)。initial_temperature.csv
-    は測定出力なので常にデータディレクトリから読む。
+    `inputs.coef_path` から(通常 result_tmp の外にある)。
+    initial_temperature.csv は測定出力なので常にデータディレクトリから読む。
 
     Returns:
         {"Score": 式の合成値, パーツ名: パーツ値, ...} の dict
@@ -1555,6 +1660,7 @@ def run_test_compute(
     from scorelib_param.dvtbudget import load_board_temperatures
     from scorelib_param.models import RunConfig
 
+    inputs = inputs or TestComputeInputs()
     d = Path(data_dir)
     if not d.is_dir():
         msg = f"ディレクトリが見つかりません: {d}"
@@ -1563,30 +1669,32 @@ def run_test_compute(
     dump = sf.model_dump(exclude_none=True)
     run_config = RunConfig.model_validate(
         {
-            "Generation": generation or "",
+            "Generation": inputs.generation or "",
             "optimization": {
                 "score_parts": dump["score_parts"],
                 "expression": sf.expression,
                 "constraintThreshold": {},  # 閾値はパーツの値に影響しない
                 "selectionSets": sf.selectionSets,
                 # score file 側の定義が config の WLgroup より優先される
-                "WLgroup": wlgroup or {},
+                "WLgroup": inputs.wlgroup or {},
                 "groupDefs": dump.get("groupDefs", {}),
                 "weightSets": dump.get("weightSets", {}),
             },
         }
     )
-    coef_file, _ = _resolve_optional_file(coef_path, lambda: introspect.find_dvtbudget_coefs(d), "dVtBudget係数jsonc")
+    coef_file, _ = _resolve_optional_file(
+        inputs.coef_path, lambda: introspect.find_dvtbudget_coefs(d), "dVtBudget係数jsonc"
+    )
     coef = io_jsonc.load_dvtbudget_coef(coef_file) if coef_file else None
     temp_csv = d / "initial_temperature.csv"
     temps = load_board_temperatures(temp_csv) if temp_csv.exists() else None
     return compute_score_file(
         d,
         run_config,
-        coef,
-        temps,
-        custom_parts_path=custom_path,
-        generation_info_path=geninfo_path,
+        dvtbudget_coef=coef,
+        board_temperatures=temps,
+        custom_parts_path=inputs.custom_path,
+        generation_info_path=inputs.geninfo_path,
     )
 
 
@@ -1689,8 +1797,8 @@ def load_config_only(text: str) -> tuple:
         import_config_group_defs(
             sf,
             dict(rc.optimization.WLgroup),
-            rc.optimization.WLgroupDefinLogical,
-            rc.optimization.WLgroupWeight,
+            defin_logical=rc.optimization.WLgroupDefinLogical,
+            wlgroup_weight=rc.optimization.WLgroupWeight,
         )
     return sf, config_only_context(sf, generation)
 
@@ -1722,15 +1830,14 @@ def import_score_file(text: str) -> dict[str, Any]:
         ScoreFile 形式に正規化した編集用 dict(None のフィールドは除く)。
 
     Raises:
-        ValueError: トップレベルがオブジェクトでない、または pydantic の
-            検証エラーのとき(整形済みメッセージ入り)。
+        TypeError: トップレベルがオブジェクトでないとき。
+        ValueError: pydantic の検証エラーのとき(整形済みメッセージ入り)。
 
     """
     data = jsonc.loads(text)
     if not isinstance(data, dict):
         msg = "jsoncのトップレベルがオブジェクトではありません"
-        # TypeError への変更は例外型が変わり呼び出し側・テストに影響するため見送り
-        raise ValueError(msg)  # ruff: ignore[TRY004]
+        raise TypeError(msg)
     try:
         if "optimization" in data:
             from scorelib_param.models import RunConfig

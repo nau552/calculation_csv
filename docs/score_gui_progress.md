@@ -456,3 +456,29 @@ v0.4.0 の機能群（集計時重み・変換ステップ拡張・Physical 記�
   仕様)。pyright[nodejs]==1.1.411 と psutil を dev extras へ、CI に型チェック
   組み込み。テスト305件パス(整合テスト+1)。版数は動かさない(挙動・config
   語彙の変更なし)。残: 品質向上パス(ラチェット方式)が次の作業。
+- 追記(2026-07-31): 品質向上パスを実施(feature/quality-pass)。合意済みの順序
+  (引数の束ね直し → 関数分割、UI は AppTest 増強後)で、関数サイズ系の免除
+  対象 96 件 → 10 件(全て意図的な残置)。公開 API(compute_score_part/file/
+  dummy・apply_dvtbudget・BatchRunner・ブリッジ見本)は dataclass に束ねず
+  省略可能引数のキーワード専用化まで(組み込み側の互換資産のため。残る
+  PLR0913 はファイル単位免除に理由付きで記録=ラチェットの残リスト)。内部は
+  実際に束ねた(_BatchInputs/_BatchState/EditorContext/LoadInputs/
+  TestComputeInputs)。大物の分割: models._check_value_shape(分岐41→検査別
+  8メソッド)・cli.compute_score_part・batch.compute_score_batch・UI 画面1/2/
+  3/5 の各大関数。try 節の抽出は本体丸ごと1呼び出しで捕捉範囲不変。見送って
+  いた FBT(キーワード専用化)・TRY004(型検査3箇所を ValueError→TypeError)・
+  TRY301(raise のヘルパー抽出)も解消し、関数サイズ系・FBT・TRY の行内抑止は
+  0件に。安全網として AppTest を19本増強(集計/重み/相対化/順序/グループ定義/
+  選択セット/読み込み/エクスポートの配線固定。file_uploader と D&D は AppTest
+  不可のため state 層テストで担保 — testing_guide 記載)。全体 324 件パス・
+  ruff 両モード 0・pyright 0。版数判断: config 語彙の変更なし・数値結果不変
+  だが**キーワード専用化は呼び出し互換に影響するため、この変更を含む次の
+  エンジンリリースで最後の数字を上げる**(CHANGELOG 未リリースに互換性注意を
+  記録済み。リリース時に __version__ を上げてタグ)。
+- 追記(2026-08-01): 品質向上パスの仕上げ2点(ユーザーと相談の上)。①残す例外
+  (公開 API の PLR0913・変換関数の PLR0911)をファイル単位免除から**該当関数の
+  def 行の行単位抑止**へ移し、同じファイルに新しく書く関数へ免除が及ぶ死角を
+  解消。②CI の ruff 検査に素の(--preview 無し)実行を追加 — エディタの自動修正
+  が抑止コメントをルール名表記に変えると preview では効くが素の実行で外れる
+  ため、「両モードで警告ゼロ」を CI で機械的に担保する。全検証 green を確認
+  してコミット。

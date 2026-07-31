@@ -32,6 +32,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from scorelib_param.models import GroupDef, ScoreFile
+
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
@@ -57,6 +59,69 @@ def _timeit[T](fn: Callable[[], T]) -> tuple[float, T]:
     return time.perf_counter() - t0, r
 
 
+def _load_epochs(args: argparse.Namespace) -> list[StagedEpoch]:
+    """計測に使う epoch を history の先頭から --epochs 個列挙し、計算層へ渡せる形にする。
+
+    Returns:
+        StagedEpoch のリスト。非圧縮 csv の epoch ディレクトリ前提のため
+        ステージング(アーカイブ展開)は通さず、元ディレクトリをそのまま使う。
+
+    """
+    refs = enumerate_epochs({"bench": args.history})[: args.epochs]
+    if len(refs) < args.epochs:
+        print(f"note: history has only {len(refs)} epochs", file=sys.stderr)
+    return [StagedEpoch(ref=r, data_dir=r.source_dir) for r in refs]
+
+
+def _measure_parse(epochs: list[StagedEpoch], source_types: list[str]) -> float:
+    """段階 A: {type}.csv の素のパース時間を測る(2回走らせて2回目を採用しキャッシュ差を除く)。
+
+    Returns:
+        全 epoch・全 type の scan_csv().collect() の所要秒数(2回目)。
+
+    """
+
+    def parse_all() -> None:
+        for se in epochs:
+            for t in source_types:
+                pl.scan_csv(axis_resolve.data_file(se.data_dir, f"{t}.csv")).collect()
+
+    _timeit(parse_all)
+    t_parse, _ = _timeit(parse_all)
+    return t_parse
+
+
+def _measure_resolved(
+    epochs: list[StagedEpoch],
+    score_file: ScoreFile,
+    group_defs: dict[str, GroupDef],
+    source_types: list[str],
+) -> tuple[float, compute.BatchComputeContext]:
+    """段階 B: resolved() = 軸解決 join + 文字列解決 + concat + collect の時間を type 分測る。
+
+    Returns:
+        (所要秒数, 全 type を collect 済みの BatchComputeContext) のタプル。
+
+    """
+
+    def run_resolved() -> compute.BatchComputeContext:
+        c = compute.BatchComputeContext(epochs, score_file.score_parts, group_defs)
+        for t in source_types:
+            c.resolved(t)
+        return c
+
+    return _timeit(run_resolved)
+
+
+def _print_type_sizes(ctx: compute.BatchComputeContext, source_types: list[str]) -> None:
+    """各 type の resolved 済み DataFrame の行数・メモリサイズを表示する。"""
+    for t in source_types:
+        # _measure_resolved が全 type を collect 済みなので、resolved() はキャッシュ
+        # (内部 dict)の同じ実体を返すだけ(再計算しない)
+        df = ctx.resolved(t)
+        print(f"     {t}: {df.height:,} rows, {df.estimated_size() / 2**30:.2f} GiB")
+
+
 def main(argv: list[str] | None = None) -> None:
     """コマンドライン引数に従い、バッチ計算の時間内訳を段階別に計測して表示する。"""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -66,14 +131,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--epochs", type=int, default=10, help="使う epoch 数(history の先頭から。default: 10)")
     args = parser.parse_args(argv)
 
-    refs = enumerate_epochs({"bench": args.history})[: args.epochs]
-    if len(refs) < args.epochs:
-        print(f"note: history has only {len(refs)} epochs", file=sys.stderr)
-    # 非圧縮 csv の epoch ディレクトリ前提: ステージング(アーカイブ展開)は
-    # 通さず、元ディレクトリをそのまま計算層へ渡す
-    epochs = [StagedEpoch(ref=r, data_dir=r.source_dir) for r in refs]
-    n = len(epochs)
-
+    epochs = _load_epochs(args)
     run_config = io_jsonc.load_run_config(args.config)
     coef = io_jsonc.load_dvtbudget_coef(args.dvtbudget_coef) if args.dvtbudget_coef else None
     score_file = run_config.to_score_file()
@@ -82,35 +140,18 @@ def main(argv: list[str] | None = None) -> None:
     ctx = compute.BatchComputeContext(epochs, score_file.score_parts, group_defs)
     source_types = sorted(ctx._union_axes)  # ruff: ignore[SLF001] — プロファイル対象(同リポジトリ)の内部を意図的に参照
 
-    # --- A: 素の csv パース(2回目を採用してキャッシュ差を除く) ---
-    def parse_all() -> None:
-        for se in epochs:
-            for t in source_types:
-                pl.scan_csv(axis_resolve.data_file(se.data_dir, f"{t}.csv")).collect()
-
-    _timeit(parse_all)
-    t_parse, _ = _timeit(parse_all)
-
-    # --- B: resolved()(軸解決 + concat + collect) ---
-    def run_resolved() -> compute.BatchComputeContext:
-        c = compute.BatchComputeContext(epochs, score_file.score_parts, group_defs)
-        for t in source_types:
-            c.resolved(t)
-        return c
-
-    t_resolved, ctx = _timeit(run_resolved)
+    t_parse = _measure_parse(epochs, source_types)
+    t_resolved, ctx = _measure_resolved(epochs, score_file, group_defs, source_types)
 
     # --- C: 全体 ---
     t_full, result = _timeit(lambda: compute.compute_score_batch(epochs, run_config, coef))
 
-    print(f"epochs={n}  types={source_types}  parts={len(score_file.score_parts)}  failed={len(result.failed)}")
+    print(
+        f"epochs={len(epochs)}  types={source_types}  parts={len(score_file.score_parts)}  failed={len(result.failed)}"
+    )
     print(f"A. csv parse:            {t_parse:7.2f}s  ({t_parse / t_full:5.1%})")
     print(f"B. resolve+collect:      {t_resolved:7.2f}s  ({t_resolved / t_full:5.1%})")
-    for t in source_types:
-        # run_resolved が全 type を collect 済みなので、resolved() はキャッシュ
-        # (内部 dict)の同じ実体を返すだけ(再計算しない)
-        df = ctx.resolved(t)
-        print(f"     {t}: {df.height:,} rows, {df.estimated_size() / 2**30:.2f} GiB")
+    _print_type_sizes(ctx, source_types)
     print(
         f"C. compute_score_batch:  {t_full:7.2f}s  (パーツ計算分 ≈ {t_full - t_resolved:.2f}s, "
         f"{(t_full - t_resolved) / t_full:5.1%})"

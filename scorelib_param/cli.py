@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, overload
 
@@ -237,6 +238,45 @@ def _effective_order(score_part: ScorePart) -> list[str]:
     return order
 
 
+def _expand_group_axis(name: str, group_defs: dict[str, GroupDef] | None) -> set[str]:
+    """軸名を、グループ派生軸ならその元軸も加えた集合に広げる。
+
+    filter 前出しの可否判定(_hoistable_prefilters)は展開後の集合同士の交わりで
+    行うため、元軸と派生軸のどちらで書かれていても双方向に紐づく。
+
+    Returns:
+        {name}(name がグループ定義名なら、その元軸名も加えた集合)。
+
+    """
+    names = {name}
+    if group_defs and name in group_defs:
+        names.add(group_defs[name].axis)
+    return names
+
+
+def _prefilter_forbidden_axes(score_part: ScorePart, group_defs: dict[str, GroupDef] | None) -> set[str]:
+    """前出しすると可換にならない filter の軸の集合(_hoistable_prefilters の下請け)。
+
+    Returns:
+        相対化の split 軸・分母事前集計で潰す軸とその重み参照軸(`by`)・
+        複合軸エントリの構成軸を、グループ派生軸は元軸と紐づけて広げた集合。
+
+    """
+    forbidden: set[str] = set()
+    rel = score_part.relative
+    if rel is not None:
+        forbidden |= _expand_group_axis(rel.split_axis, group_defs)
+        for step in rel.denominator_pre_aggregation:
+            forbidden |= _expand_group_axis(step.axis, group_defs)
+            if step.by:
+                forbidden |= _expand_group_axis(step.by, group_defs)
+    for entry in score_part.order:
+        if not _is_virtual(entry) and COMBINED_SEP in entry:
+            for axis in _step_axes(entry):
+                forbidden |= _expand_group_axis(axis, group_defs)
+    return forbidden
+
+
 def _hoistable_prefilters(
     score_part: ScorePart, group_defs: dict[str, GroupDef] | None = None
 ) -> list[tuple[str, object]]:
@@ -270,26 +310,7 @@ def _hoistable_prefilters(
         前出しできる filter の (軸名, 選択値) の並び(order での出現順)。
 
     """
-
-    def expand(name: str) -> set:
-        names = {name}
-        if group_defs and name in group_defs:
-            names.add(group_defs[name].axis)
-        return names
-
-    forbidden: set = set()
-    rel = score_part.relative
-    if rel is not None:
-        forbidden |= expand(rel.split_axis)
-        for step in rel.denominator_pre_aggregation:
-            forbidden |= expand(step.axis)
-            if step.by:
-                forbidden |= expand(step.by)
-    for entry in score_part.order:
-        if not _is_virtual(entry) and COMBINED_SEP in entry:
-            for axis in _step_axes(entry):
-                forbidden |= expand(axis)
-
+    forbidden = _prefilter_forbidden_axes(score_part, group_defs)
     out: list[tuple[str, object]] = []
     for entry in score_part.order:
         if _is_virtual(entry) or COMBINED_SEP in entry:
@@ -297,7 +318,7 @@ def _hoistable_prefilters(
         spec = score_part.aggregations.get(entry)
         if spec is None or spec.op != "filter":
             continue
-        if expand(entry) & forbidden:
+        if _expand_group_axis(entry, group_defs) & forbidden:
             continue
         out.append((entry, spec.value))
     return out
@@ -350,10 +371,11 @@ def _dummy_axis_values(data_dir: str | Path, axis: str, spec: AggregationSpec | 
     return [0]
 
 
-def compute_dummy_part(
+def compute_dummy_part(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略可能キーワード引数は設計(束ねない方針 — docs/dev_workflow.md)
     data_dir: str | Path,
     score_part: ScorePart,
     dummy_value: float,
+    *,
     group_defs: dict[str, GroupDef] | None = None,
     selection_sets: dict[str, list] | None = None,
     weight_sets: dict[str, object] | None = None,
@@ -623,12 +645,217 @@ def _step_signature(score_part: ScorePart, step: str) -> tuple:
     return (kind, step, spec.model_dump_json() if spec else "")
 
 
+def _compute_custom_part(
+    data_dir: str | Path,
+    score_part: ScorePart,
+    generation: str | None,
+    group_defs: dict[str, GroupDef] | None,
+    custom_module: ModuleType | None,
+) -> float:
+    """type="custom" のパーツを custom_parts.py の関数呼び出しで計算する(compute_score_part の下請け)。
+
+    custom_parts.py に該当関数が無い・呼び出し可能でないときは
+    custom.compute_custom_part が TypeError を送出する(ここからそのまま伝播)。
+
+    Returns:
+        カスタム関数が返したパーツ値。
+
+    Raises:
+        ValueError: custom_module が無い(custom_parts.py が読み込まれて
+            いない)とき。
+
+    """
+    if custom_module is None:
+        msg = (
+            f"score part '{score_part.name}' has type='{CUSTOM_TYPE}' but no custom "
+            f"parts file was loaded (expected {custom.default_custom_parts_path()})"
+        )
+        raise ValueError(msg)
+    return custom.compute_custom_part(
+        score_part,
+        custom_module,
+        custom.CustomContext(
+            data_dir=Path(data_dir),
+            generation=generation,
+            group_defs=group_defs or {},
+            params=score_part.params or {},
+        ),
+    )
+
+
+def _base_frame(
+    data_dir: str | Path,
+    score_part: ScorePart,
+    group_defs: dict[str, GroupDef] | None,
+    shared_ctx: SharedComputeContext | None,
+    identity_axes: tuple[str, ...],
+) -> pl.LazyFrame:
+    """パーツ計算の入力フレーム(resolve + グループ派生列)を用意する(compute_score_part の下請け)。
+
+    Returns:
+        値列 + 必要軸(identity_axes 指定時は識別列も)を持ち、グループ派生列を
+        生成し終えた LazyFrame。
+
+    """
+    source_type = _source_type(score_part)
+    required_axes = _required_axes(score_part, group_defs)
+    if shared_ctx is not None:
+        base = shared_ctx.resolved(source_type)
+        # 単独 resolve が返すのと厳密に同じ列へ射影し直す: 和集合の余分な列が
+        # 残ると相対化のペアリングキーや集計のグループキーが変わってしまうため、
+        # この射影は結果の正しさを支えている(消してはいけない)
+        cols = [source_type, *sorted(required_axes), *list(identity_axes)]
+        lf = base.lazy().select(cols)
+    else:
+        lf = axis_resolve.resolve_axes(data_dir, source_type, required_axes)
+    return _with_group_columns(lf, score_part, group_defs)
+
+
+def _apply_prefilters(lf: pl.LazyFrame, prefilters: list[tuple[str, object]]) -> pl.LazyFrame:
+    """前出しできる filter(_hoistable_prefilters)の行絞りだけを適用する。
+
+    Returns:
+        各 filter の該当行だけに絞った LazyFrame(列は落とさない — 列は本来の
+        filter ステップが本来の位置で落とす)。
+
+    """
+    for axis, value in prefilters:
+        # リスト値は is_in(複数値 filter)の前絞り。行の部分集合化である点は
+        # 等値と同じなので可換性の議論は変わらない
+        lf = lf.filter(pl.col(axis).is_in(value) if isinstance(value, list) else pl.col(axis) == value)
+    return lf
+
+
+def _prefix_cache_keys(
+    score_part: ScorePart,
+    group_defs: dict[str, GroupDef] | None,
+    identity_axes: tuple[str, ...],
+    prefilters: list[tuple[str, object]],
+    steps: list[str],
+) -> dict[int, tuple]:
+    """shared_ctx.prefix_cache のキーを、キャッシュ点となるステップ位置ごとに構築する。
+
+    キャッシュ点は各 __relative__ / __dvtbudget__ ステップの直後。キーは
+    その時点までの frame に影響した全て(グループ派生軸の中身も含む)を覆い、
+    そこまでの設定が完全一致するパーツだけがエントリを共有する。
+
+    Returns:
+        {steps 内の位置: キャッシュキー}(キャッシュ点が無ければ空辞書)。
+
+    """
+    sigs = [_step_signature(score_part, s) for s in steps]
+    defs_sig = tuple(
+        sorted(
+            (name, gd.axis, gd.definedInLogical, tuple(sorted(gd.groups.items())))
+            for name, gd in _referenced_group_defs(score_part, group_defs).items()
+        )
+    )
+    # prefilters をキーに含める: 前絞りが違えばキャッシュ点のフレームの
+    # 中身が違うため、ステップ署名列が同じでも共有してはならない。
+    # リスト値(is_in)は辞書キーにできないので tuple 化する
+    prefilters_sig = tuple((a, tuple(v) if isinstance(v, list) else v) for a, v in prefilters)
+    base_sig = (
+        _source_type(score_part),
+        tuple(sorted(_required_axes(score_part, group_defs))),
+        defs_sig,
+        tuple(identity_axes),
+        prefilters_sig,
+    )
+    return {i: (base_sig, tuple(sigs[: i + 1])) for i, s in enumerate(steps) if s in {RELATIVE_STEP, DVTBUDGET_STEP}}
+
+
+def _resume_from_cache(
+    lf: pl.LazyFrame,
+    shared_ctx: SharedComputeContext | None,
+    cache_keys: dict[int, tuple],
+) -> tuple[pl.LazyFrame, int]:
+    """いちばん後ろのキャッシュ点から再開できるところを探す(compute_score_part の下請け)。
+
+    Returns:
+        (再開に使う LazyFrame, 適用を再開するステップ位置)。ヒットが無ければ
+        入力の LazyFrame と位置 0 をそのまま返す。
+
+    """
+    # shared_ctx が None なら cache_keys は空 = ループは元々0回。ガードは型の narrowing 用
+    if shared_ctx is not None:
+        for i in sorted(cache_keys, reverse=True):
+            cached = shared_ctx.prefix_cache.get(cache_keys[i])
+            if cached is not None:
+                return cached.lazy(), i + 1
+    return lf, 0
+
+
+@dataclass(frozen=True)
+class _StepContext:
+    """order の1ステップの適用に必要な文脈一式(compute_score_part 内部用)。
+
+    dVtBudget 変換の入力(generation / dvtbudget_coef / board_temperatures)は
+    __dvtbudget__ ステップでだけ使われる(それ以外のステップでは None のままで
+    よい)。
+    """
+
+    score_part: ScorePart
+    source_type: str
+    generation: str | None
+    dvtbudget_coef: DvtBudgetCoefFile | None
+    board_temperatures: Mapping[int, float] | Mapping[str, dict[int, float]] | None
+    identity_axes: tuple[str, ...]
+
+
+def _apply_pipeline_step(lf: pl.LazyFrame, step: str, ctx: _StepContext) -> pl.LazyFrame:
+    """仮想ステップ含む order のエントリ1つを適用する(compute_score_part の下請け)。
+
+    Returns:
+        当該ステップを適用した後の LazyFrame。
+
+    Raises:
+        ValueError: dVtBudget パーツに generation / dvtbudget_coef /
+            board_temperatures が揃っていないとき、識別軸が2軸以上のとき、
+            または order の仮想ステップに対応する集計指示が無いとき。
+
+    """
+    score_part = ctx.score_part
+    if step == RELATIVE_STEP:
+        rel = score_part.relative
+        if rel is None:
+            # 到達しないパスの防御: _effective_order が relative 無しの __relative__ を先に検出する
+            msg = f"'{RELATIVE_STEP}' in order but '{score_part.name}' has no relative config"
+            raise ValueError(msg)
+        return apply_relative(lf, ctx.source_type, rel)
+    if step == DVTBUDGET_STEP:
+        if ctx.generation is None or ctx.dvtbudget_coef is None or ctx.board_temperatures is None:
+            msg = "dVtBudget score parts require generation, dvtbudget_coef, and board_temperatures"
+            raise ValueError(msg)
+        # バッチ計算では温度(→係数b)が epoch ごとに違いうるため、
+        # 識別軸を係数対応表のキーに含める(dvtbudget.apply_dvtbudget 参照)
+        epoch_col = ctx.identity_axes[0] if ctx.identity_axes else None
+        if len(ctx.identity_axes) > 1:
+            msg = "dVtBudget parts support at most one identity axis"
+            raise ValueError(msg)
+        return apply_dvtbudget(
+            lf,
+            ctx.source_type,
+            ctx.generation,
+            ctx.dvtbudget_coef,
+            ctx.board_temperatures,
+            epoch_col=epoch_col,
+        )
+    if _is_virtual(step):
+        spec = score_part.aggregations.get(step)
+        if spec is None:
+            msg = f"virtual step '{step}' has no entry in aggregations for '{score_part.name}'"
+            raise ValueError(msg)
+        return apply_transform(lf, ctx.source_type, spec)
+    return _apply_axis_step(lf, ctx.source_type, step, score_part)
+
+
 # overload: identity_axes 省略(空タプル)なら float、識別軸を指定したら
 # DataFrame(呼び出し側の isinstance 分岐を不要にする)。実装は1つで挙動不変
 @overload
 def compute_score_part(
     data_dir: str | Path,
     score_part: ScorePart,
+    *,
     group_defs: dict[str, GroupDef] | None = None,
     generation: str | None = None,
     dvtbudget_coef: DvtBudgetCoefFile | None = None,
@@ -645,6 +872,7 @@ def compute_score_part(
 def compute_score_part(
     data_dir: str | Path,
     score_part: ScorePart,
+    *,
     group_defs: dict[str, GroupDef] | None = None,
     generation: str | None = None,
     dvtbudget_coef: DvtBudgetCoefFile | None = None,
@@ -653,14 +881,14 @@ def compute_score_part(
     selection_sets: dict[str, list] | None = None,
     weight_sets: dict[str, object] | None = None,
     custom_module: ModuleType | None = None,
-    *,
     identity_axes: tuple[str, ...],
 ) -> pl.DataFrame: ...
 
 
-def compute_score_part(
+def compute_score_part(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略可能キーワード引数は設計(束ねない方針 — docs/dev_workflow.md)
     data_dir: str | Path,
     score_part: ScorePart,
+    *,
     group_defs: dict[str, GroupDef] | None = None,
     generation: str | None = None,
     dvtbudget_coef: DvtBudgetCoefFile | None = None,
@@ -705,123 +933,34 @@ def compute_score_part(
             )
             raise ValueError(msg)
     if score_part.type == CUSTOM_TYPE:
-        if custom_module is None:
-            msg = (
-                f"score part '{score_part.name}' has type='{CUSTOM_TYPE}' but no custom "
-                f"parts file was loaded (expected {custom.default_custom_parts_path()})"
-            )
-            raise ValueError(msg)
-        return custom.compute_custom_part(
-            score_part,
-            custom_module,
-            custom.CustomContext(
-                data_dir=Path(data_dir),
-                generation=generation,
-                group_defs=group_defs or {},
-                params=score_part.params or {},
-            ),
-        )
+        return _compute_custom_part(data_dir, score_part, generation, group_defs, custom_module)
 
     score_part = score_part.resolve_selection_refs(selection_sets or {}, weight_sets or {})
     source_type = _source_type(score_part)
-    required_axes = _required_axes(score_part, group_defs)
-
-    if shared_ctx is not None:
-        base = shared_ctx.resolved(source_type)
-        # 単独 resolve が返すのと厳密に同じ列へ射影し直す: 和集合の余分な列が
-        # 残ると相対化のペアリングキーや集計のグループキーが変わってしまうため、
-        # この射影は結果の正しさを支えている(消してはいけない)
-        cols = [source_type, *sorted(required_axes), *list(identity_axes)]
-        lf = base.lazy().select(cols)
-    else:
-        lf = axis_resolve.resolve_axes(data_dir, source_type, required_axes)
-
-    lf = _with_group_columns(lf, score_part, group_defs)
+    lf = _base_frame(data_dir, score_part, group_defs, shared_ctx, identity_axes)
 
     # 暗黙の __relative__ より前に安全な filter の行絞りだけ先に適用する
     # (列は残し、本来の filter ステップがそのまま再適用+列削除する)。
     # 相対化・dVtBudget 変換の入力行数を減らす純粋な最適化で、結果は不変
     prefilters = _hoistable_prefilters(score_part, group_defs)
-    for axis, value in prefilters:
-        # リスト値は is_in(複数値 filter)の前絞り。行の部分集合化である点は
-        # 等値と同じなので可換性の議論は変わらない
-        lf = lf.filter(pl.col(axis).is_in(value) if isinstance(value, list) else pl.col(axis) == value)
+    lf = _apply_prefilters(lf, prefilters)
 
     steps = _effective_order(score_part)
-    sigs = [_step_signature(score_part, s) for s in steps]
-
-    # キャッシュ点は各 __relative__ / __dvtbudget__ ステップの直後。キーは
-    # その時点までの frame に影響した全て(グループ派生軸の中身も含む)を覆う
     cache_keys: dict[int, tuple] = {}
     if shared_ctx is not None:
-        defs_sig = tuple(
-            sorted(
-                (name, gd.axis, gd.definedInLogical, tuple(sorted(gd.groups.items())))
-                for name, gd in _referenced_group_defs(score_part, group_defs).items()
-            )
-        )
-        # prefilters をキーに含める: 前絞りが違えばキャッシュ点のフレームの
-        # 中身が違うため、ステップ署名列が同じでも共有してはならない。
-        # リスト値(is_in)は辞書キーにできないので tuple 化する
-        prefilters_sig = tuple((a, tuple(v) if isinstance(v, list) else v) for a, v in prefilters)
-        base_sig = (
-            source_type,
-            tuple(sorted(required_axes)),
-            defs_sig,
-            tuple(identity_axes),
-            prefilters_sig,
-        )
-        cache_keys = {
-            i: (base_sig, tuple(sigs[: i + 1])) for i, s in enumerate(steps) if s in {RELATIVE_STEP, DVTBUDGET_STEP}
-        }
+        cache_keys = _prefix_cache_keys(score_part, group_defs, identity_axes, prefilters, steps)
+    lf, start = _resume_from_cache(lf, shared_ctx, cache_keys)
 
-    # いちばん後ろのキャッシュ点から再開できるところを探す
-    # (shared_ctx が None なら cache_keys は空 = ループは元々0回。ガードは型の narrowing 用)
-    start = 0
-    if shared_ctx is not None:
-        for i in sorted(cache_keys, reverse=True):
-            cached = shared_ctx.prefix_cache.get(cache_keys[i])
-            if cached is not None:
-                lf = cached.lazy()
-                start = i + 1
-                break
-
+    ctx = _StepContext(
+        score_part=score_part,
+        source_type=source_type,
+        generation=generation,
+        dvtbudget_coef=dvtbudget_coef,
+        board_temperatures=board_temperatures,
+        identity_axes=identity_axes,
+    )
     for j in range(start, len(steps)):
-        step = steps[j]
-        if step == RELATIVE_STEP:
-            rel = score_part.relative
-            if rel is None:
-                # 到達しないパスの防御: _effective_order が relative 無しの __relative__ を先に検出する
-                msg = f"'{RELATIVE_STEP}' in order but '{score_part.name}' has no relative config"
-                raise ValueError(msg)
-            lf = apply_relative(lf, source_type, rel)
-        elif step == DVTBUDGET_STEP:
-            if generation is None or dvtbudget_coef is None or board_temperatures is None:
-                msg = "dVtBudget score parts require generation, dvtbudget_coef, and board_temperatures"
-                raise ValueError(msg)
-            # バッチ計算では温度(→係数b)が epoch ごとに違いうるため、
-            # 識別軸を係数対応表のキーに含める(dvtbudget.apply_dvtbudget 参照)
-            epoch_col = identity_axes[0] if identity_axes else None
-            if len(identity_axes) > 1:
-                msg = "dVtBudget parts support at most one identity axis"
-                raise ValueError(msg)
-            lf = apply_dvtbudget(
-                lf,
-                source_type,
-                generation,
-                dvtbudget_coef,
-                board_temperatures,
-                epoch_col=epoch_col,
-            )
-        elif _is_virtual(step):
-            spec = score_part.aggregations.get(step)
-            if spec is None:
-                msg = f"virtual step '{step}' has no entry in aggregations for '{score_part.name}'"
-                raise ValueError(msg)
-            lf = apply_transform(lf, source_type, spec)
-        else:
-            lf = _apply_axis_step(lf, source_type, step, score_part)
-
+        lf = _apply_pipeline_step(lf, steps[j], ctx)
         if shared_ctx is not None and j in cache_keys:
             df = lf.collect()
             shared_ctx.prefix_cache[cache_keys[j]] = df
@@ -832,9 +971,10 @@ def compute_score_part(
     return collapse_to_scalar(lf, source_type)
 
 
-def compute_score_file(
+def compute_score_file(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略可能キーワード引数は設計(束ねない方針 — docs/dev_workflow.md)
     data_dir: str | Path,
     run_config: RunConfig,
+    *,
     dvtbudget_coef: DvtBudgetCoefFile | None = None,
     board_temperatures: dict[int, float] | None = None,
     custom_parts_path: str | Path | None = None,
@@ -949,8 +1089,8 @@ def main(argv: list[str] | None = None) -> None:
     result = compute_score_file(
         args.data_dir,
         run_config,
-        dvtbudget_coef,
-        board_temperatures,
+        dvtbudget_coef=dvtbudget_coef,
+        board_temperatures=board_temperatures,
         custom_parts_path=args.custom_parts,
         generation_info_path=args.generation_info,
     )

@@ -969,7 +969,9 @@ def test_custom_part_skeleton_and_compute(sf: dict[str, Any], data_dir_mini: Pat
     sf["score_parts"].append(part)
     sf["expression"] = "p"
     assert state.validate_score_file(sf) == []
-    result = state.run_test_compute(sf, str(data_dir_mini), custom_path=str(custom_parts_path))
+    result = state.run_test_compute(
+        sf, str(data_dir_mini), state.TestComputeInputs(custom_path=str(custom_parts_path))
+    )
     assert isinstance(result["p"], float)
 
 

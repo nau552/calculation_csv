@@ -272,7 +272,7 @@ def test_custom_part_errors(data_dir_mini: Path, fixtures_dir: Path) -> None:
     ]  # _private_helper and the pl import are excluded
 
     ctx = CustomContext(data_dir=data_dir_mini)
-    with pytest.raises(ValueError, match="not found"):
+    with pytest.raises(TypeError, match="not found"):
         compute_custom_part(ScorePart(name="nope", type="custom"), module, ctx)
     with pytest.raises(ValueError, match="finite"):
         compute_custom_part(ScorePart(name="broken_returns_nan", type="custom"), module, ctx)

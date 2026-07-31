@@ -77,6 +77,19 @@ STEP_OPS = TRANSFORM_OPS + UNARY_OPS
 _DIFF_SELECTIONS = 2
 
 
+def _is_number(x: object) -> TypeIs[int | float]:
+    """数値(bool を除く int / float)かどうかを判定する。
+
+    bool は int のサブクラスなので明示的に弾く(重み・定数の検査で
+    True/False を数値と誤認しないため)。
+
+    Returns:
+        bool でない int / float なら True。
+
+    """
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
 class AggregationSpec(BaseModel):
     """1つの軸(または仮想ステップ)の集計指示。
 
@@ -158,145 +171,241 @@ class AggregationSpec(BaseModel):
     def _check_value_shape(self) -> AggregationSpec:
         """Op ごとの value 形状検査(間違えやすい箇所なのでエラーは具体的に)。
 
+        検査の実体は op の種類ごとの `_check_*` / `_normalize_*` ヘルパーに
+        分かれている(このメソッドは適用順と早期 return だけを持つ)。
+        value / ref / by / weight / floor / expr の組み合わせや形状が op の
+        要求に合わないときの ValueError は各ヘルパーが送出する。
+
         Returns:
             検証を通った自身(filter の単一要素リストはスカラーへ、
             mean/sum/min/max のスカラー選択はリストへ正規化済み)。
 
+        """
+        self._check_modifier_fields()
+        if self.op in UNARY_OPS:
+            self._check_unary_shape()
+            return self
+        self._check_weight_shape()
+        if self.ref is not None:
+            self._check_ref_combination()
+            # 形状検査は ref 解決後にもう一度走る
+            return self
+        if self.op == "filter":
+            self._check_filter_shape()
+        elif self.op in TRANSFORM_OPS:
+            self._check_transform_shape()
+        elif self.op == "diff":
+            self._check_diff_shape()
+        elif self.op in MULTI_OPS:
+            self._normalize_multi_shape()
+        elif self.op == "expr":
+            self._check_expr_shape()
+        return self
+
+    def _check_modifier_fields(self) -> None:
+        """修飾フィールド by / floor が対応する op 以外に付いていないか検査する。
+
         Raises:
-            ValueError: value / ref / by / weight / floor / expr の
-                組み合わせや形状が op の要求に合わないとき。
+            ValueError: 'by' が変換op以外に、または 'floor' が op 'log' 以外に
+                付いているとき。
 
         """
-        op, v = self.op, self.value
-
-        def _num(x: object) -> TypeIs[int | float]:
-            return isinstance(x, (int, float)) and not isinstance(x, bool)
-
-        if self.by is not None and op not in TRANSFORM_OPS:
-            msg = f"'by' applies only to transform ops {list(TRANSFORM_OPS)}, not op '{op}'"
+        if self.by is not None and self.op not in TRANSFORM_OPS:
+            msg = f"'by' applies only to transform ops {list(TRANSFORM_OPS)}, not op '{self.op}'"
             raise ValueError(msg)
-        if self.floor is not None and op != "log":
-            msg = f"'floor' applies only to op 'log', not op '{op}'"
+        if self.floor is not None and self.op != "log":
+            msg = f"'floor' applies only to op 'log', not op '{self.op}'"
             raise ValueError(msg)
-        if op in UNARY_OPS:
-            if v is not None or self.ref is not None:
-                msg = f"op '{op}' takes no 'value'/'ref' (row-wise function)"
-                raise ValueError(msg)
-            if op == "log" and (not _num(self.floor) or self.floor <= 0):
-                msg_0 = (
-                    "op 'log' requires a positive 'floor' — computes log(max(|x|, floor)) "
-                    '(e.g. {"op": "log", "floor": 1e-6})'
-                )
-                raise ValueError(msg_0)
-            return self
-        if (self.weight is not None or self.weight_ref is not None) and op not in MULTI_OPS:
+
+    def _check_unary_shape(self) -> None:
+        """単項変換op(abs/log)の検査: value/ref は取らず、log は floor 必須。
+
+        Raises:
+            ValueError: value / ref が指定されているとき、または op 'log' の
+                floor が正の数でないとき。
+
+        """
+        if self.value is not None or self.ref is not None:
+            msg = f"op '{self.op}' takes no 'value'/'ref' (row-wise function)"
+            raise ValueError(msg)
+        if self.op == "log" and (not _is_number(self.floor) or self.floor <= 0):
+            msg = (
+                "op 'log' requires a positive 'floor' — computes log(max(|x|, floor)) "
+                '(e.g. {"op": "log", "floor": 1e-6})'
+            )
+            raise ValueError(msg)
+
+    def _check_weight_shape(self) -> None:
+        """集計時重み(weight / weight_ref)の適用可否と形状を検査する。
+
+        Raises:
+            ValueError: mean/sum/min/max 以外の op に weight / weight_ref が
+                付いているとき、両方が同時に指定されたとき、または weight が
+                数値でも空でない数値の辞書でもないとき。
+
+        """
+        if (self.weight is not None or self.weight_ref is not None) and self.op not in MULTI_OPS:
             msg = (
                 f"'weight'/'weight_ref' apply only to aggregation ops {list(MULTI_OPS)}, "
-                f"not op '{op}' (for transform steps use 'by' + a weight dict in 'value')"
+                f"not op '{self.op}' (for transform steps use 'by' + a weight dict in 'value')"
             )
             raise ValueError(msg)
         if self.weight is not None and self.weight_ref is not None:
             msg = "give either 'weight' or 'weight_ref' (a named weight set), not both"
             raise ValueError(msg)
-        if self.weight is not None:
-            if isinstance(self.weight, dict):
-                if not self.weight or not all(_num(x) for x in self.weight.values()):
-                    msg = (
-                        "'weight' requires a non-empty dict of numbers keyed by axis values "
-                        '(e.g. {"WLgroup00": 10.0, "WLgroup01": 1.0}) or a single number'
-                    )
-                    raise ValueError(msg)
-            elif not _num(self.weight):
-                msg = "'weight' requires a dict of numbers or a single number"
-                raise ValueError(msg)
-        if self.ref is not None:
-            if v is not None:
-                msg = "give either 'value' or 'ref' (a named set), not both"
-                raise ValueError(msg)
-            if op == "expr":
-                msg = "op 'expr' takes no selections, so 'ref' is not applicable"
-                raise ValueError(msg)
-            if op in TRANSFORM_OPS and self.by is None:
+        if self.weight is None:
+            return
+        if isinstance(self.weight, dict):
+            if not self.weight or not all(_is_number(x) for x in self.weight.values()):
                 msg = (
-                    f"op '{op}' with 'ref' (a weight set) also needs 'by': the axis whose "
-                    'values the weights are keyed by (e.g. "by": "WLgroup")'
+                    "'weight' requires a non-empty dict of numbers keyed by axis values "
+                    '(e.g. {"WLgroup00": 10.0, "WLgroup01": 1.0}) or a single number'
                 )
                 raise ValueError(msg)
-            # 形状検査は ref 解決後にもう一度走る
-            return self
-        if op == "filter":
-            if isinstance(v, list):
-                if not v:
-                    msg = "op 'filter' requires 'value' (at least one selection)"
-                    raise ValueError(msg)
-                if any(isinstance(x, list) for x in v):
-                    msg = (
-                        "op 'filter': each selection must be a scalar or, for combined axes, "
-                        "a dict {axis: value} — not a nested list"
-                    )
-                    raise ValueError(msg)
-                if len(v) == 1:
-                    self.value = v[0]
-            elif v is None:
-                msg = "op 'filter' requires 'value'"
-                raise ValueError(msg)
-        elif op in TRANSFORM_OPS:
-            if self.by is None:
-                if not _num(v):
-                    msg = f"op '{op}' requires a numeric 'value'"
-                    raise ValueError(msg)
-                if op == "div" and v == 0:
-                    msg = "op 'div' cannot divide by zero"
-                    raise ValueError(msg)
-            elif isinstance(v, dict):
-                if not v or not all(_num(x) for x in v.values()):
-                    msg = (
-                        f"op '{op}' with 'by' requires 'value' as a non-empty dict of "
-                        f"numbers keyed by values of '{self.by}' "
-                        '(e.g. {"WLgroup00": 10.0, "WLgroup01": 1.0})'
-                    )
-                    raise ValueError(msg)
-                if op == "div" and any(x == 0 for x in v.values()):
-                    msg = "op 'div' cannot divide by zero (a weight is 0)"
-                    raise ValueError(msg)
-            elif _num(v):
-                # スカラー重みセット(全行同一の定数)を by つきで参照した場合
-                if op == "div" and v == 0:
-                    msg = "op 'div' cannot divide by zero"
-                    raise ValueError(msg)
-            else:
-                msg = (
-                    f"op '{op}' with 'by' requires 'value' as a dict of numbers (per-value weights) or a single number"
-                )
-                raise ValueError(msg)
-        elif op == "diff":
-            if not isinstance(v, list) or len(v) != _DIFF_SELECTIONS:
-                msg = "op 'diff' requires 'value': [a, b] — exactly two selections (result = a - b)"
+        elif not _is_number(self.weight):
+            msg = "'weight' requires a dict of numbers or a single number"
+            raise ValueError(msg)
+
+    def _check_ref_combination(self) -> None:
+        """`ref`(名前付きセット参照)と他フィールドの組み合わせを検査する。
+
+        参照先の中身の形状検査は、ref 解決後の再検証
+        (ScorePart.resolve_selection_refs)に任せる。
+
+        Raises:
+            ValueError: value と ref が同時に指定されたとき、op 'expr' に
+                ref が付いているとき、または変換opの ref に 'by' が無いとき。
+
+        """
+        if self.value is not None:
+            msg = "give either 'value' or 'ref' (a named set), not both"
+            raise ValueError(msg)
+        if self.op == "expr":
+            msg = "op 'expr' takes no selections, so 'ref' is not applicable"
+            raise ValueError(msg)
+        if self.op in TRANSFORM_OPS and self.by is None:
+            msg = (
+                f"op '{self.op}' with 'ref' (a weight set) also needs 'by': the axis whose "
+                'values the weights are keyed by (e.g. "by": "WLgroup")'
+            )
+            raise ValueError(msg)
+
+    def _check_filter_shape(self) -> None:
+        """Op 'filter' の選択の形状検査(単一要素リストはスカラーへ正規化)。
+
+        Raises:
+            ValueError: value が無いとき、空リストのとき、または選択に
+                ネストしたリストが混ざっているとき。
+
+        """
+        v = self.value
+        if isinstance(v, list):
+            if not v:
+                msg = "op 'filter' requires 'value' (at least one selection)"
                 raise ValueError(msg)
             if any(isinstance(x, list) for x in v):
                 msg = (
-                    "op 'diff': each selection must be a scalar or, for combined axes, a "
-                    'dict like {"State": ..., "Read_Label": ...} — not a nested list'
+                    "op 'filter': each selection must be a scalar or, for combined axes, "
+                    "a dict {axis: value} — not a nested list"
                 )
                 raise ValueError(msg)
-        elif op in MULTI_OPS:
-            if v is not None:
-                if not isinstance(v, list):
-                    self.value = v = [v]
-                if any(isinstance(x, list) for x in v):
-                    msg = (
-                        f"op '{op}': each selection must be a scalar or, for combined axes, "
-                        "a dict {axis: value} — not a nested list"
-                    )
-                    raise ValueError(msg)
-        elif op == "expr":
-            if not self.expr:
-                msg = "op 'expr' requires 'expr'"
+            if len(v) == 1:
+                self.value = v[0]
+        elif v is None:
+            msg = "op 'filter' requires 'value'"
+            raise ValueError(msg)
+
+    def _check_transform_shape(self) -> None:
+        """変換op(add/sub/mul/div)の value 形状検査(0除算もここで拒否)。
+
+        Raises:
+            ValueError: value が op の要求する形(by 無しは数値、by 付きは
+                空でない数値の辞書または数値1つ)でないとき、または op 'div'
+                の定数・重みに 0 が含まれるとき。
+
+        """
+        v = self.value
+        if self.by is None:
+            if not _is_number(v):
+                msg = f"op '{self.op}' requires a numeric 'value'"
                 raise ValueError(msg)
-            if v is not None:
-                msg = "op 'expr' takes no 'value'; select inside the expression via by[...]"
+            if self.op == "div" and v == 0:
+                msg = "op 'div' cannot divide by zero"
                 raise ValueError(msg)
-        return self
+        elif isinstance(v, dict):
+            if not v or not all(_is_number(x) for x in v.values()):
+                msg = (
+                    f"op '{self.op}' with 'by' requires 'value' as a non-empty dict of "
+                    f"numbers keyed by values of '{self.by}' "
+                    '(e.g. {"WLgroup00": 10.0, "WLgroup01": 1.0})'
+                )
+                raise ValueError(msg)
+            if self.op == "div" and any(x == 0 for x in v.values()):
+                msg = "op 'div' cannot divide by zero (a weight is 0)"
+                raise ValueError(msg)
+        elif _is_number(v):
+            # スカラー重みセット(全行同一の定数)を by つきで参照した場合
+            if self.op == "div" and v == 0:
+                msg = "op 'div' cannot divide by zero"
+                raise ValueError(msg)
+        else:
+            msg = (
+                f"op '{self.op}' with 'by' requires 'value' as a dict of numbers "
+                "(per-value weights) or a single number"
+            )
+            raise ValueError(msg)
+
+    def _check_diff_shape(self) -> None:
+        """Op 'diff' の value 形状検査: ちょうど2つの選択の組(順序あり)であること。
+
+        Raises:
+            ValueError: value が要素2つのリストでないとき、または選択に
+                ネストしたリストが混ざっているとき。
+
+        """
+        v = self.value
+        if not isinstance(v, list) or len(v) != _DIFF_SELECTIONS:
+            msg = "op 'diff' requires 'value': [a, b] — exactly two selections (result = a - b)"
+            raise ValueError(msg)
+        if any(isinstance(x, list) for x in v):
+            msg = (
+                "op 'diff': each selection must be a scalar or, for combined axes, a "
+                'dict like {"State": ..., "Read_Label": ...} — not a nested list'
+            )
+            raise ValueError(msg)
+
+    def _normalize_multi_shape(self) -> None:
+        """Mean/sum/min/max の選択の形状検査(スカラー選択はリストへ正規化)。
+
+        Raises:
+            ValueError: 選択にネストしたリストが混ざっているとき。
+
+        """
+        v = self.value
+        if v is None:
+            return
+        if not isinstance(v, list):
+            self.value = v = [v]
+        if any(isinstance(x, list) for x in v):
+            msg = (
+                f"op '{self.op}': each selection must be a scalar or, for combined axes, "
+                "a dict {axis: value} — not a nested list"
+            )
+            raise ValueError(msg)
+
+    def _check_expr_shape(self) -> None:
+        """Op 'expr' の検査: expr が必須で、value は取らない。
+
+        Raises:
+            ValueError: expr が無いとき、または value が指定されているとき。
+
+        """
+        if not self.expr:
+            msg = "op 'expr' requires 'expr'"
+            raise ValueError(msg)
+        if self.value is not None:
+            msg = "op 'expr' takes no 'value'; select inside the expression via by[...]"
+            raise ValueError(msg)
 
 
 class AxisAggregation(AggregationSpec):
@@ -476,45 +585,60 @@ class ScorePart(BaseModel):
         if not any(s.ref is not None or s.weight_ref is not None for s in specs):
             return self
 
-        def _resolve(spec_dict: dict) -> None:
-            wref = spec_dict.get("weight_ref")
-            if wref is not None:
-                if wref not in weight_sets:
-                    msg = (
-                        f"score part '{self.name}': unknown weight set '{wref}' "
-                        f"(defined weight sets: {sorted(weight_sets)})"
-                    )
-                    raise ValueError(msg)
-                spec_dict["weight"] = deepcopy(weight_sets[wref])
-                spec_dict["weight_ref"] = None
-            ref = spec_dict.get("ref")
-            if ref is None:
-                return
-            if spec_dict.get("op") in TRANSFORM_OPS:
-                if ref not in weight_sets:
-                    msg = (
-                        f"score part '{self.name}': unknown weight set '{ref}' "
-                        f"(defined weight sets: {sorted(weight_sets)})"
-                    )
-                    raise ValueError(msg)
-                spec_dict["value"] = deepcopy(weight_sets[ref])
-            else:
-                if ref not in selection_sets:
-                    msg = (
-                        f"score part '{self.name}': unknown selection set '{ref}' "
-                        f"(defined sets: {sorted(selection_sets)})"
-                    )
-                    raise ValueError(msg)
-                spec_dict["value"] = deepcopy(selection_sets[ref])
-            spec_dict["ref"] = None
-
         data = self.model_dump()
         for spec_dict in data["aggregations"].values():
-            _resolve(spec_dict)
+            self._resolve_refs_in_spec(spec_dict, selection_sets, weight_sets)
         if data.get("relative"):
             for step_dict in data["relative"]["denominator_pre_aggregation"]:
-                _resolve(step_dict)
+                self._resolve_refs_in_spec(step_dict, selection_sets, weight_sets)
         return ScorePart.model_validate(data)
+
+    def _resolve_refs_in_spec(
+        self,
+        spec_dict: dict[str, Any],
+        selection_sets: dict[str, list[Any]],
+        weight_sets: dict[str, Any],
+    ) -> None:
+        """1つの集計指示 dict の weight_ref / ref を参照先の中身へ展開する。
+
+        spec_dict はその場で書き換え、展開後の weight_ref / ref は None に
+        戻す(インラインで書いた場合と同じ形にする)。resolve_selection_refs
+        専用の下請けで、model_dump() した dict に対して使う。
+
+        Raises:
+            ValueError: 参照先の重みセット・選択セットが定義されていない
+                とき。
+
+        """
+        wref = spec_dict.get("weight_ref")
+        if wref is not None:
+            if wref not in weight_sets:
+                msg = (
+                    f"score part '{self.name}': unknown weight set '{wref}' "
+                    f"(defined weight sets: {sorted(weight_sets)})"
+                )
+                raise ValueError(msg)
+            spec_dict["weight"] = deepcopy(weight_sets[wref])
+            spec_dict["weight_ref"] = None
+        ref = spec_dict.get("ref")
+        if ref is None:
+            return
+        if spec_dict.get("op") in TRANSFORM_OPS:
+            if ref not in weight_sets:
+                msg = (
+                    f"score part '{self.name}': unknown weight set '{ref}' "
+                    f"(defined weight sets: {sorted(weight_sets)})"
+                )
+                raise ValueError(msg)
+            spec_dict["value"] = deepcopy(weight_sets[ref])
+        else:
+            if ref not in selection_sets:
+                msg = (
+                    f"score part '{self.name}': unknown selection set '{ref}' (defined sets: {sorted(selection_sets)})"
+                )
+                raise ValueError(msg)
+            spec_dict["value"] = deepcopy(selection_sets[ref])
+        spec_dict["ref"] = None
 
 
 class GroupDef(BaseModel):

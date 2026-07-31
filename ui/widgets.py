@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
 import streamlit as st
@@ -125,13 +126,24 @@ def parse_scalar(text: str) -> bool | int | float | str:
     return t
 
 
+@dataclass(frozen=True)
+class AxisInput:
+    """軸の値1つぶんの入力欄の仕様(value_widget に渡す)。
+
+    ラベル・値の候補・表示関数は軸ごとに一緒に決まるので束ねている。
+    candidates が空(None 含む)のときは自由入力欄になる。
+    """
+
+    label: str
+    candidates: list | None
+    format_func: Callable[[object], str] = str
+
+
 def value_widget(
     container: DeltaGenerator | ModuleType,
-    label: str,
-    candidates: list | None,
+    axis_input: AxisInput,
     current: object,
     key: str,
-    format_func: Callable[[object], str] = str,
 ) -> object:
     """軸の値1つの入力。
 
@@ -143,10 +155,12 @@ def value_widget(
         値。自由入力が空の間は None。
 
     """
-    if candidates:
-        index = candidates.index(current) if current in candidates else 0
-        return container.selectbox(label, candidates, index=index, key=key, format_func=format_func)
-    text = container.text_input(label, value="" if current is None else str(current), key=key)
+    if axis_input.candidates:
+        index = axis_input.candidates.index(current) if current in axis_input.candidates else 0
+        return container.selectbox(
+            axis_input.label, axis_input.candidates, index=index, key=key, format_func=axis_input.format_func
+        )
+    text = container.text_input(axis_input.label, value="" if current is None else str(current), key=key)
     return parse_scalar(text) if text.strip() else None
 
 
@@ -166,7 +180,9 @@ def dict_selection_row(
     cols = st.columns(len(axes))
     current = current if isinstance(current, dict) else {}
     return {
-        a: value_widget(col, a, catalog.get(a), current.get(a), f"{key}_{a}", _axis_format(a, measure_labels))
+        a: value_widget(
+            col, AxisInput(a, catalog.get(a), _axis_format(a, measure_labels)), current.get(a), f"{key}_{a}"
+        )
         for col, a in zip(cols, axes, strict=False)
     }
 
@@ -186,7 +202,9 @@ def selection_widget(
     """
     if len(axes) > 1:
         return dict_selection_row(axes, catalog, current, key, measure_labels)
-    return value_widget(st, axes[0], catalog.get(axes[0]), current, key, _axis_format(axes[0], measure_labels))
+    return value_widget(
+        st, AxisInput(axes[0], catalog.get(axes[0]), _axis_format(axes[0], measure_labels)), current, key
+    )
 
 
 def selection_list_widget(
@@ -247,14 +265,27 @@ _TRANSFORM_LABELS = {
 }
 
 
-def _transform_editor(
-    spec: dict[str, Any],
-    op: str,
-    by_candidates: list[str],
-    by_value_labels: dict[str, list],
-    weight_set_names: list[str],
-    key: str,
-) -> None:
+@dataclass(frozen=True)
+class EditorContext:
+    """集計指示・相対化エディタに渡す画面側の文脈(読み取り専用)。
+
+    パーツ編集画面(app.py)が組み立てる。catalog は軸名 → 値候補
+    (不明なら None)、set_names は参照できる選択セット名。
+    `by_candidates` / `by_value_labels` / `weight_set_names` は変換ステップ
+    ("__xxx__")と集計時重みの「軸の値ごとの定数(重み)」入力用: 対象軸の
+    候補・軸ごとの値ラベル・参照できる重みセット名。`measure_labels` は
+    Measure 軸の複合表示「dataName (Measure N)」用の 番号 → dataName 対応。
+    """
+
+    catalog: dict[str, list | None]
+    set_names: list[str]
+    by_candidates: list[str] = field(default_factory=list)
+    by_value_labels: dict[str, list] = field(default_factory=dict)
+    weight_set_names: list[str] = field(default_factory=list)
+    measure_labels: dict[int, str] = field(default_factory=dict)
+
+
+def _transform_editor(spec: dict[str, Any], op: str, ctx: EditorContext, key: str) -> None:
     """変換ステップ(定数演算)の入力欄。
 
     全行共通の定数か、by 軸の値ごとの
@@ -279,15 +310,15 @@ def _transform_editor(
         )
         return
 
-    if not by_candidates:
+    if not ctx.by_candidates:
         st.caption("値ごとの定数を使うにはグループ定義(画面3)を作成してください")
         spec.pop("by", None)
         return
     cur = spec.get("by")
     spec["by"] = st.selectbox(
         "対象軸(この軸の値ごとに定数を変える)",
-        by_candidates,
-        index=by_candidates.index(cur) if cur in by_candidates else 0,
+        ctx.by_candidates,
+        index=ctx.by_candidates.index(cur) if cur in ctx.by_candidates else 0,
         key=f"{key}_tby",
         help="通常はグループ派生軸(例: WLgroup)。この軸がまだ列として残っている位置にステップを置いてください",
     )
@@ -301,7 +332,7 @@ def _transform_editor(
         horizontal=True,
     )
     if src == sources[0]:
-        if not weight_set_names:
+        if not ctx.weight_set_names:
             st.caption("重みセットが未定義です(画面3のグループ定義で作成、または設定jsoncの WLgroupWeight を読み込み)")
             spec["ref"] = None
             return
@@ -309,14 +340,14 @@ def _transform_editor(
         cur_ref = spec.get("ref")
         spec["ref"] = st.selectbox(
             "重みセット",
-            weight_set_names,
-            index=weight_set_names.index(cur_ref) if cur_ref in weight_set_names else 0,
+            ctx.weight_set_names,
+            index=ctx.weight_set_names.index(cur_ref) if cur_ref in ctx.weight_set_names else 0,
             key=f"{key}_tref",
         )
         return
 
     spec.pop("ref", None)
-    labels = by_value_labels.get(spec["by"]) or []
+    labels = ctx.by_value_labels.get(spec["by"]) or []
     v = spec.get("value")
     current = v if isinstance(v, dict) else {}
     if labels:
@@ -336,6 +367,29 @@ def _transform_editor(
         }
     else:
         st.caption("この軸の値の候補が分かりません。グループ派生軸を選ぶか、jsonc で直接記入してください")
+
+
+def _weight_by_value_editor(spec: dict[str, Any], labels: list[Any], key: str) -> None:
+    """集計時重みの「値ごとに入力」欄(spec['weight'] を辞書で編集する)。"""
+    w = spec.get("weight")
+    current = w if isinstance(w, dict) else {}
+    if labels:
+        weights = {}
+        for i, label in enumerate(labels):
+            v = current.get(label)
+            weights[label] = st.number_input(
+                str(label),
+                value=float(v) if isinstance(v, (int, float)) else 1.0,
+                key=f"{key}_wv{i}",
+            )
+        spec["weight"] = weights
+    elif current:
+        # 値の候補が分からない軸: 既存の辞書のキーだけ編集できる
+        spec["weight"] = {
+            k: st.number_input(str(k), value=float(v), key=f"{key}_wvk{i}") for i, (k, v) in enumerate(current.items())
+        }
+    else:
+        st.caption("この軸の値の候補が分かりません。重みセットを使うか、jsonc で直接記入してください")
 
 
 def _agg_weight_editor(
@@ -396,51 +450,17 @@ def _agg_weight_editor(
             "重み", value=float(v) if isinstance(v, (int, float)) else 1.0, key=f"{key}_wc"
         )
         return
-    w = spec.get("weight")
-    current = w if isinstance(w, dict) else {}
-    if labels:
-        weights = {}
-        for i, label in enumerate(labels):
-            v = current.get(label)
-            weights[label] = st.number_input(
-                str(label),
-                value=float(v) if isinstance(v, (int, float)) else 1.0,
-                key=f"{key}_wv{i}",
-            )
-        spec["weight"] = weights
-    elif current:
-        # 値の候補が分からない軸: 既存の辞書のキーだけ編集できる
-        spec["weight"] = {
-            k: st.number_input(str(k), value=float(v), key=f"{key}_wvk{i}") for i, (k, v) in enumerate(current.items())
-        }
-    else:
-        st.caption("この軸の値の候補が分かりません。重みセットを使うか、jsonc で直接記入してください")
+    _weight_by_value_editor(spec, labels, key)
 
 
-def agg_editor(
-    entry: str,
-    spec: dict[str, Any],
-    catalog: dict[str, list | None],
-    set_names: list[str],
-    key: str,
-    by_candidates: list[str] | None = None,
-    by_value_labels: dict[str, list] | None = None,
-    weight_set_names: list[str] | None = None,
-    measure_labels: dict[int, str] | None = None,
-) -> None:
-    """Order エントリごとの集計指示エディタ(設計書 画面2)。
+def _op_widget(entry: str, spec: dict[str, Any], key: str) -> str:
+    """演算(op)の選択欄。op が変わったら op 固有のフィールドを掃除する。
 
-    選んだ op に関係する入力欄だけを出すので、value/values の混同は
-    UI 上は構造的に起きない。`spec` をその場で書き換える。
+    Returns:
+        選ばれた op(`spec['op']` にも反映済み)。
 
-    `by_candidates` / `by_value_labels` / `weight_set_names` は変換ステップ
-    ("__xxx__")の「軸の値ごとの定数(重み)」入力用: 対象軸の候補・軸ごとの
-    値ラベル・参照できる重みセット名。`measure_labels` は Measure 軸の複合表示
-    「dataName (Measure N)」用の 番号 → dataName 対応。
     """
-    axes = entry.split(COMBINED_SEP)
     is_virtual = entry.startswith("__")
-
     ops: list[str] = list(STEP_OPS) if is_virtual else AXIS_OPS
     raw_op = spec.get("op")
     cur_op = raw_op if raw_op in ops else ops[0]
@@ -455,122 +475,134 @@ def agg_editor(
         key=f"{key}_op",
         format_func=_fmt if is_virtual else str,
     )
-    if op != spec.get("op"):
+    if op != spec.get("op") and not (op in TRANSFORM_OPS and spec.get("op") in TRANSFORM_OPS):
         # op が変わった: op 固有のフィールドが残らないよう掃除する
         # ("axis" だけは残す: 事前集計ステップは軸名を spec 内に持つため。
         # 変換op同士の切り替えでは by/value/ref を保つ — 演算だけ変える操作なので)
-        if not (op in TRANSFORM_OPS and spec.get("op") in TRANSFORM_OPS):
-            axis_field = spec.get("axis")
-            spec.clear()
-            if axis_field is not None:
-                spec["axis"] = axis_field
-        spec["op"] = op
+        axis_field = spec.get("axis")
+        spec.clear()
+        if axis_field is not None:
+            spec["axis"] = axis_field
     spec["op"] = op
+    return op
+
+
+def _unary_editor(spec: dict[str, Any], op: str, key: str) -> None:
+    """定数を取らない行単位の関数(abs/log)。log は床(floor)だけを入力する。"""
+    for k in ("value", "by", "ref"):
+        spec.pop(k, None)
+    if op == "log":
+        v = spec.get("floor")
+        spec["floor"] = st.number_input(
+            "floor",
+            value=float(v) if isinstance(v, (int, float)) else 1e-6,
+            format="%.1e",
+            key=f"{key}_floor",
+            help="log(max(|x|, floor)) を計算します。0 や負の値でも発散しないための床です",
+        )
+    else:
+        spec.pop("floor", None)
+
+
+def _filter_editor(spec: dict[str, Any], axes: list[str], ctx: EditorContext, key: str) -> None:
+    """対象値で行を絞る filter op の入力欄(Measure 軸なら dataName 注記も付ける)。"""
+    from ui import state as ui_state
+
+    spec.pop("ref", None)
+    cands = ctx.catalog.get(axes[0])
+    if len(axes) == 1 and cands:
+        # 候補が分かる単一軸は複数選択可(複数 = is_in: 選んだ値の行を
+        # すべて残し、後段の集計に複製として流す)
+        cur = spec.get("value")
+        cur_list = cur if isinstance(cur, list) else ([cur] if cur is not None else [])
+        picked = st.multiselect(
+            f"{axes[0]} の値(複数選ぶと該当する値の行をすべて残します)",
+            cands,
+            default=[v for v in cur_list if v in cands],
+            key=f"{key}_fv",
+            format_func=_axis_format(axes[0], ctx.measure_labels),
+        )
+        spec["value"] = picked[0] if len(picked) == 1 else picked
+    else:
+        spec["value"] = selection_widget(axes, ctx.catalog, spec.get("value"), f"{key}_fv", ctx.measure_labels)
+    if axes == ["Measure"]:
+        ui_state.annotate_measure_labels(spec, ctx.measure_labels)
+
+
+def _diff_editor(spec: dict[str, Any], axes: list[str], ctx: EditorContext, key: str) -> None:
+    """2値の差を取る diff op(結果 = a - b)の入力欄。直接指定と選択セット参照を選べる。"""
+    source = st.radio(
+        "選択方法",
+        ["直接指定", "選択セット(ref)"],
+        key=f"{key}_dsrc",
+        horizontal=True,
+        index=1 if spec.get("ref") else 0,
+    )
+    if source == "選択セット(ref)":
+        spec.pop("value", None)
+        _ref_widget(spec, ctx.set_names, key)
+    else:
+        spec.pop("ref", None)
+        raw = spec.get("value")
+        v = raw if isinstance(raw, list) and len(raw) == _DIFF_OPERANDS else [None, None]
+        st.caption("結果 = a - b")
+        a = selection_widget(axes, ctx.catalog, v[0], f"{key}_da", ctx.measure_labels)
+        b = selection_widget(axes, ctx.catalog, v[1], f"{key}_db", ctx.measure_labels)
+        spec["value"] = [a, b]
+
+
+def _multi_op_editor(spec: dict[str, Any], axes: list[str], ctx: EditorContext, key: str) -> None:
+    """mean/sum/min/max の対象選択(全値・値を選択・選択セット)と集計時重みの入力欄。"""
+    modes = ["全値", "値を選択", "選択セット(ref)"]
+    if spec.get("ref"):
+        mode_idx = 2
+    elif spec.get("value") is not None:
+        mode_idx = 1
+    else:
+        mode_idx = 0
+    mode = st.radio("対象", modes, index=mode_idx, key=f"{key}_mode", horizontal=True)
+    if mode == "全値":
+        spec.pop("value", None)
+        spec.pop("ref", None)
+    elif mode == "選択セット(ref)":
+        spec.pop("value", None)
+        _ref_widget(spec, ctx.set_names, key)
+    else:
+        spec.pop("ref", None)
+        if not isinstance(spec.get("value"), list):
+            spec["value"] = []
+        # dict が持つリストそのものを渡す: 行の追加・削除の変更が
+        # st.rerun() をまたいで生き残るように
+        spec["value"] = selection_list_widget(axes, ctx.catalog, spec["value"], f"{key}_mv", ctx.measure_labels)
+    if len(axes) == 1:
+        # 集計時重み(複合軸は jsonc 直接記入のみ対応)。値ラベルは
+        # by_value_labels 優先: グループ派生軸(WLgroup等)の名前は
+        # catalog(データ軸の値)には無く、そちらにしか入っていない
+        labels = ctx.by_value_labels.get(axes[0]) or ctx.catalog.get(axes[0]) or []
+        _agg_weight_editor(spec, labels, ctx.weight_set_names, key)
+
+
+def agg_editor(entry: str, spec: dict[str, Any], ctx: EditorContext, key: str) -> None:
+    """Order エントリごとの集計指示エディタ(設計書 画面2)。
+
+    選んだ op に関係する入力欄だけを出すので、value/values の混同は
+    UI 上は構造的に起きない。`spec` をその場で書き換える。
+    `ctx` は画面側が組み立てた文脈(EditorContext のフィールド説明を参照)。
+    """
+    axes = entry.split(COMBINED_SEP)
+    op = _op_widget(entry, spec, key)
 
     if op in UNARY_OPS:
-        # 定数を取らない行単位の関数。log は床(floor)だけを入力する
-        for k in ("value", "by", "ref"):
-            spec.pop(k, None)
-        if op == "log":
-            v = spec.get("floor")
-            spec["floor"] = st.number_input(
-                "floor",
-                value=float(v) if isinstance(v, (int, float)) else 1e-6,
-                format="%.1e",
-                key=f"{key}_floor",
-                help="log(max(|x|, floor)) を計算します。0 や負の値でも発散しないための床です",
-            )
-        else:
-            spec.pop("floor", None)
-        return
-
-    if op in TRANSFORM_OPS:
-        _transform_editor(
-            spec,
-            op,
-            by_candidates or [],
-            by_value_labels or {},
-            weight_set_names or [],
-            key,
-        )
-        return
-
-    if op == "filter":
-        from ui import state as ui_state
-
-        spec.pop("ref", None)
-        cands = catalog.get(axes[0])
-        if len(axes) == 1 and cands:
-            # 候補が分かる単一軸は複数選択可(複数 = is_in: 選んだ値の行を
-            # すべて残し、後段の集計に複製として流す)
-            cur = spec.get("value")
-            cur_list = cur if isinstance(cur, list) else ([cur] if cur is not None else [])
-            picked = st.multiselect(
-                f"{axes[0]} の値(複数選ぶと該当する値の行をすべて残します)",
-                cands,
-                default=[v for v in cur_list if v in cands],
-                key=f"{key}_fv",
-                format_func=_axis_format(axes[0], measure_labels),
-            )
-            spec["value"] = picked[0] if len(picked) == 1 else picked
-        else:
-            spec["value"] = selection_widget(axes, catalog, spec.get("value"), f"{key}_fv", measure_labels)
-        if axes == ["Measure"]:
-            ui_state.annotate_measure_labels(spec, measure_labels or {})
-        return
-
-    if op == "diff":
-        source = st.radio(
-            "選択方法",
-            ["直接指定", "選択セット(ref)"],
-            key=f"{key}_dsrc",
-            horizontal=True,
-            index=1 if spec.get("ref") else 0,
-        )
-        if source == "選択セット(ref)":
-            spec.pop("value", None)
-            _ref_widget(spec, set_names, key)
-        else:
-            spec.pop("ref", None)
-            raw = spec.get("value")
-            v = raw if isinstance(raw, list) and len(raw) == _DIFF_OPERANDS else [None, None]
-            st.caption("結果 = a - b")
-            a = selection_widget(axes, catalog, v[0], f"{key}_da", measure_labels)
-            b = selection_widget(axes, catalog, v[1], f"{key}_db", measure_labels)
-            spec["value"] = [a, b]
-        return
-
-    if op in MULTI_OPS:
-        modes = ["全値", "値を選択", "選択セット(ref)"]
-        if spec.get("ref"):
-            mode_idx = 2
-        elif spec.get("value") is not None:
-            mode_idx = 1
-        else:
-            mode_idx = 0
-        mode = st.radio("対象", modes, index=mode_idx, key=f"{key}_mode", horizontal=True)
-        if mode == "全値":
-            spec.pop("value", None)
-            spec.pop("ref", None)
-        elif mode == "選択セット(ref)":
-            spec.pop("value", None)
-            _ref_widget(spec, set_names, key)
-        else:
-            spec.pop("ref", None)
-            if not isinstance(spec.get("value"), list):
-                spec["value"] = []
-            # dict が持つリストそのものを渡す: 行の追加・削除の変更が
-            # st.rerun() をまたいで生き残るように
-            spec["value"] = selection_list_widget(axes, catalog, spec["value"], f"{key}_mv", measure_labels)
-        if len(axes) == 1:
-            # 集計時重み(複合軸は jsonc 直接記入のみ対応)。値ラベルは
-            # by_value_labels 優先: グループ派生軸(WLgroup等)の名前は
-            # catalog(データ軸の値)には無く、そちらにしか入っていない
-            labels = (by_value_labels or {}).get(axes[0]) or catalog.get(axes[0]) or []
-            _agg_weight_editor(spec, labels, weight_set_names or [], key)
-        return
-
-    if op == "expr":
+        _unary_editor(spec, op, key)
+    elif op in TRANSFORM_OPS:
+        _transform_editor(spec, op, ctx, key)
+    elif op == "filter":
+        _filter_editor(spec, axes, ctx, key)
+    elif op == "diff":
+        _diff_editor(spec, axes, ctx, key)
+    elif op in MULTI_OPS:
+        _multi_op_editor(spec, axes, ctx, key)
+    elif op == "expr":
         spec["expr"] = st.text_input(
             "式",
             value=spec.get("expr") or "",
@@ -578,28 +610,17 @@ def agg_editor(
             help="values = この軸の全値のリスト。by[値] で特定の値を参照。"
             "例: max(values) - min(values), by['R2A'] + by['A2R']",
         )
-        return
 
 
-def relative_editor(
-    part: dict[str, Any],
-    catalog: dict[str, list | None],
-    set_names: list[str],
-    key: str,
-    measure_labels: dict[int, str] | None = None,
-) -> None:
-    """相対化ブロックのエディタ。
+def _relative_toggle(part: dict[str, Any], ctx: EditorContext, key: str) -> dict[str, Any] | None:
+    """相対化の ON/OFF チェックボックス。
 
-    part['relative'] の存在=ON(エンジンに
-    enabled フラグは無い)。OFF にしたら split 軸を `order` へ復帰させる
-    (放置するとエンジンが暗黙に集約して分子と分母の行が混ざる)。
-    ON にしたとき・split 軸を変えたときは対称に、新しい split 軸を `order`
-    から外す。
+    切り替え時の `order` の付け替え(ui.state の enable/disable)を経て
+    st.rerun() する。
 
-    split 軸は任意の軸から選べる(旧仕様の Override 限定は廃止 —
-    docs/spec_change_dataname_measure.md)。基本形は Measure 番号での指定で、
-    dataName が分かる番号は「dataName (Measure N)」と表示し、選んだ番号の
-    dataName を labels 注記として設定に残す。
+    Returns:
+        ON のとき part['relative'] の dict。OFF のとき None。
+
     """
     from ui import state as ui_state
 
@@ -607,18 +628,28 @@ def relative_editor(
     enabled = st.checkbox("相対化する(基準測定との比を取る)", value=prev_enabled, key=f"{key}_on")
     if not enabled:
         if prev_enabled:
-            restored = ui_state.disable_relative(part, catalog)
+            restored = ui_state.disable_relative(part, ctx.catalog)
             if restored:
                 st.toast(f"'{restored}' を order に戻しました(filter {part['aggregations'][restored].get('value')})")
             st.rerun()
-        return
+        return None
     if not prev_enabled:
-        ui_state.enable_relative(part, catalog)
+        ui_state.enable_relative(part, ctx.catalog)
         st.rerun()
-    rel = part["relative"]
+    return part["relative"]
 
-    axis_opts = [a for a in catalog if a != "InBatchEpoch"]
-    cur_split = rel.get("split_axis")
+
+def _relative_split_row(part: dict[str, Any], rel: dict[str, Any], ctx: EditorContext, key: str) -> None:
+    """Split 軸の選択と分子/分母の値の入力(1行3列)。
+
+    split 軸を変えたときは `order` の付け替え(ui.state)を経て st.rerun()
+    する。Measure 軸なら選んだ番号の dataName を labels 注記として残す。
+    """
+    from ui import state as ui_state
+
+    axis_opts = [a for a in ctx.catalog if a != "InBatchEpoch"]
+    # split_axis は保存形式上は任意型になりうるが、UI が書くのは常に軸名(str)
+    cur_split = cast("str | None", rel.get("split_axis"))
     if cur_split and cur_split not in axis_opts:
         axis_opts = [cur_split, *axis_opts]
     c1, c2, c3 = st.columns(3)
@@ -630,18 +661,24 @@ def relative_editor(
         help="通常は Measure(測定番号)。Measure 列の無い集計済み type では任意の軸(Chip 等)で割り算・引き算ができます",
     )
     if new_split != rel.get("split_axis"):
-        ui_state.change_split_axis(part, new_split, catalog)
+        ui_state.change_split_axis(part, new_split, ctx.catalog)
         st.rerun()
-    fmt = _axis_format(new_split, measure_labels)
-    cands = catalog.get(new_split)
-    rel["numerator_when"] = value_widget(c2, "分子側の値(評価側)", cands, rel.get("numerator_when"), f"{key}_num", fmt)
+    fmt = _axis_format(new_split, ctx.measure_labels)
+    cands = ctx.catalog.get(new_split)
+    rel["numerator_when"] = value_widget(
+        c2, AxisInput("分子側の値(評価側)", cands, fmt), rel.get("numerator_when"), f"{key}_num"
+    )
     rel["denominator_when"] = value_widget(
-        c3, "分母側の値(基準側)", cands, rel.get("denominator_when"), f"{key}_den", fmt
+        c3, AxisInput("分母側の値(基準側)", cands, fmt), rel.get("denominator_when"), f"{key}_den"
     )
     if new_split == "Measure":
-        ui_state.annotate_measure_labels(rel, measure_labels or {})
+        ui_state.annotate_measure_labels(rel, ctx.measure_labels)
     else:
         rel.pop("labels", None)
+
+
+def _relative_mode_row(rel: dict[str, Any], key: str) -> None:
+    """mode(ratio/diff)と ratio 用 offset の入力(1行2列)。"""
     c4, c5 = st.columns(2)
     modes = ["ratio", "diff"]
     rel["mode"] = c4.selectbox(
@@ -658,6 +695,9 @@ def relative_editor(
     else:
         rel.pop("denominator_offset", None)
 
+
+def _denominator_pre_agg_editor(rel: dict[str, Any], ctx: EditorContext, key: str) -> None:
+    """分母側だけの事前集計(denominator_pre_aggregation)の編集 expander。"""
     with st.expander(
         "分母の事前集計 (denominator_pre_aggregation)", expanded=bool(rel.get("denominator_pre_aggregation"))
     ):
@@ -668,7 +708,7 @@ def relative_editor(
         steps = rel.setdefault("denominator_pre_aggregation", [])
         for i, step in enumerate(steps):
             c_axis, c_del = st.columns([8, 1])
-            axis_opts = sorted(catalog)
+            axis_opts = sorted(ctx.catalog)
             step["axis"] = c_axis.selectbox(
                 "軸",
                 axis_opts,
@@ -679,10 +719,32 @@ def relative_editor(
                 # 直後の st.rerun() が例外でループごと抜けるため、削除後に反復は続かない
                 steps.pop(i)
                 st.rerun()
-            agg_editor(step["axis"], step, catalog, set_names, key=f"{key}_pre{i}", measure_labels=measure_labels)
+            agg_editor(step["axis"], step, ctx, key=f"{key}_pre{i}")
             st.divider()
         if st.button("+ 事前集計を追加", key=f"{key}_pre_add"):
-            steps.append({"axis": min(catalog), "op": "mean"})
+            steps.append({"axis": min(ctx.catalog), "op": "mean"})
             st.rerun()
         if not steps:
             rel.pop("denominator_pre_aggregation", None)
+
+
+def relative_editor(part: dict[str, Any], ctx: EditorContext, key: str) -> None:
+    """相対化ブロックのエディタ。
+
+    part['relative'] の存在=ON(エンジンに
+    enabled フラグは無い)。OFF にしたら split 軸を `order` へ復帰させる
+    (放置するとエンジンが暗黙に集約して分子と分母の行が混ざる)。
+    ON にしたとき・split 軸を変えたときは対称に、新しい split 軸を `order`
+    から外す。
+
+    split 軸は任意の軸から選べる(旧仕様の Override 限定は廃止 —
+    docs/spec_change_dataname_measure.md)。基本形は Measure 番号での指定で、
+    dataName が分かる番号は「dataName (Measure N)」と表示し、選んだ番号の
+    dataName を labels 注記として設定に残す。
+    """
+    rel = _relative_toggle(part, ctx, key)
+    if rel is None:
+        return
+    _relative_split_row(part, rel, ctx, key)
+    _relative_mode_row(rel, key)
+    _denominator_pre_agg_editor(rel, ctx, key)

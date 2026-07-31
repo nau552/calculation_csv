@@ -7,12 +7,13 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
-from ui import state
+from ui import state, widgets
 
 if TYPE_CHECKING:
     from streamlit.testing.v1 import AppTest
@@ -53,6 +54,14 @@ def _load_data(at: AppTest, data_dir: Path) -> None:
     at.button(key="load_btn").click().run()
     assert not at.exception
     assert at.session_state["context"]["types"] == MINI_TYPES
+
+
+def _create_part(at: AppTest) -> str:
+    # 画面2で雛形パーツを1つ作成し、その _uid を返す(配線テストの共通前段)
+    at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
+    at.button(key="add_part_btn").click().run()
+    assert not at.exception
+    return at.session_state["score_file"]["score_parts"][-1]["_uid"]
 
 
 def test_app_starts(at: AppTest) -> None:
@@ -435,3 +444,490 @@ def test_draft_autosaved_and_restored(
     at3.run()
     at3.text_input(key="draft_user_input").set_value("jiro").run()
     assert all(b.key != "restore_btn" for b in at3.button)
+
+
+# 以降は UI 分割リファクタリングの安全網: 分割対象の画面・エディタの
+# 「ウィジェット操作 → score_file 反映」の配線を AppTest で固定する。
+# state 関数単体の挙動は tests/test_ui_state.py が持つので、ここでは
+# 画面から呼ばれる経路(キー・表示・エラー文)だけを検証する。
+
+
+def test_add_axis_entry_with_default_agg_and_delete(at: AppTest, data_dir_mini: Path) -> None:
+    """エントリの追加 → 既定の集計spec → 削除、の配線を検証する。
+
+    軸を選んで「追加」すると order の末尾に既定 op(カテゴリ軸は filter)付きで
+    入り、使用済みの軸は追加候補から消える。エディタの「削除」で order と
+    aggregations の両方から消える。
+    """
+    _load_data(at, data_dir_mini)
+    uid = _create_part(at)
+    at.selectbox(key=f"{uid}_addax").set_value("Read_Label").run()
+    at.button(key=f"{uid}_addax_btn").click().run()
+    assert not at.exception
+    part = at.session_state["score_file"]["score_parts"][0]
+    assert part["order"][-1] == "Read_Label"
+    assert part["aggregations"]["Read_Label"] == {"op": "filter", "value": "read_level_upper1"}
+    # 使用済みになった軸は追加候補から消える
+    assert "Read_Label" not in at.selectbox(key=f"{uid}_addax").options
+    # 「編集するエントリ」で選択 → エディタ内の削除ボタン
+    at.selectbox(key=f"{uid}_sel_entry").set_value("Read_Label").run()
+    at.button(key=f"{uid}_ed_del").click().run()
+    assert not at.exception
+    part = at.session_state["score_file"]["score_parts"][0]
+    assert "Read_Label" not in part["order"]
+    assert "Read_Label" not in part["aggregations"]
+
+
+def test_add_combined_axis_entry(at: AppTest, data_dir_mini: Path) -> None:
+    """複合軸(束ねて追加)の配線を検証する。
+
+    複数選択して「束ねて追加」すると '&' 連結のエントリが op=sum で入り、
+    束ねた軸は個別軸としても追加候補から消える。
+    """
+    _load_data(at, data_dir_mini)
+    uid = _create_part(at)
+    at.multiselect(key=f"{uid}_addcombo").set_value(["Erase_Override", "Program_Override"]).run()
+    at.button(key=f"{uid}_addcombo_btn").click().run()
+    assert not at.exception
+    part = at.session_state["score_file"]["score_parts"][0]
+    assert part["order"][-1] == "Erase_Override&Program_Override"
+    assert part["aggregations"]["Erase_Override&Program_Override"] == {"op": "sum"}
+    assert "Erase_Override" not in at.selectbox(key=f"{uid}_addax").options
+
+
+def test_agg_op_change_cleans_spec_and_value_selection(at: AppTest, data_dir_mini: Path) -> None:
+    """集計エディタの op 変更と対象選択の配線を検証する。
+
+    State の filter → max で op 固有フィールド(value)が掃除され、
+    「値を選択」モードの multiselect が spec["value"] に反映される。
+    """
+    _load_data(at, data_dir_mini)
+    uid = _create_part(at)
+    at.selectbox(key=f"{uid}_sel_entry").set_value("State").run()
+    at.selectbox(key=f"{uid}_State_op").set_value("max").run()
+    assert not at.exception
+    part = at.session_state["score_file"]["score_parts"][0]
+    assert part["aggregations"]["State"] == {"op": "max"}
+    at.radio(key=f"{uid}_State_mode").set_value("値を選択").run()
+    at.multiselect(key=f"{uid}_State_mv").set_value(["R2A", "A2B"]).run()
+    assert not at.exception
+    part = at.session_state["score_file"]["score_parts"][0]
+    assert part["aggregations"]["State"] == {"op": "max", "value": ["R2A", "A2B"]}
+
+
+def test_transform_step_add_and_constant_edit(at: AppTest, data_dir_mini: Path) -> None:
+    """変換ステップの追加と定数編集の配線を検証する。
+
+    「+ 変換ステップを追加」で __offset__(add, 0)が order に入り、
+    変換op同士の切り替え(add → mul)では値を保ったまま演算だけ変わる。
+    """
+    _load_data(at, data_dir_mini)
+    uid = _create_part(at)
+    at.button(key=f"{uid}_addvirt_btn").click().run()
+    assert not at.exception
+    part = at.session_state["score_file"]["score_parts"][0]
+    assert part["order"][-1] == "__offset__"
+    assert part["aggregations"]["__offset__"] == {"op": "add", "value": 0}
+    at.selectbox(key=f"{uid}_sel_entry").set_value("__offset__").run()
+    at.selectbox(key=f"{uid}___offset___op").set_value("mul").run()
+    assert not at.exception
+    at.number_input(key=f"{uid}___offset___tv").set_value(2.5).run()
+    assert not at.exception
+    part = at.session_state["score_file"]["score_parts"][0]
+    assert part["aggregations"]["__offset__"] == {"op": "mul", "value": 2.5}
+
+
+def test_transform_step_per_axis_values(at: AppTest, data_dir_mini: Path) -> None:
+    """変換ステップの「軸の値ごと(重み)」入力の配線を検証する。
+
+    by 軸を選ぶと軸の値ごとの数値欄が出て、spec に by と値の辞書が入る。
+    """
+    _load_data(at, data_dir_mini)
+    uid = _create_part(at)
+    at.button(key=f"{uid}_addvirt_btn").click().run()
+    at.selectbox(key=f"{uid}_sel_entry").set_value("__offset__").run()
+    at.radio(key=f"{uid}___offset___tmode").set_value("軸の値ごと(重み)").run()
+    assert not at.exception
+    at.selectbox(key=f"{uid}___offset___tby").set_value("State").run()
+    assert not at.exception
+    at.number_input(key=f"{uid}___offset___tw0").set_value(2.0).run()
+    assert not at.exception
+    part = at.session_state["score_file"]["score_parts"][0]
+    assert part["aggregations"]["__offset__"] == {
+        "op": "add",
+        "by": "State",
+        "value": {"R2A": 2.0, "A2R": 0.0, "A2B": 0.0, "B2A": 0.0},
+    }
+
+
+def test_agg_weight_constant_per_value_and_off(at: AppTest, data_dir_mini: Path) -> None:
+    """集計時重みの入力モード切替の配線を検証する。
+
+    「定数1つ」で weight がスカラー、「値ごとに入力」で軸の値ごとの辞書になり、
+    「なし」に戻すと weight が消える。
+    """
+    _load_data(at, data_dir_mini)
+    uid = _create_part(at)
+    at.selectbox(key=f"{uid}_sel_entry").set_value("WL").run()
+    at.radio(key=f"{uid}_WL_wmode").set_value("定数1つ").run()
+    at.number_input(key=f"{uid}_WL_wc").set_value(0.5).run()
+    assert not at.exception
+    part = at.session_state["score_file"]["score_parts"][0]
+    assert part["aggregations"]["WL"] == {"op": "mean", "weight": 0.5}
+    at.radio(key=f"{uid}_WL_wmode").set_value("値ごとに入力").run()
+    at.number_input(key=f"{uid}_WL_wv0").set_value(2.0).run()
+    assert not at.exception
+    part = at.session_state["score_file"]["score_parts"][0]
+    assert part["aggregations"]["WL"]["weight"] == {0: 2.0, 1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0, 5: 1.0}
+    at.radio(key=f"{uid}_WL_wmode").set_value("なし").run()
+    assert not at.exception
+    assert at.session_state["score_file"]["score_parts"][0]["aggregations"]["WL"] == {"op": "mean"}
+
+
+def test_agg_weight_ref_from_group_def_weight_set(at: AppTest, data_dir_mini: Path) -> None:
+    """グループ定義の重みセットを集計時重みが参照する配線を検証する。
+
+    画面3のグループ定義で作った重みセット(WLgWeight)が、画面2の
+    「重みセット(ref)」の候補に現れ、weight_ref として保存される。
+    """
+    _load_data(at, data_dir_mini)
+    uid = _create_part(at)
+    at.sidebar.radio(key="screen").set_value(SCREEN_SETS).run()
+    at.text_input(key="new_gdef_name").set_value("WLg")
+    at.selectbox(key="new_gdef_axis").set_value("WL")
+    at.button(key="new_gdef_btn").click().run()
+    assert not at.exception
+    at.checkbox(key="gdef_WLg_w_on").set_value(True).run()
+    assert not at.exception
+    assert at.session_state["score_file"]["weightSets"] == {"WLgWeight": 1.0}
+    at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
+    at.selectbox(key=f"{uid}_sel_entry").set_value("WL").run()
+    at.radio(key=f"{uid}_WL_wmode").set_value("重みセット(ref)").run()
+    assert not at.exception
+    part = at.session_state["score_file"]["score_parts"][0]
+    assert part["aggregations"]["WL"] == {"op": "mean", "weight_ref": "WLgWeight"}
+
+
+def test_relative_split_axis_change_via_ui(at: AppTest, data_dir_mini: Path) -> None:
+    """相対化エディタの split 軸変更・mode 変更の画面配線を検証する。
+
+    Measure → State に変えると旧軸が既定 op つきで order へ戻り、新軸が order
+    から外れ、分子/分母は新軸の候補で初期化し直され、labels 注記は捨てられる。
+    mode を diff にすると offset が消える。
+    """
+    _load_data(at, data_dir_mini)
+    uid = _create_part(at)
+    at.checkbox(key=f"{uid}_rel_on").set_value(True).run()
+    assert not at.exception
+    part = at.session_state["score_file"]["score_parts"][0]
+    assert part["relative"]["split_axis"] == "Measure"
+    assert "Measure" not in part["order"]
+    assert part["relative"]["labels"]["1"] == "evaluation_param_read_level_1"
+    at.selectbox(key=f"{uid}_rel_sa").set_value("State").run()
+    assert not at.exception
+    part = at.session_state["score_file"]["score_parts"][0]
+    rel = part["relative"]
+    assert rel["split_axis"] == "State"
+    assert (rel["numerator_when"], rel["denominator_when"]) == ("A2R", "R2A")
+    assert "labels" not in rel
+    assert "State" not in part["order"]
+    assert part["order"][-1] == "Measure"
+    assert part["aggregations"]["Measure"] == {"op": "filter", "value": 0}
+    at.selectbox(key=f"{uid}_rel_mode").set_value("diff").run()
+    assert not at.exception
+    rel = at.session_state["score_file"]["score_parts"][0]["relative"]
+    assert rel["mode"] == "diff"
+    assert "denominator_offset" not in rel
+    at.selectbox(key=f"{uid}_rel_num").set_value("A2B").run()
+    assert not at.exception
+    assert at.session_state["score_file"]["score_parts"][0]["relative"]["numerator_when"] == "A2B"
+
+
+def test_relative_denominator_pre_aggregation_via_ui(at: AppTest, data_dir_mini: Path) -> None:
+    """分母の事前集計の追加・編集・削除の配線を検証する。"""
+    _load_data(at, data_dir_mini)
+    uid = _create_part(at)
+    at.checkbox(key=f"{uid}_rel_on").set_value(True).run()
+    at.button(key=f"{uid}_rel_pre_add").click().run()
+    assert not at.exception
+    rel = at.session_state["score_file"]["score_parts"][0]["relative"]
+    assert rel["denominator_pre_aggregation"] == [{"axis": "Block", "op": "mean"}]
+    at.selectbox(key=f"{uid}_rel_pre0_axis").set_value("WL").run()
+    at.selectbox(key=f"{uid}_rel_pre0_op").set_value("sum").run()
+    assert not at.exception
+    rel = at.session_state["score_file"]["score_parts"][0]["relative"]
+    assert rel["denominator_pre_aggregation"] == [{"axis": "WL", "op": "sum"}]
+    at.button(key=f"{uid}_rel_pre0_del").click().run()
+    assert not at.exception
+    rel = at.session_state["score_file"]["score_parts"][0]["relative"]
+    assert "denominator_pre_aggregation" not in rel
+
+
+def test_order_step_move_buttons_without_sortables(
+    at: AppTest, data_dir_mini: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Order ステップの上下移動・削除・✎ 選択(フォールバックUI)を検証する。
+
+    AppTest では D&D 部品を操作できないため、HAS_SORTABLES を False にして
+    streamlit-sortables 無し環境の上下ボタン側の配線を固定する。
+    """
+    monkeypatch.setattr(widgets, "HAS_SORTABLES", False)
+    _load_data(at, data_dir_mini)
+    uid = _create_part(at)
+    at.button(key=f"{uid}_up2").click().run()  # 3番目の WL を1つ上へ
+    assert not at.exception
+    part = at.session_state["score_file"]["score_parts"][0]
+    assert part["order"][:4] == ["Measure", "WL", "State", "STR"]
+    at.button(key=f"{uid}_dn1").click().run()  # WL を1つ下へ(元に戻る)
+    assert not at.exception
+    part = at.session_state["score_file"]["score_parts"][0]
+    assert part["order"][:4] == ["Measure", "State", "WL", "STR"]
+    at.button(key=f"{uid}_rm3").click().run()  # STR を削除
+    assert not at.exception
+    part = at.session_state["score_file"]["score_parts"][0]
+    assert "STR" not in part["order"]
+    assert "STR" not in part["aggregations"]
+    at.button(key=f"{uid}_sel4").click().run()  # ✎ で Chip を編集対象に
+    assert not at.exception
+    assert at.session_state[f"{uid}_sel_entry"] == "Chip"
+
+
+def test_group_def_create_and_edit_rows_via_ui(at: AppTest, data_dir_mini: Path) -> None:
+    """グループ定義の作成・行の追加と編集・Physical 記法切替の配線を検証する。"""
+    _load_data(at, data_dir_mini)
+    at.sidebar.radio(key="screen").set_value(SCREEN_SETS).run()
+    at.text_input(key="new_gdef_name").set_value("WLg")
+    at.selectbox(key="new_gdef_axis").set_value("WL")
+    at.button(key="new_gdef_btn").click().run()
+    assert not at.exception
+    gd = at.session_state["score_file"]["groupDefs"]["WLg"]
+    assert gd == {"axis": "WL", "groups": {}, "definedInLogical": True}
+    at.button(key="gdef_WLg_add").click().run()
+    assert not at.exception
+    assert at.session_state["score_file"]["groupDefs"]["WLg"]["groups"] == {"g1": [0, 0]}
+    at.text_input(key="gdef_WLg_0_lbl").set_value("low")
+    at.number_input(key="gdef_WLg_0_hi").set_value(2).run()
+    assert not at.exception
+    assert at.session_state["score_file"]["groupDefs"]["WLg"]["groups"] == {"low": [0, 2]}
+    at.checkbox(key="gdef_WLg_phys").set_value(True).run()
+    assert not at.exception
+    assert at.session_state["score_file"]["groupDefs"]["WLg"]["definedInLogical"] is False
+
+
+def test_group_def_delete_guarded_by_part_reference_via_ui(at: AppTest, data_dir_mini: Path) -> None:
+    """参照ありのグループ定義削除が UI 上でガードされるフローを検証する。
+
+    グループ派生軸はパーツのエントリ追加候補に現れ、order に置いている間は
+    画面3の削除がエラーになる。エントリを外すと削除できる。
+    """
+    _load_data(at, data_dir_mini)
+    uid = _create_part(at)
+    at.sidebar.radio(key="screen").set_value(SCREEN_SETS).run()
+    at.text_input(key="new_gdef_name").set_value("WLg")
+    at.selectbox(key="new_gdef_axis").set_value("WL")
+    at.button(key="new_gdef_btn").click().run()
+    at.button(key="gdef_WLg_add").click().run()
+    assert not at.exception
+    # 画面2: グループ派生軸をエントリとして order に置く
+    at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
+    at.selectbox(key=f"{uid}_addax").set_value("WLg").run()
+    at.button(key=f"{uid}_addax_btn").click().run()
+    assert not at.exception
+    part = at.session_state["score_file"]["score_parts"][0]
+    assert part["order"][-1] == "WLg"
+    assert part["aggregations"]["WLg"] == {"op": "filter", "value": "g1"}
+    # 画面3: 参照がある間は削除できない
+    at.sidebar.radio(key="screen").set_value(SCREEN_SETS).run()
+    at.button(key="gdef_WLg_del").click().run()
+    assert any("参照されているため削除できません" in e.value for e in at.error)
+    assert "WLg" in at.session_state["score_file"]["groupDefs"]
+    # エントリを外すと削除できる
+    at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
+    at.selectbox(key=f"{uid}_sel_entry").set_value("WLg").run()
+    at.button(key=f"{uid}_ed_del").click().run()
+    at.sidebar.radio(key="screen").set_value(SCREEN_SETS).run()
+    at.button(key="gdef_WLg_del").click().run()
+    assert not at.exception
+    assert "WLg" not in at.session_state["score_file"]["groupDefs"]
+
+
+def test_selection_set_create_edit_and_alias_via_ui(at: AppTest, data_dir_mini: Path) -> None:
+    """選択セットの作成・単一軸の値編集・別名保存の配線を検証する。"""
+    _load_data(at, data_dir_mini)
+    at.sidebar.radio(key="screen").set_value(SCREEN_SETS).run()
+    at.text_input(key="new_set_name").set_value("states")
+    next(b for b in at.button if b.label == "作成" and b.key is None).click().run()
+    assert not at.exception
+    assert at.session_state["score_file"]["selectionSets"]["states"] == []
+    at.radio(key="set_states_kind").set_value("単一軸の値リスト").run()
+    at.selectbox(key="set_states_axis").set_value("State").run()
+    at.multiselect(key="set_states_vals").set_value(["R2A", "A2B"]).run()
+    assert not at.exception
+    assert at.session_state["score_file"]["selectionSets"]["states"] == ["R2A", "A2B"]
+    at.text_input(key="set_states_alias").set_value("states2")
+    at.button(key="set_states_alias_btn").click().run()
+    assert not at.exception
+    sets = at.session_state["score_file"]["selectionSets"]
+    assert sets["states2"] == ["R2A", "A2B"]
+    assert sets["states"] == ["R2A", "A2B"]  # 元は残る(コピー)
+
+
+def test_selection_set_delete_guarded_via_ui(at: AppTest, data_dir_mini: Path) -> None:
+    """参照ありの選択セット削除が UI 上でガードされるフローを検証する。
+
+    diff の「選択セット(ref)」で参照している間は削除がエラーになり、
+    参照を直接指定へ戻すと削除できる。
+    """
+    _load_data(at, data_dir_mini)
+    uid = _create_part(at)
+    at.sidebar.radio(key="screen").set_value(SCREEN_SETS).run()
+    at.text_input(key="new_set_name").set_value("pairs")
+    next(b for b in at.button if b.label == "作成" and b.key is None).click().run()
+    assert not at.exception
+    # 画面2: State を diff にして選択セットを参照する
+    at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
+    at.selectbox(key=f"{uid}_sel_entry").set_value("State").run()
+    at.selectbox(key=f"{uid}_State_op").set_value("diff").run()
+    at.radio(key=f"{uid}_State_dsrc").set_value("選択セット(ref)").run()
+    assert not at.exception
+    part = at.session_state["score_file"]["score_parts"][0]
+    assert part["aggregations"]["State"] == {"op": "diff", "ref": "pairs"}
+    # 画面3: 参照がある間は削除できない
+    at.sidebar.radio(key="screen").set_value(SCREEN_SETS).run()
+    at.button(key="set_pairs_del").click().run()
+    assert any("参照されているため削除できません" in e.value for e in at.error)
+    assert "pairs" in at.session_state["score_file"]["selectionSets"]
+    # 参照を直接指定へ戻すと削除できる(画面3を経ると編集エントリの
+    # ウィジェット状態は破棄されるので、State を選び直してから操作する)
+    at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
+    at.selectbox(key=f"{uid}_sel_entry").set_value("State").run()
+    at.radio(key=f"{uid}_State_dsrc").set_value("直接指定").run()
+    assert "ref" not in at.session_state["score_file"]["score_parts"][0]["aggregations"]["State"]
+    at.sidebar.radio(key="screen").set_value(SCREEN_SETS).run()
+    at.button(key="set_pairs_del").click().run()
+    assert not at.exception
+    assert "pairs" not in at.session_state["score_file"]["selectionSets"]
+
+
+def test_load_config_only_via_ui(at: AppTest, fixtures_dir: Path) -> None:
+    """「データなし(設定のみ編集)」の読み込みボタンの配線を検証する。
+
+    設定未入力なら設定を促すエラー、設定 jsonc のパスを入れると config 由来の
+    context(config_only)とパーツが入り、画面1に設定のみ編集中の案内が出る。
+    """
+    at.toggle(key="paths_mode").set_value(True).run()
+    at.radio(key="data_mode").set_value("なし").run()
+    at.button(key="load_btn").click().run()
+    assert not at.exception
+    assert any("設定 jsonc を入れてください" in e.value for e in at.error)
+    at.text_input(key="config_path_input").set_value(str(fixtures_dir / "config.jsonc"))
+    at.button(key="load_btn").click().run()
+    assert not at.exception
+    assert at.session_state["context"]["config_only"] is True
+    sf = at.session_state["score_file"]
+    assert [p["name"] for p in sf["score_parts"]] == ["FBC_A2B_upper1_rel", "dVtBudget_R2A"]
+    assert any("設定のみ編集中" in i.value for i in at.info)
+
+
+def test_load_path_error_messages(at: AppTest, data_dir_mini: Path) -> None:
+    """パス指定読み込みの未カバーのエラー表示を検証する。
+
+    設定 jsonc の実体なし・ダミーのディレクトリ未入力・Chip 数と Board 数の
+    個数不一致、それぞれが明確なエラーになる。
+    """
+    at.toggle(key="paths_mode").set_value(True).run()
+    at.text_input(key="data_dir_input").set_value(str(data_dir_mini))
+    at.text_input(key="config_path_input").set_value("no/such/config.jsonc")
+    at.button(key="load_btn").click().run()
+    assert not at.exception
+    assert any("設定 jsonc が見つかりません" in e.value for e in at.error)
+    at.text_input(key="config_path_input").set_value("")
+    at.radio(key="data_mode").set_value("ダミー(測定前)").run()
+    at.button(key="load_btn").click().run()
+    assert not at.exception
+    assert any("ダミー一式ディレクトリのパスを入力してください" in e.value for e in at.error)
+    at.text_input(key="dummy_chips").set_value("2,3,4")
+    at.button(key="load_btn").click().run()
+    assert not at.exception
+    assert any("一致しません" in e.value for e in at.error)
+
+
+def test_custom_part_params_editor_via_ui(at: AppTest, data_dir_mini: Path, fixtures_dir: Path) -> None:
+    """自作関数パーツの params 行エディタの配線を検証する。
+
+    追加 → 改名と型付き値入力 → 名前重複のエラー(dict は壊れない)→ 行削除。
+    """
+    at.toggle(key="paths_mode").set_value(True).run()
+    at.text_input(key="data_dir_input").set_value(str(data_dir_mini))
+    at.text_input(key="custom_path_input").set_value(str(fixtures_dir / "custom_parts.py"))
+    at.button(key="load_btn").click().run()
+    assert not at.exception
+    at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
+    at.selectbox(key="new_part_type").set_value("custom").run()
+    at.button(key="add_part_btn").click().run()
+    assert not at.exception
+    uid = at.session_state["score_file"]["score_parts"][0]["_uid"]
+    at.button(key=f"{uid}_prm_add").click().run()
+    assert not at.exception
+    assert at.session_state["score_file"]["score_parts"][0]["params"] == {"param1": 0}
+    at.text_input(key=f"{uid}_prm0_k").set_value("thresh")
+    at.text_input(key=f"{uid}_prm0_v").set_value("1.5").run()
+    assert not at.exception
+    assert at.session_state["score_file"]["score_parts"][0]["params"] == {"thresh": 1.5}
+    # 2行目を追加して同名に改名 → エラー表示になり、params は壊れない
+    at.button(key=f"{uid}_prm_add").click().run()
+    at.text_input(key=f"{uid}_prm1_k").set_value("thresh").run()
+    assert any("パラメータ名が重複しています" in e.value for e in at.error)
+    assert at.session_state["score_file"]["score_parts"][0]["params"] == {"thresh": 1.5, "param2": 0}
+    at.button(key=f"{uid}_prm1_rm").click().run()
+    assert not at.exception
+    assert at.session_state["score_file"]["score_parts"][0]["params"] == {"thresh": 1.5}
+
+
+def test_run_and_export_guards_via_ui(at: AppTest, data_dir_mini: Path) -> None:
+    """テスト計算の前提チェックとエクスポートのゲートの配線を検証する。
+
+    パーツ無しは明確なエラー、検証エラーありは実行拒否+ダウンロードボタン
+    非表示、検証 OK でダウンロードボタンが2つ(全体・パーツ単体)出る。
+    """
+    at.sidebar.radio(key="screen").set_value(SCREEN_TEST).run()
+    at.text_input(key="test_dir").set_value(str(data_dir_mini))
+    at.button(key="run_btn").click().run()
+    assert not at.exception
+    assert any("スコアパーツがありません" in e.value for e in at.error)
+    assert len(at.download_button) == 0
+    at.sidebar.radio(key="screen").set_value("1. データ読み込み").run()
+    _load_data(at, data_dir_mini)
+    _create_part(at)
+    at.session_state["score_file"]["expression"] = "part_1 + ghost"
+    at.sidebar.radio(key="screen").set_value(SCREEN_TEST).run()
+    at.button(key="run_btn").click().run()
+    assert not at.exception
+    assert any("検証エラーがあるため実行できません" in e.value for e in at.error)
+    assert any("エクスポートできません" in w.value for w in at.warning)
+    assert len(at.download_button) == 0
+    at.session_state["score_file"]["expression"] = "part_1"
+    at.run()
+    assert not at.exception
+    assert len(at.download_button) == 2  # score.jsonc 全体 + パーツ単体
+
+
+def test_existing_score_config_in_data_dir_button(
+    at: AppTest, tmp_path: Path, data_dir_mini: Path, fixtures_dir: Path
+) -> None:
+    """データ内で自動検出された設定の「既存スコア設定を読み込む」ボタンを検証する。
+
+    設定欄で指定せずデータディレクトリ内で検出された設定は score_file を勝手に
+    置き換えず、ボタンを押したときだけ既存スコア設定とグループ定義を取り込む。
+    """
+    d = tmp_path / "run"
+    shutil.copytree(data_dir_mini, d)
+    shutil.copy(fixtures_dir / "config.jsonc", d / "config.jsonc")
+    _load_data(at, d)
+    assert at.session_state["context"]["config_source"] == "自動検出"
+    assert at.session_state["score_file"]["score_parts"] == []  # 勝手に置き換えない
+    next(b for b in at.button if b.label == "設定jsonc内の既存スコア設定を読み込んで編集を始める").click().run()
+    assert not at.exception
+    sf = at.session_state["score_file"]
+    assert [p["name"] for p in sf["score_parts"]] == ["FBC_A2B_upper1_rel", "dVtBudget_R2A"]
+    assert "WLgroup" in sf["groupDefs"]

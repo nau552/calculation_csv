@@ -126,7 +126,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `default_custom_parts_path()` | リポジトリ直下の custom_parts.py（固定位置。configからパスは与えない=実験入力からの任意コード実行防止） |
 | `load_custom_module(path)` | importlib でロード（=トップレベル実行。SVNレビュー済み前提） |
 | `list_custom_functions(module)` | モジュール内で定義された公開関数名の一覧（import された名前・`_`始まりは除外） |
-| `compute_custom_part(part, module, ctx)` | 関数を呼び、戻り値が有限な1スカラーであることを検証 |
+| `compute_custom_part(part, module, ctx)` | 関数を呼び、戻り値が有限な1スカラーであることを検証。関数が見つからない・呼び出し可能でないときは **TypeError**(2026-07-31 の品質向上パスで ValueError から変更 — 型の誤りの検査のため) |
 
 ### `scorelib_param/introspect.py` — UI向けメタデータの導出
 | 関数 | 内容 |
@@ -153,9 +153,9 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `_hoistable_prefilters(part, group_defs)` | order 内の位置・`__relative__` の明示/暗黙によらず、可換な filter の行絞り [(軸,値),...] をパイプライン先頭に前出しする判定（リスト値=is_in も対象。キャッシュキーでは tuple 化）。除外は split軸・分母事前集計の軸とその `by`（派生軸は元軸と双方向対応）・複合軸の構成軸。列は落とさず行だけ先に絞る純最適化（結果不変、tests/test_prefilter.py）。診断上の変化: 後段の検証（dVtBudget係数カバレッジ等）は filter 後に残る値だけが対象になる |
 | `SharedComputeContext` | 1回の compute_score_file 内でtype単位のcsv読み込みと `__relative__`/`__dvtbudget__` 直後の中間結果を共有するキャッシュ（結果は共有なしと同一。customパーツは対象外）。前絞りが異なるパーツは共有しない（キーに prefilters を含む） |
 | `_apply_axis_step` | 複合軸なら列を `&` で融合してから aggregate に渡す |
-| `compute_score_part(...)` | 1パーツの計算。type=custom は関数呼び出しへ分岐 |
+| `compute_score_part(...)` | 1パーツの計算。type=custom は関数呼び出しへ分岐。実装は下請けヘルパー(`_compute_custom_part` / `_base_frame` / `_apply_prefilters` / `_prefix_cache_keys` / `_resume_from_cache` / `_apply_pipeline_step`)へ分割済み(2026-07-31、結果不変)。**省略可能引数(group_defs 以降)はキーワード専用**(公開 API 共通 — 品質向上パスで位置渡しを廃止) |
 | `_dummy_axis_values(dir, axis, spec)` / `compute_dummy_part(dir, part, dummy_value, ...)` | vthSkip のダミー計算（0.6.0）: type ファイルが無い epoch 用に、軸の全組み合わせ（要素は map → 他 csv の実在値 → 選択リスト → [0] の順で決定）へダミー値を敷き詰め、**変換ステップをスキップ**して集計だけ適用する（ダミー値=「変換後の値」の意味論 — 設計書12節）。relative / dVtBudget パーツは非対応（明示エラー） |
-| `compute_score_file(dir, run_config, ...)` | 全パーツ計算+expression 評価 → `{"Score": ..., パーツ名: ...}`。`optimization.vthSkip` があり type ファイルが無いパーツは compute_dummy_part で計算し stderr に note を出す |
+| `compute_score_file(dir, run_config, ...)` | 全パーツ計算+expression 評価 → `{"Score": ..., パーツ名: ...}`。`optimization.vthSkip` があり type ファイルが無いパーツは compute_dummy_part で計算し stderr に note を出す。**省略可能引数(dvtbudget_coef 以降)はキーワード専用**(compute_dummy_part・apply_dvtbudget の epoch_col も同様) |
 | `main()` | argparse。`--config --data-dir --dvtbudget-coef --initial-temperature --custom-parts --version`。stdout は結果JSONのみ（版は stderr） |
 
 ---
@@ -219,7 +219,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | 関数 | 内容 |
 |---|---|
 | `_resolve_optional_file(explicit, discover, label)` | 「明示指定優先・無ければ自動検出・**候補複数はエラー**」の共通ルール |
-| `build_context(data_dir, config, coef, geninfo, custom)` | 画面1の読み込み本体。空パス拒否、type/カタログ導出（Measure→dataName 対応の `measure_labels` 含む）、同梱ファイル解決、custom関数一覧化。ctx dict を返す。世代情報json の UI 入力欄は廃止 — UI は geninfo に None を渡し、`{Generation}.json` がディレクトリ内にあれば自動検出して診断にだけ使う |
+| `build_context(data_dir, config, coef, geninfo, custom)` | 画面1の読み込み本体(同梱ファイルごとの解決・読み込みは `_resolve_*`/`_config_context_entries`/`_parse_geninfo` へ分割済み — 2026-07-31、エラー文言不変)。空パス拒否、type/カタログ導出（Measure→dataName 対応の `measure_labels` 含む）、同梱ファイル解決、custom関数一覧化。ctx dict を返す。世代情報json の UI 入力欄は廃止 — UI は geninfo に None を渡し、`{Generation}.json` がディレクトリ内にあれば自動検出して診断にだけ使う |
 | `parse_chip_counts(text, n_boards)` | 「Board ごとの Chip 数」入力のパース（数1つ=全Board共通、カンマ区切り=Board別） |
 | `load_config_only(text)` / `config_only_context(sf)` / `is_run_config_text(text)` | **設定だけ編集モード**: 設定 jsonc（score.jsonc / RunConfig 形式）だけから (score_file, context) を作る。カタログは設定が言及する軸名（値候補無し=自由入力）、measure_labels は labels 注記から回収（`_config_measure_labels`）。RunConfig なら旧 WLgroup も定義として取り込む。テスト計算以外の全機能がデータ無しで動く。is_run_config_text は①の設定を build_context の config として渡せる形式かの判定 |
 | `expand_dummy_bundle(dir, chip_counts)` | ダミー一式を一時ディレクトリへ Board/Chip 展開（scorelib_param.dummy を呼ぶ。展開先は通常の build_context がそのまま読む） |
@@ -240,7 +240,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `save_draft` / `load_draft` / `draft_path_for(user)` | 下書きは**ユーザ名ごと**に `DRAFTS_DIR`（`~/.scorelib_drafts/<名前>.jsonc`。名前はファイル名安全に正規化 — 共用サーバで混ざらないための分離）。score_file+画面1の入力（context_inputs）を保存。旧形式も読める |
 | `export_part(sf, i)` | パーツ単体を自己完結jsoncに（参照する選択セット・グループ定義を同梱） |
 | `score_file_to_jsonc` / `import_score_file` | 全体のエクスポート/インポート（RunConfig形式も受理。エラーはパーツ名付き）。**エクスポートは WL 軸の "WLgroup" 定義と WLgroupWeight を旧形式キーだけに書き出す**（0.7.0 — 合成後 config で実験スクリプトが読む場所がそのまま編集後になり、定義の在り処が常に1つ。読み戻しは ScoreFile 側の吸収と対称） |
-| `run_test_compute(sf, dir, ...)` | ScoreFile dict → RunConfig を組み立てて `compute_score_file` を直接呼ぶ |
+| `run_test_compute(sf, dir, inputs=None)` | ScoreFile dict → RunConfig を組み立てて `compute_score_file` を直接呼ぶ。任意入力5つ(generation / wlgroup / coef_path / custom_path / geninfo_path)は frozen dataclass **`TestComputeInputs`** に束ねた(2026-07-31) |
 
 ### `ui/widgets.py` — 再利用ウィジェット
 | 定義 | 内容 |
@@ -250,8 +250,8 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `parse_scalar(text)` | 自由入力 → bool/int/float/str |
 | `measure_format(mlabels)` / `_axis_format` | Measure 値の複合表示「dataName (Measure N)」（名無しは「Measure N」）。選択・保存は常に番号 |
 | `value_widget` / `dict_selection_row` / `selection_widget` / `selection_list_widget` | 値1個 / 複合軸1行 / どちらか自動 / 可変行リスト（単一軸+候補ありは multiselect）。Measure 軸は複合表示 |
-| `agg_editor(entry, spec, catalog, set_names, key, ..., measure_labels)` | 集計指示エディタ。**opに応じた入力欄だけを出す**（value/values の混同がUI上起きない）。filter は候補のある単一軸で multiselect（複数=is_in、Measure 選択時は labels 注記も付与）。op変更時は古いフィールドを掃除。mean系の単一軸エントリには集計時重み欄（`_agg_weight_editor`: なし/重みセット/値ごと/定数。値ラベルは by_value_labels 優先=グループ派生軸対応）。仮想ステップの op は STEP_OPS: 定数演算は `_transform_editor`、単項op（abs/log — 0.6.0）は定数欄なし・log のみ floor 入力 |
-| `relative_editor(part, catalog, set_names, key, measure_labels)` | 相対化ブロックのエディタ。split軸は**任意の軸**から選択（旧 Override 限定は廃止）、分子/分母は候補プルダウン or 自由入力、Measure 分割時は labels 注記を自動付与。ON/OFF/split変更は state.py の整合関数を呼ぶ。分母事前集計は agg_editor をフル再利用 |
+| `agg_editor(entry, spec, ctx, key)` | 集計指示エディタ(画面側の文脈 — カタログ・セット名・by 候補・重みセット名・Measure ラベル — は frozen dataclass **`EditorContext`** で受ける。2026-07-31 に束ね直し、op 別の入力欄は `_unary_editor` / `_filter_editor` / `_diff_editor` / `_multi_op_editor` へ分割)。**opに応じた入力欄だけを出す**（value/values の混同がUI上起きない）。filter は候補のある単一軸で multiselect（複数=is_in、Measure 選択時は labels 注記も付与）。op変更時は古いフィールドを掃除。mean系の単一軸エントリには集計時重み欄（`_agg_weight_editor`: なし/重みセット/値ごと/定数。値ラベルは by_value_labels 優先=グループ派生軸対応）。仮想ステップの op は STEP_OPS: 定数演算は `_transform_editor`、単項op（abs/log — 0.6.0）は定数欄なし・log のみ floor 入力 |
+| `relative_editor(part, ctx, key)` | 相対化ブロックのエディタ(`EditorContext` 受け。ON/OFF・split行・mode行・分母事前集計をヘルパー分割 — 2026-07-31)。split軸は**任意の軸**から選択（旧 Override 限定は廃止）、分子/分母は候補プルダウン or 自由入力、Measure 分割時は labels 注記を自動付与。ON/OFF/split変更は state.py の整合関数を呼ぶ。分母事前集計は agg_editor をフル再利用 |
 
 ### `ui/app.py` — 5画面本体（ウィジェット配置と session_state だけ）
 | 区分 | 内容 |
@@ -290,7 +290,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 |---|---|
 | `StagedEpoch` | 計算可能になった 1 epoch（data_dir / created_dir=削除対象 / error=skip理由） |
 | `stage_epoch(ref, staging_root)` | tar.gz/zip があればビューdir（展開+リンク）を作成。csv/csv.gz のみなら元dirをそのまま使う。例外は error に落とす |
-| `validate_epoch(staged, types, needs_dvt)` | config が参照する type のファイル存在チェック（固定リストではなく config 駆動）。vthSkip でダミー値を持つ type は runner が必須対象から外す（無くても計算できるため — 0.6.0） |
+| `validate_epoch(staged, types, *, needs_dvtbudget)` | config が参照する type のファイル存在チェック（固定リストではなく config 駆動）。vthSkip でダミー値を持つ type は runner が必須対象から外す（無くても計算できるため — 0.6.0） |
 | `cleanup_epoch(staged)` | 自分が作ったビューdirだけ削除（入力元は絶対に触らない） |
 
 安全対策: アーカイブ内の絶対パス・`..` エントリは拒否。ディレクトリごと固めた
@@ -301,7 +301,7 @@ tar は展開後に1段持ち上げる（flatten）。symlink 不可の環境は
 |---|---|
 | `EPOCH_COL` | 識別軸の予約名 `"Epoch"`。設計内の軸・グループ定義と衝突したらエラー |
 | `BatchComputeContext` | SharedComputeContext のバッチ版: type ごとに全 epoch を resolve → `Epoch` 列付与 → lazy concat → streaming collect。prefix_cache は親のまま共有。type ファイルの無い epoch は結合対象外（vthSkip 中の epoch は compute_score_batch がダミー値で埋める — 0.6.0） |
-| `compute_score_batch(epochs, config, coef)` | 1バッチ一括計算 → `BatchResult`。パーツごとに `compute_score_part(..., identity_axes=("Epoch",))`、custom は epoch ループ、expression は epoch ごとに評価。type ファイルの無い epoch は vthSkip のダミー値（compute_dummy_part を1回計算して使い回し）で埋めて dummy_used に記録、ダミー値が無ければ failed へ |
+| `compute_score_batch(epochs, config, coef)` | 1バッチ一括計算 → `BatchResult`。実装は共通入力 `_BatchInputs`・バッチ内共有状態 `_BatchState` の2 dataclass と段階別ヘルパー(温度読み込み/パーツ計算/ダミー埋め/行組み立て)へ分割済み(2026-07-31、結果・フォールバック条件不変)。パーツごとに `compute_score_part(..., identity_axes=("Epoch",))`、custom は epoch ループ、expression は epoch ごとに評価。type ファイルの無い epoch は vthSkip のダミー値（compute_dummy_part を1回計算して使い回し）で埋めて dummy_used に記録、ダミー値が無ければ failed へ |
 | `BatchResult` | scores（Epoch/History/EpochNo/Score/全パーツの DataFrame）+ failed（{Epoch: 理由}）+ dummy_used（vthSkip ダミーで計算した {Epoch: パーツ名リスト} — 0.6.0） |
 
 エラー処理: バッチ一括計算が失敗したら epoch 逐次計算（compute_score_file）に

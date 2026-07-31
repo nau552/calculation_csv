@@ -159,5 +159,5 @@ def test_run_config_selection_sets_flow(data_dir_mini: Path, dvtbudget_coef_path
     )
     coef = io_jsonc.load_dvtbudget_coef(dvtbudget_coef_path)
     temps = load_board_temperatures(data_dir_mini / "initial_temperature.csv")
-    result = compute_score_file(data_dir_mini, config, coef, temps)
+    result = compute_score_file(data_dir_mini, config, dvtbudget_coef=coef, board_temperatures=temps)
     assert result["Score"] == pytest.approx(result["p"])

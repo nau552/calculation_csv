@@ -70,7 +70,7 @@ def load_config_file(path: str | Path) -> dict:
     return json.loads(_strip_jsonc(Path(path).read_text(encoding="utf-8")))
 
 
-def _plain(obj: object) -> object:
+def _plain(obj: object) -> object:  # ruff: ignore[PLR0911] — isinstance 早期 return の連鎖が最も読みやすい形のため容認
     """比較用の正規化: Series/ndarray/numpy スカラー等を素の Python 型へ変換する。
 
     ブリッジ見本の _jsonable と同じ振る舞い判定。

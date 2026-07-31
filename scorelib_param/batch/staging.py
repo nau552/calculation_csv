@@ -110,6 +110,40 @@ def _view_dir_for(ref: EpochRef, staging_root: Path) -> Path:
     return staging_root / safe_label / f"result.{ref.epoch_no:04d}"
 
 
+def _stage_epoch_unsafe(ref: EpochRef, staging_root: Path) -> StagedEpoch:
+    """stage_epoch の本体(例外はそのまま送出する — error への変換は stage_epoch 側)。
+
+    Returns:
+        計算に渡せる StagedEpoch。data_dir は展開不要なら元ディレクトリ、
+        アーカイブがあればステージング領域のビュー。元ディレクトリが無い
+        場合のみ error 入りで返す。
+
+    """
+    source = ref.source_dir
+    if not source.is_dir():
+        return StagedEpoch(ref, source, error=f"epoch directory not found: {source}")
+    files = [p for p in source.iterdir() if p.is_file()]
+    archives = [p for p in files if _is_archive(p.name)]
+    if not archives:
+        return StagedEpoch(ref, source)
+
+    view = _view_dir_for(ref, staging_root)
+    if view.exists():
+        shutil.rmtree(view)
+    view.mkdir(parents=True)
+    try:
+        for archive in archives:
+            _extract_archive(archive, view)
+        _flatten_single_dir(view)
+        for f in files:
+            if not _is_archive(f.name) and not (view / f.name).exists():
+                _link_or_copy(f, view / f.name)
+    except Exception:
+        shutil.rmtree(view, ignore_errors=True)
+        raise
+    return StagedEpoch(ref, view, created_dir=view)
+
+
 def stage_epoch(ref: EpochRef, staging_root: Path) -> StagedEpoch:
     """1 epoch をエンジンが読める形にする。
 
@@ -123,35 +157,12 @@ def stage_epoch(ref: EpochRef, staging_root: Path) -> StagedEpoch:
 
     """
     try:
-        source = ref.source_dir
-        if not source.is_dir():
-            return StagedEpoch(ref, source, error=f"epoch directory not found: {source}")
-        files = [p for p in source.iterdir() if p.is_file()]
-        archives = [p for p in files if _is_archive(p.name)]
-        if not archives:
-            return StagedEpoch(ref, source)
-
-        view = _view_dir_for(ref, staging_root)
-        if view.exists():
-            shutil.rmtree(view)
-        view.mkdir(parents=True)
-        try:
-            for archive in archives:
-                _extract_archive(archive, view)
-            _flatten_single_dir(view)
-            for f in files:
-                if not _is_archive(f.name) and not (view / f.name).exists():
-                    _link_or_copy(f, view / f.name)
-        except Exception:
-            shutil.rmtree(view, ignore_errors=True)
-            raise
-        return StagedEpoch(ref, view, created_dir=view)
+        return _stage_epoch_unsafe(ref, staging_root)
     except Exception as err:  # ruff: ignore[BLE001] — 理由ごと報告してスキップさせる
         return StagedEpoch(ref, ref.source_dir, error=f"staging failed: {err}")
 
 
-# needs_dvtbudget のキーワード専用化は既存呼び出しの規約(公開シグネチャ)が変わるため見送り
-def validate_epoch(staged: StagedEpoch, required_types: Sequence[str], needs_dvtbudget: bool) -> str | None:  # ruff: ignore[FBT001]
+def validate_epoch(staged: StagedEpoch, required_types: Sequence[str], *, needs_dvtbudget: bool) -> str | None:
     """計算前の安価な検証。エラー文字列(skip理由)か None を返す。
 
     固定リストではなく「config が参照する type」駆動(docs/batch_design.md 8節)。

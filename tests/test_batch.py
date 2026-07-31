@@ -110,7 +110,9 @@ def _sequential_expected(history_tree: tuple[Path, Path, Path], config: RunConfi
         for epoch_dir in sorted(hist.iterdir()):
             no = int(epoch_dir.name.split(".")[1])
             temps = load_board_temperatures(epoch_dir / "initial_temperature.csv")
-            expected[f"{label}#{no:04d}"] = compute_score_file(epoch_dir, config, coef, temps)
+            expected[f"{label}#{no:04d}"] = compute_score_file(
+                epoch_dir, config, dvtbudget_coef=coef, board_temperatures=temps
+            )
     return expected
 
 
@@ -633,7 +635,7 @@ def test_get_score_bridge_example(
         # にあり scorelib_param が kicOpt/scorelib_param にある実運用配置と同じ構図
     )
     temps = load_board_temperatures(epoch_dir / "initial_temperature.csv")
-    expected = compute_score_file(epoch_dir, config, coef, temps)
+    expected = compute_score_file(epoch_dir, config, dvtbudget_coef=coef, board_temperatures=temps)
     assert set(result) == set(expected)
     for key, exp_val in expected.items():
         assert result[key] == pytest.approx(exp_val, rel=1e-9)

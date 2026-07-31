@@ -59,7 +59,7 @@ def _json_key(k: object) -> object:
     return k
 
 
-def _jsonable(obj: object) -> object:
+def _jsonable(obj: object) -> object:  # ruff: ignore[PLR0911] — isinstance 早期 return の連鎖が最も読みやすい形のため容認
     """読み込み済み config dict を json.dump できる形へ再帰変換する。
 
     get_score_bridge_example.py と同じもの — 各ファイル単体で貼れるよう重複させている。
@@ -120,18 +120,99 @@ def _find_scorelib_parent() -> str:
     raise ValueError(msg)
 
 
-def compute_batch_scores(
+def _dump_config_tmp(config: dict) -> str:
+    """読み込み済み config dict を一時 jsonc ファイルへ書き出し、そのパスを返す。
+
+    Returns:
+        書き出した一時ファイルのパス。呼び出し側が使い終わったら削除する。
+
+    """
+    fd, tmp_config = tempfile.mkstemp(suffix=".jsonc", prefix="scorelib_cfg_")
+    with os.fdopen(fd, "w") as f:
+        # ローダ加工済みの dict(pandas Series / numpy 型入り)でも
+        # 書き出せるよう正規化してから dump(JSON は jsonc として妥当)
+        json.dump(_jsonable(config), f)
+    return tmp_config
+
+
+def _run_engine(cmd: list[str], env: dict, log_path: str, timeout: float | None) -> None:
+    """エンジンの CLI を subprocess で実行し、出力を log_path へ保存する。
+
+    Raises:
+        RuntimeError: エンジンの subprocess が異常終了(returncode != 0)したとき。
+            メッセージにログファイルの末尾を含める。
+
+    """
+    # stderr(版数表示・advisory・進捗・除外理由)はログファイルへ保存する。
+    # コンソールで直接見たい場合は stderr=None にして継承させてもよい
+    with Path(log_path).open("w", encoding="utf-8") as log:
+        proc = subprocess.run(
+            cmd,
+            env=env,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+            check=False,  # returncode は直後に自前検査する
+        )
+    if proc.returncode != 0:
+        with Path(log_path).open(encoding="utf-8") as f:
+            tail = "".join(f.readlines()[-15:])
+        msg = f"scorelib_param.batch failed (exit {proc.returncode}). log tail ({log_path}):\n{tail}"
+        raise RuntimeError(msg)
+
+
+def _read_scores(out_csv: str) -> list[dict]:
+    """結果 CSV を読み戻し、epoch ごとの dict のリストへ変換する。
+
+    Returns:
+        epoch ごとの結果 dict のリスト。Epoch / History は文字列のまま、
+        EpochNo は int、Score と各スコアパーツは float(空欄は None)。
+
+    """
+    scores = []
+    with Path(out_csv).open(newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            parsed = {}
+            for key, value in row.items():
+                if key in {"Epoch", "History"}:
+                    parsed[key] = value
+                elif key == "EpochNo":
+                    parsed[key] = int(value)
+                else:  # Score と全スコアパーツ
+                    parsed[key] = float(value) if value else None
+            scores.append(parsed)
+    return scores
+
+
+def _read_failed(out_csv: str) -> dict[str, str]:
+    """除外 epoch の一覧(<out_csv>.failed.csv)があれば読み戻す。
+
+    Returns:
+        {Epoch: 除外理由} の dict。failed.csv が無ければ空 dict(全 epoch 成功)。
+
+    """
+    failed = {}
+    failed_csv = out_csv + ".failed.csv"
+    if Path(failed_csv).exists():
+        with Path(failed_csv).open(newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                failed[row["Epoch"]] = row["reason"]
+    return failed
+
+
+def compute_batch_scores(  # ruff: ignore[PLR0913] — 見本の公開関数: 多数の省略可能キーワード引数は設計(束ねない方針)
     engine_python: str,  # scorelib_param が入っている python 実行ファイルのパス
     config: str | dict,  # config.jsonc の**パス**(推奨)または読み込み済みの config dict。
     # 現行ローダは読み込み時に dict を加工するため、元ファイルの
     # パスを渡すのが正(詳細は get_score_bridge_example.py の同項目)
     histories: list[str],  # result_history ディレクトリのパスのリスト
     out_csv: str,  # 結果 CSV の書き出し先
+    *,  # ここから下は省略可能なオプション(キーワード指定のみ。Python 3.7 でも有効な構文)
     dvtbudget_coef: str | None = None,  # dVtBudget パーツがある場合のみ必須
     batch_size: int | str = "auto",  # "auto" 推奨(メモリから自動選択)
     max_threads: int | None = None,  # マシンを共有する場合に CPU スレッド数を制限
     max_prefetch: int = 2,
-    strict: bool = False,  # ruff: ignore[FBT001, FBT002] — キーワード専用化は呼び出し側の変更を伴うため見送り
+    strict: bool = False,
     generation_info: str | None = None,  # {Generation}.json のパス。Physical記法のグループ定義
     # (WLgroupDefinLogical=False)がある場合のみ必要
     # (各 epoch ディレクトリ内にあれば省略可)
@@ -146,16 +227,12 @@ def compute_batch_scores(
     - config に dict を渡した場合は一時ファイル経由で CLI へ渡す(エンジンは
       Generation / optimization 以外のキーを無視する)
     - エンジンの進捗・警告(batch-size advisory 等)は <out_csv>.log に保存される
-    - 失敗(returncode != 0)は RuntimeError(ログ末尾つき)
+    - 失敗(returncode != 0)は RuntimeError(ログ末尾つき。_run_engine が送出)
 
     Returns:
         (scores, failed) のタプル。scores は epoch ごとの結果 dict のリスト
         (数値列は float/int に変換済み)、failed は {Epoch: 除外理由} の dict
         (空 dict なら全 epoch 成功)。
-
-    Raises:
-        RuntimeError: エンジンの subprocess が異常終了(returncode != 0)したとき。
-            メッセージにログファイルの末尾を含める。
 
     """
     if scorelib_parent is None:
@@ -164,11 +241,7 @@ def compute_batch_scores(
     tmp_config = None
     try:
         if isinstance(config, dict):
-            fd, tmp_config = tempfile.mkstemp(suffix=".jsonc", prefix="scorelib_cfg_")
-            with os.fdopen(fd, "w") as f:
-                # ローダ加工済みの dict(pandas Series / numpy 型入り)でも
-                # 書き出せるよう正規化してから dump(JSON は jsonc として妥当)
-                json.dump(_jsonable(config), f)
+            tmp_config = _dump_config_tmp(config)
             config_path = tmp_config
         else:
             config_path = config
@@ -202,48 +275,13 @@ def compute_batch_scores(
         env = dict(os.environ)
         env["PYTHONPATH"] = scorelib_parent + os.pathsep + env.get("PYTHONPATH", "")
 
-        # stderr(版数表示・advisory・進捗・除外理由)はログファイルへ保存する。
-        # コンソールで直接見たい場合は stderr=None にして継承させてもよい
-        log_path = out_csv + ".log"
-        with Path(log_path).open("w", encoding="utf-8") as log:
-            proc = subprocess.run(
-                cmd,
-                env=env,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                timeout=timeout,
-                check=False,  # returncode は直後に自前検査する
-            )
-        if proc.returncode != 0:
-            with Path(log_path).open(encoding="utf-8") as f:
-                tail = "".join(f.readlines()[-15:])
-            msg = f"scorelib_param.batch failed (exit {proc.returncode}). log tail ({log_path}):\n{tail}"
-            raise RuntimeError(msg)
+        _run_engine(cmd, env, out_csv + ".log", timeout)
     finally:
         if tmp_config is not None:
             with contextlib.suppress(OSError):
                 Path(tmp_config).unlink()
 
-    scores = []
-    with Path(out_csv).open(newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            parsed = {}
-            for key, value in row.items():
-                if key in {"Epoch", "History"}:
-                    parsed[key] = value
-                elif key == "EpochNo":
-                    parsed[key] = int(value)
-                else:  # Score と全スコアパーツ
-                    parsed[key] = float(value) if value else None
-            scores.append(parsed)
-
-    failed = {}
-    failed_csv = out_csv + ".failed.csv"
-    if Path(failed_csv).exists():
-        with Path(failed_csv).open(newline="", encoding="utf-8") as f:
-            for row in csv.DictReader(f):
-                failed[row["Epoch"]] = row["reason"]
-    return scores, failed
+    return _read_scores(out_csv), _read_failed(out_csv)
 
 
 if __name__ == "__main__":

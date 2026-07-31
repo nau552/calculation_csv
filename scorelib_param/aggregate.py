@@ -136,6 +136,105 @@ def apply_transform(lf: pl.LazyFrame, value_col: str, spec: AggregationSpec) -> 
     return lf.with_columns(_combine(spec.op, pl.col(value_col), operand).alias(value_col))
 
 
+def _apply_simple_op(
+    lf: pl.LazyFrame,
+    value_col: str,
+    axis: str,
+    spec: AggregationSpec,
+    group_keys: Sequence[str],
+) -> pl.LazyFrame:
+    """単純集計op(mean/sum/min/max)で軸を潰す(apply_axis_op の下請け)。
+
+    集計時重みの辞書に無い値の行が存在するときのエラーは _per_value_operand が
+    投げる。
+
+    Returns:
+        選択集合での限定・集計時重みの乗算を経て `axis` 列を潰した LazyFrame。
+
+    """
+    # `value` リストを付けると、その選択集合に限定してから集計する
+    target = lf.filter(pl.col(axis).is_in(spec.value)) if spec.value is not None else lf
+    if spec.weight is not None:
+        # 集計時重み: この軸を潰す直前に軸の値ごとの重みを値へ乗じる
+        # (正規化された加重平均ではない: mean なら mean(weight * value))。
+        # 未カバー検出は選択集合で絞った後の行が対象
+        if isinstance(spec.weight, dict):
+            operand = _per_value_operand(target, axis, spec.weight, f"aggregation weights for axis '{axis}'")
+        else:
+            operand = pl.lit(float(spec.weight))
+        target = target.with_columns((pl.col(value_col) * operand).alias(value_col))
+    return _reduce(target, value_col, group_keys, spec.op)
+
+
+def _apply_diff_op(
+    lf: pl.LazyFrame,
+    value_col: str,
+    axis: str,
+    spec: AggregationSpec,
+    group_keys: Sequence[str],
+) -> pl.LazyFrame:
+    """2つの選択の差 value(a) - value(b) で軸を潰す(apply_axis_op の下請け)。
+
+    自分自身との結合で対にする(op="diff" は pydantic の _check_value_shape が
+    2要素リストを保証)。
+
+    Returns:
+        `axis` 列を潰し、値列を差で置き換えた LazyFrame。
+
+    """
+    a_val, b_val = cast("list[Any]", spec.value)
+    a = lf.filter(pl.col(axis) == a_val).drop(axis)
+    b = lf.filter(pl.col(axis) == b_val).drop(axis).rename({value_col: "__b__"})
+    keys = list(group_keys)
+    joined = a.join(b, on=keys, how="left") if keys else a.join(b, how="cross")
+    return joined.with_columns((pl.col(value_col) - pl.col("__b__")).alias(value_col)).drop("__b__")
+
+
+def _apply_expr_op(
+    lf: pl.LazyFrame,
+    value_col: str,
+    axis: str,
+    spec: AggregationSpec,
+    group_keys: Sequence[str],
+) -> pl.LazyFrame:
+    """式(expr)の評価で軸を潰す(apply_axis_op の下請け)。
+
+    Returns:
+        グループごとに式を評価した結果で `axis` 列を潰した LazyFrame。
+
+    Raises:
+        ValueError: expr op に式が無いとき、by 参照でグループ内に同じ軸の値が
+            複数回現れたとき。
+
+    """
+    if not spec.expr:
+        msg = f"expr op for axis '{axis}' requires 'expr'"
+        raise ValueError(msg)
+    # ネスト関数の閉包にはローカル変数の narrowing だけが届く(spec.expr のままだと届かない)
+    expr = spec.expr
+
+    def _eval(vals: list, axis_vals: list) -> float:
+        # 式の中では values(この軸の全値のリスト)と by[軸の値] が使える
+        by: dict = {}
+        for k, v in zip(axis_vals, vals, strict=False):
+            if k in by:
+                msg = (
+                    f"axis value '{k}' appears more than once within a group for axis "
+                    f"'{axis}'; 'by' lookups require unique axis values"
+                )
+                raise ValueError(msg)
+            by[k] = v
+        return evaluate_expression(expr, {"values": vals, "by": by})
+
+    if group_keys:
+        df = lf.group_by(list(group_keys)).agg([pl.col(value_col), pl.col(axis)]).collect()
+        result = list(starmap(_eval, zip(df[value_col].to_list(), df[axis].to_list(), strict=False)))
+        return df.drop(value_col, axis).with_columns(pl.Series(value_col, result)).lazy()
+    df = lf.select([pl.col(value_col), pl.col(axis)]).collect()
+    result_value = _eval(df[value_col].to_list(), df[axis].to_list())
+    return pl.LazyFrame({value_col: [float(result_value)]})
+
+
 def apply_axis_op(
     lf: pl.LazyFrame,
     value_col: str,
@@ -161,59 +260,12 @@ def apply_axis_op(
         if isinstance(spec.value, list):
             return lf.filter(pl.col(axis).is_in(spec.value)).drop(axis)
         return lf.filter(pl.col(axis) == spec.value).drop(axis)
-
     if spec.op in _SIMPLE_OPS:
-        # `value` リストを付けると、その選択集合に限定してから集計する
-        target = lf.filter(pl.col(axis).is_in(spec.value)) if spec.value is not None else lf
-        if spec.weight is not None:
-            # 集計時重み: この軸を潰す直前に軸の値ごとの重みを値へ乗じる
-            # (正規化された加重平均ではない: mean なら mean(weight * value))。
-            # 未カバー検出は選択集合で絞った後の行が対象
-            if isinstance(spec.weight, dict):
-                operand = _per_value_operand(target, axis, spec.weight, f"aggregation weights for axis '{axis}'")
-            else:
-                operand = pl.lit(float(spec.weight))
-            target = target.with_columns((pl.col(value_col) * operand).alias(value_col))
-        return _reduce(target, value_col, group_keys, spec.op)
-
+        return _apply_simple_op(lf, value_col, axis, spec, group_keys)
     if spec.op == "diff":
-        # 2つの選択の差で潰す: value(a) - value(b)。自分自身との結合で対にする
-        # (op="diff" は pydantic の _check_value_shape が2要素リストを保証)
-        a_val, b_val = cast("list[Any]", spec.value)
-        a = lf.filter(pl.col(axis) == a_val).drop(axis)
-        b = lf.filter(pl.col(axis) == b_val).drop(axis).rename({value_col: "__b__"})
-        keys = list(group_keys)
-        joined = a.join(b, on=keys, how="left") if keys else a.join(b, how="cross")
-        return joined.with_columns((pl.col(value_col) - pl.col("__b__")).alias(value_col)).drop("__b__")
-
+        return _apply_diff_op(lf, value_col, axis, spec, group_keys)
     if spec.op == "expr":
-        if not spec.expr:
-            msg = f"expr op for axis '{axis}' requires 'expr'"
-            raise ValueError(msg)
-        # ネスト関数の閉包にはローカル変数の narrowing だけが届く(spec.expr のままだと届かない)
-        expr = spec.expr
-
-        def _eval(vals: list, axis_vals: list) -> float:
-            # 式の中では values(この軸の全値のリスト)と by[軸の値] が使える
-            by: dict = {}
-            for k, v in zip(axis_vals, vals, strict=False):
-                if k in by:
-                    msg = (
-                        f"axis value '{k}' appears more than once within a group for axis "
-                        f"'{axis}'; 'by' lookups require unique axis values"
-                    )
-                    raise ValueError(msg)
-                by[k] = v
-            return evaluate_expression(expr, {"values": vals, "by": by})
-
-        if group_keys:
-            df = lf.group_by(list(group_keys)).agg([pl.col(value_col), pl.col(axis)]).collect()
-            result = list(starmap(_eval, zip(df[value_col].to_list(), df[axis].to_list(), strict=False)))
-            return df.drop(value_col, axis).with_columns(pl.Series(value_col, result)).lazy()
-        df = lf.select([pl.col(value_col), pl.col(axis)]).collect()
-        result_value = _eval(df[value_col].to_list(), df[axis].to_list())
-        return pl.LazyFrame({value_col: [float(result_value)]})
-
+        return _apply_expr_op(lf, value_col, axis, spec, group_keys)
     msg = f"unknown aggregation op '{spec.op}'"
     raise ValueError(msg)
 

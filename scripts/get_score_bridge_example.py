@@ -54,7 +54,7 @@ def _json_key(k: object) -> object:
     return k
 
 
-def _jsonable(obj: object) -> object:
+def _jsonable(obj: object) -> object:  # ruff: ignore[PLR0911] — isinstance 早期 return の連鎖が最も読みやすい形のため容認
     """読み込み済み config dict を json.dump できる形へ再帰変換する。
 
     現行の config ローダは読み込み時に一部の値を計算用に加工する(例:
@@ -116,7 +116,7 @@ def _find_scorelib_parent() -> str:
     raise ValueError(msg)
 
 
-def compute_epoch_score(
+def compute_epoch_score(  # ruff: ignore[PLR0913] — 見本の公開関数: 多数の省略可能キーワード引数は設計(束ねない方針)
     engine_python: str,  # scorelib_param が入っている python 実行ファイルのパス
     config: str | dict,  # config.jsonc の**パス**(推奨)または読み込み済みの config dict。
     # 現行ローダは読み込み時に dict を加工する(Series 化・
@@ -126,6 +126,7 @@ def compute_epoch_score(
     # (範囲展開等)は元に戻せない。ファイルとメモリの
     # 食い違いの診断は scripts/config_vocab_diff_example.py
     data_dir: str,  # この epoch の測定結果ディレクトリ(result_tmp 相当)
+    *,  # ここから下は省略可能なオプション(キーワード指定のみ。Python 3.7 でも有効な構文)
     dvtbudget_coef: str | None = None,  # dVtBudget パーツがある場合のみ必須
     initial_temperature: str | None = None,  # 省略時: dvtbudget_coef 指定なら data_dir 内を使う
     custom_parts: str | None = None,  # テスト用の custom_parts.py 上書き(通常は不要)

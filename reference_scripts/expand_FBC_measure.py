@@ -5,8 +5,7 @@ from pathlib import Path
 BASE = Path(__file__).parent / ".." / "result_tmp"
 
 
-# キーワード専用化は呼び出し側の書き方が変わるため今回は見送り(位置引数のまま容認)
-def read_map(path: Path, has_header: bool = False) -> dict[str, str]:  # ruff: ignore[FBT001, FBT002]
+def read_map(path: Path, *, has_header: bool = False) -> dict[str, str]:
     """マップ csv を {コード: テキスト} の辞書として読む(has_header=True なら非数値先頭セルの行を飛ばす)。
 
     Returns:
@@ -74,27 +73,75 @@ def load_dataName(path: Path) -> dict[tuple[str, str, str, str, str], str]:  # r
     return d
 
 
+def _text(code: str, mapping: dict[str, str]) -> str:
+    """コード値をマップ csv の辞書でテキストへ読み替える。
+
+    Returns:
+        mapping にある場合は対応するテキスト。code が空、または対応が無い場合は空文字。
+
+    """
+    return mapping.get(code, "") if code else ""
+
+
+def _override_text(code: str, map_override: dict[str, str]) -> str:
+    """Override のコード値を True/False 表記へ読み替える(Title case に正規化)。
+
+    Returns:
+        マップの値が真値系("true"/"t"/"1")なら "True"、偽値系("false"/"f"/"0")
+        なら "False"。正規化できない値はそのまま返す(対応が無ければコード自身)。
+        code が空なら空文字。
+
+    """
+    if not code:
+        return ""
+    v = map_override.get(code, code)
+    vv = v.strip().lower()
+    if vv in {"true", "t", "1"}:
+        return "True"
+    if vv in {"false", "f", "0"}:
+        return "False"
+    # fallback: return original
+    return v
+
+
+def _param_texts(
+    param: dict[str, str] | None,
+    map_label: dict[str, str],
+    map_override: dict[str, str],
+) -> dict[str, str]:
+    """Erase/Program/Read の Label・Override テキスト6列を parameterLabel の1行から作る。
+
+    parameterLabel_FBC.csv columns: Erase_Label, Erase_Override, Program_Label,
+    Program_Override, Measure, Read_Label, Read_Override, ...
+
+    Returns:
+        出力 csv の6列({操作}_Label / {操作}_Override)の {列名: テキスト}。
+        param が None(キーに対応する行が無い)場合はすべて空文字。
+
+    """
+    texts = {}
+    for op in ("Erase", "Program", "Read"):
+        label_num = param.get(f"{op}_Label", "") if param else ""
+        override_num = param.get(f"{op}_Override", "") if param else ""
+        texts[f"{op}_Label"] = _text(label_num, map_label)
+        texts[f"{op}_Override"] = _override_text(override_num, map_override)
+    return texts
+
+
 def main() -> None:
     """FBC.csv を map/ラベル各 csv で読み替え、FBC_expanded.csv を書き出す。"""
-    fbc_path = BASE / "FBC.csv"
-    param_path = BASE / "parameterLabel_FBC.csv"
-    dataName_path = BASE / "dataName_FBC.csv"  # ruff: ignore[N806]
-    map_dataName_path = BASE / "map_DataName.csv"  # ruff: ignore[N806]
-    map_label_path = BASE / "map_Label.csv"
-    map_state_path = BASE / "map_State.csv"
-
-    map_dataName = read_map(map_dataName_path)  # ruff: ignore[N806]
-    map_label = read_map(map_label_path)
-    map_state = read_map(map_state_path)
+    map_dataName = read_map(BASE / "map_DataName.csv")  # ruff: ignore[N806]
+    map_label = read_map(BASE / "map_Label.csv")
+    map_state = read_map(BASE / "map_State.csv")
     map_override = read_map(BASE / "map_Override.csv")
 
-    param_map = load_parameter_label(param_path)
-    dataName_map = load_dataName(dataName_path)  # ruff: ignore[N806]
+    param_map = load_parameter_label(BASE / "parameterLabel_FBC.csv")
+    dataName_map = load_dataName(BASE / "dataName_FBC.csv")  # ruff: ignore[N806]
 
     out_path = BASE / "FBC_expanded.csv"
 
     with (
-        fbc_path.open(newline="", encoding="utf-8") as inf,
+        (BASE / "FBC.csv").open(newline="", encoding="utf-8") as inf,
         out_path.open("w", newline="", encoding="utf-8") as outf,
     ):
         reader = csv.DictReader(inf)
@@ -132,67 +179,31 @@ def main() -> None:
                 r.get("Measure", "").strip(),
             )
 
-            # DataName numeric from dataName_FBC.csv, map to text
-            dataName_num = dataName_map.get(key, "")  # ruff: ignore[N806]
-            dataName_text = map_dataName.get(dataName_num, "") if dataName_num else ""  # ruff: ignore[N806]
+            # ラベル・Override(parameterLabel_FBC.csv の行を6列のテキストへ)
+            texts = _param_texts(param_map.get(key), map_label, map_override)
 
-            param = param_map.get(key, None)
-            # parameterLabel_FBC.csv columns: Erase_Label, Erase_Override, Program_Label,
-            # Program_Override, Measure, Read_Label, Read_Override, ...
-            erase_label_num = param.get("Erase_Label", "") if param else ""
-            erase_override_num = param.get("Erase_Override", "") if param else ""
-            prog_label_num = param.get("Program_Label", "") if param else ""
-            prog_override_num = param.get("Program_Override", "") if param else ""
-            read_label_num = param.get("Read_Label", "") if param else ""
-            read_override_num = param.get("Read_Override", "") if param else ""
-
-            # map numeric labels to text where possible
-            erase_label_text = map_label.get(erase_label_num, "") if erase_label_num else ""
-            prog_label_text = map_label.get(prog_label_num, "") if prog_label_num else ""
-            read_label_text = map_label.get(read_label_num, "") if read_label_num else ""
-
-            # map overrides to boolean-like True/False (normalize to Title case)
-            def map_override_value(code: str) -> str:
-                if not code:
-                    return ""
-                v = map_override.get(code, code)
-                if isinstance(v, str):
-                    vv = v.strip().lower()
-                    if vv in {"true", "t", "1"}:
-                        return "True"
-                    if vv in {"false", "f", "0"}:
-                        return "False"
-                # fallback: return original
-                return v
-
-            erase_override_text = map_override_value(erase_override_num)
-            prog_override_text = map_override_value(prog_override_num)
-            read_override_text = map_override_value(read_override_num)
-
-            # map State to text
-            state_num = r.get("State", "").strip()
-            state_text = map_state.get(state_num, "") if state_num else ""
-
-            out_row = {
-                "InBatchEpoch": r.get("InBatchEpoch", ""),
-                "Board": r.get("Board", ""),
-                "Chip": r.get("Chip", ""),
-                "Block": r.get("Block", ""),
-                "Measure": r.get("Measure", ""),
-                "Erase_Label": erase_label_text,
-                "Erase_Override": erase_override_text,
-                "Program_Label": prog_label_text,
-                "Program_Override": prog_override_text,
-                "Read_Label": read_label_text,
-                "Read_Override": read_override_text,
-                "DataName": dataName_text,
-                "WL": r.get("WL", ""),
-                "STR": r.get("STR", ""),
-                "State": state_text,
-                "FBC": r.get("FBC", ""),
-            }
-
-            writer.writerow(out_row)
+            writer.writerow(
+                {
+                    "InBatchEpoch": r.get("InBatchEpoch", ""),
+                    "Board": r.get("Board", ""),
+                    "Chip": r.get("Chip", ""),
+                    "Block": r.get("Block", ""),
+                    "Measure": r.get("Measure", ""),
+                    "Erase_Label": texts["Erase_Label"],
+                    "Erase_Override": texts["Erase_Override"],
+                    "Program_Label": texts["Program_Label"],
+                    "Program_Override": texts["Program_Override"],
+                    "Read_Label": texts["Read_Label"],
+                    "Read_Override": texts["Read_Override"],
+                    # DataName numeric from dataName_FBC.csv, map to text
+                    "DataName": _text(dataName_map.get(key, ""), map_dataName),
+                    "WL": r.get("WL", ""),
+                    "STR": r.get("STR", ""),
+                    # map State to text
+                    "State": _text(r.get("State", "").strip(), map_state),
+                    "FBC": r.get("FBC", ""),
+                }
+            )
 
     print("Wrote", out_path)
 

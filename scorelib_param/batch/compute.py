@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from pathlib import Path
     from types import ModuleType
 
-    from scorelib_param.models import DvtBudgetCoefFile, GroupDef, RunConfig, ScorePart
+    from scorelib_param.models import DvtBudgetCoefFile, GroupDef, RunConfig, ScoreFile, ScorePart
 
     from .staging import StagedEpoch
 
@@ -191,13 +191,40 @@ def _result_frame(rows: list[dict[str, object]], part_names: list[str]) -> pl.Da
     return df.sort(["History", "EpochNo"])
 
 
+@dataclass(frozen=True)
+class _BatchInputs:
+    """compute_score_batch の引数のうち、各ヘルパーへそのまま流れる共通入力。"""
+
+    run_config: RunConfig
+    dvtbudget_coef: DvtBudgetCoefFile | None
+    custom_parts_path: str | Path | None
+    generation_info_path: str | Path | None
+
+
+@dataclass(frozen=True)
+class _BatchState:
+    """1バッチ分の計算で各段階のヘルパーが共有する状態。
+
+    compute_score_batch が構築して各段階に渡す。failed / dummy_used は
+    各段階が理由・使用実績を書き足す集約先(dict の実体を全段階で共有する)。
+    """
+
+    inputs: _BatchInputs
+    epochs: list[StagedEpoch]
+    score_file: ScoreFile
+    group_defs: dict[str, GroupDef] | None
+    ctx: BatchComputeContext
+    per_epoch_temps: dict[str, dict[int, float]]
+    dummy_values: dict[str, float]
+    custom_module: ModuleType | None
+    failed: dict[str, str]
+    dummy_used: dict[str, list[str]]
+
+
 def _per_epoch_fallback(
     epochs: list[StagedEpoch],
-    run_config: RunConfig,
-    dvtbudget_coef: DvtBudgetCoefFile | None,
-    custom_parts_path: str | Path | None,
+    inputs: _BatchInputs,
     batch_error: Exception,
-    generation_info_path: str | Path | None = None,
 ) -> BatchResult:
     """バッチ一括計算が失敗したときの切り分け。
 
@@ -214,6 +241,7 @@ def _per_epoch_fallback(
         f"batch computation failed ({batch_error}); retrying per epoch to locate the offending epoch(s)",
         file=sys.stderr,
     )
+    run_config = inputs.run_config
     part_names = [p.name for p in run_config.optimization.score_parts]
     rows: list[dict[str, object]] = []
     failed: dict[str, str] = {}
@@ -225,15 +253,193 @@ def _per_epoch_fallback(
             values = compute_score_file(
                 se.data_dir,
                 run_config,
-                dvtbudget_coef,
-                temps,
-                custom_parts_path=custom_parts_path,
-                generation_info_path=generation_info_path,
+                dvtbudget_coef=inputs.dvtbudget_coef,
+                board_temperatures=temps,
+                custom_parts_path=inputs.custom_parts_path,
+                generation_info_path=inputs.generation_info_path,
             )
             rows.append({**_epoch_row(se), **values})
         except Exception as err:  # ruff: ignore[BLE001] — epoch単位で理由ごと報告する
             failed[se.ref.epoch_id] = str(err)
     return BatchResult(_result_frame(rows, part_names), failed)
+
+
+def _load_epoch_temperatures(
+    epochs: list[StagedEpoch], failed: dict[str, str]
+) -> tuple[list[StagedEpoch], dict[str, dict[int, float]]]:
+    """各 epoch の初期温度を読む(dVtBudget 用 — 係数 b が epoch で変わりうる)。
+
+    Returns:
+        (温度を読めた epoch のリスト, {epoch_id: 初期温度})のタプル。
+        読めなかった epoch は failed に理由を書き足して除外する。
+
+    """
+    per_epoch_temps: dict[str, dict[int, float]] = {}
+    ok_epochs: list[StagedEpoch] = []
+    for se in epochs:
+        try:
+            per_epoch_temps[se.ref.epoch_id] = load_board_temperatures(
+                axis_resolve.data_file(se.data_dir, "initial_temperature.csv")
+            )
+            ok_epochs.append(se)
+        except Exception as err:  # ruff: ignore[BLE001]
+            failed[se.ref.epoch_id] = f"initial_temperature.csv unreadable: {err}"
+    return ok_epochs, per_epoch_temps
+
+
+def _custom_part_values(state: _BatchState, part: ScorePart) -> dict[str, float]:
+    """各 epoch で custom パーツの値を計算して集める(data_dir 前提の関数のため)。
+
+    Returns:
+        {epoch_id: 値}。計算に失敗した epoch は state.failed に理由を
+        書き足して除外する。
+
+    """
+    module = _require_custom_module(part, state.custom_module)
+    values: dict[str, float] = {}
+    for se in state.epochs:
+        if se.ref.epoch_id in state.failed:
+            continue
+        try:
+            values[se.ref.epoch_id] = custom.compute_custom_part(
+                part,
+                module,
+                custom.CustomContext(
+                    data_dir=se.data_dir,
+                    generation=state.inputs.run_config.Generation,
+                    group_defs=state.group_defs or {},
+                    params=part.params or {},
+                ),
+            )
+        except Exception as err:  # ruff: ignore[BLE001]
+            state.failed[se.ref.epoch_id] = f"custom part '{part.name}': {err}"
+    return values
+
+
+def _fill_missing_epochs(
+    state: _BatchState,
+    part: ScorePart,
+    source_type: str,
+    missing: list[StagedEpoch],
+    values_map: dict[str, float],
+) -> None:
+    """測定 type ファイルの無い epoch を vthSkip のダミー値で埋める。
+
+    ダミー値が設定されていない type なら、該当 epoch を state.failed へ回す。
+    """
+    if source_type in state.dummy_values:
+        # ダミー値はパーツと設定だけで決まり全 epoch で同一 —
+        # 1回計算して使い回す(map は欠けた epoch 側から読む)
+        dummy_val = compute_dummy_part(
+            missing[0].data_dir,
+            part,
+            state.dummy_values[source_type],
+            group_defs=state.group_defs,
+            selection_sets=state.score_file.selectionSets,
+            weight_sets=state.score_file.weightSets,
+        )
+        for se in missing:
+            values_map[se.ref.epoch_id] = dummy_val
+            state.dummy_used.setdefault(se.ref.epoch_id, []).append(part.name)
+    else:
+        for se in missing:
+            state.failed.setdefault(
+                se.ref.epoch_id,
+                f"{source_type}.csv not found (no vthSkip dummy value configured)",
+            )
+
+
+def _typed_part_values(state: _BatchState, part: ScorePart) -> dict[str, float]:
+    """通常(custom 以外)のパーツの値をバッチ一括で計算して集める。
+
+    type ファイルの無い epoch(vthSkip)は _fill_missing_epochs で埋める。
+
+    Returns:
+        {epoch_id: 値}(ダミー値で埋めた epoch も含む)。
+
+    """
+    st = _source_type(part)
+    missing = [se for se in state.epochs if not axis_resolve.data_file(se.data_dir, f"{st}.csv").exists()]
+    values_map: dict[str, float] = {}
+    if len(missing) < len(state.epochs):
+        df = compute_score_part(
+            state.epochs[0].data_dir,  # shared_ctx 使用時は参照されない
+            part,
+            group_defs=state.group_defs,
+            generation=state.inputs.run_config.Generation,
+            dvtbudget_coef=state.inputs.dvtbudget_coef,
+            board_temperatures=state.per_epoch_temps if part.type == "dVtBudget" else None,
+            shared_ctx=state.ctx,
+            selection_sets=state.score_file.selectionSets,
+            weight_sets=state.score_file.weightSets,
+            identity_axes=(EPOCH_COL,),
+        )
+        value_col = st  # collapse 後の列は {EPOCH_COL, 値列} のみ
+        values_map = dict(zip(df[EPOCH_COL].to_list(), (float(v) for v in df[value_col].to_list()), strict=False))
+    if missing:
+        _fill_missing_epochs(state, part, st, missing, values_map)
+    return values_map
+
+
+def _collect_part_values(state: _BatchState) -> dict[str, dict[str, float]]:
+    """パーツごとに {epoch_id: 値} を集める(compute_score_batch の try 節本体)。
+
+    ここから送出された例外は compute_score_batch が捕まえ、epoch 逐次の
+    フォールバック(_per_epoch_fallback)に切り替える。
+
+    Returns:
+        {パーツ名: {epoch_id: 値}}(パーツ定義順)。
+
+    """
+    part_values: dict[str, dict[str, float]] = {}
+    for part in state.score_file.score_parts:
+        if part.type == CUSTOM_TYPE:
+            part_values[part.name] = _custom_part_values(state, part)
+        else:
+            part_values[part.name] = _typed_part_values(state, part)
+    return part_values
+
+
+def _mark_epochs_without_values(part_values: dict[str, dict[str, float]], state: _BatchState) -> None:
+    """パーツごとに値の無い epoch を検出して state.failed へ回す。
+
+    filter が空振りした epoch は行ごと消える(null にならない)ため、
+    「パーツごとに全 epoch が揃っているか」で必ず捕まえる。
+    """
+    epoch_ids = [se.ref.epoch_id for se in state.epochs]
+    for name, values in part_values.items():
+        for epoch_id in epoch_ids:
+            if epoch_id not in state.failed and epoch_id not in values:
+                state.failed[epoch_id] = (
+                    f"part '{name}' produced no value for this epoch "
+                    "(a filter probably matched no rows — check the data)"
+                )
+
+
+def _assemble_rows(state: _BatchState, part_values: dict[str, dict[str, float]]) -> list[dict[str, object]]:
+    """各 epoch で expression を評価してスコア表の行を組み立てる。
+
+    Returns:
+        _result_frame に渡す行 dict のリスト。expression の評価に失敗した
+        epoch は state.failed に理由を書き足して除外する。
+
+    """
+    part_names = [p.name for p in state.score_file.score_parts]
+    rows: list[dict[str, object]] = []
+    for se in state.epochs:
+        epoch_id = se.ref.epoch_id
+        if epoch_id in state.failed:
+            continue
+        values = {name: part_values[name][epoch_id] for name in part_names}
+        score = None
+        if state.score_file.expression:
+            try:
+                score = evaluate_expression(state.score_file.expression, values)
+            except Exception as err:  # ruff: ignore[BLE001]
+                state.failed[epoch_id] = f"expression evaluation failed: {err}"
+                continue
+        rows.append({**_epoch_row(se), "Score": score, **values})
+    return rows
 
 
 def compute_score_batch(
@@ -269,139 +475,39 @@ def compute_score_batch(
     part_names = [p.name for p in score_file.score_parts]
     failed: dict[str, str] = {}
 
-    # dVtBudget があれば epoch ごとの初期温度を読む(係数 b が epoch で変わりうる)
-    needs_dvt = any(p.type == "dVtBudget" for p in score_file.score_parts)
     per_epoch_temps: dict[str, dict[int, float]] = {}
-    if needs_dvt:
-        ok_epochs: list[StagedEpoch] = []
-        for se in epochs:
-            try:
-                per_epoch_temps[se.ref.epoch_id] = load_board_temperatures(
-                    axis_resolve.data_file(se.data_dir, "initial_temperature.csv")
-                )
-                ok_epochs.append(se)
-            except Exception as err:  # ruff: ignore[BLE001]
-                failed[se.ref.epoch_id] = f"initial_temperature.csv unreadable: {err}"
-        epochs = ok_epochs
+    if any(p.type == "dVtBudget" for p in score_file.score_parts):
+        epochs, per_epoch_temps = _load_epoch_temperatures(epochs, failed)
     if not epochs:
         return BatchResult(_result_frame([], part_names), failed)
 
     custom_module = _load_custom_module(run_config, custom_parts_path)
-    ctx = BatchComputeContext(epochs, score_file.score_parts, group_defs)
-    epoch_ids = [se.ref.epoch_id for se in epochs]
-
+    inputs = _BatchInputs(run_config, dvtbudget_coef, custom_parts_path, generation_info_path)
     # vthSkip: type ファイルの無い epoch はダミー値で埋める(cli.compute_dummy_part)
     vth = run_config.optimization.vthSkip
-    dummy_values = vth.dummy_values() if vth else {}
-    dummy_used: dict[str, list[str]] = {}
+    state = _BatchState(
+        inputs=inputs,
+        epochs=epochs,
+        score_file=score_file,
+        group_defs=group_defs,
+        ctx=BatchComputeContext(epochs, score_file.score_parts, group_defs),
+        per_epoch_temps=per_epoch_temps,
+        dummy_values=vth.dummy_values() if vth else {},
+        custom_module=custom_module,
+        failed=failed,
+        dummy_used={},
+    )
 
     # パーツごとに {epoch_id: 値} を集める
-    part_values: dict[str, dict[str, float]] = {}
     try:
-        for part in score_file.score_parts:
-            if part.type == CUSTOM_TYPE:
-                module = _require_custom_module(part, custom_module)
-                # custom パーツは data_dir 前提の関数なので epoch ごとに呼ぶ
-                values: dict[str, float] = {}
-                for se in epochs:
-                    if se.ref.epoch_id in failed:
-                        continue
-                    try:
-                        values[se.ref.epoch_id] = custom.compute_custom_part(
-                            part,
-                            module,
-                            custom.CustomContext(
-                                data_dir=se.data_dir,
-                                generation=run_config.Generation,
-                                group_defs=group_defs or {},
-                                params=part.params or {},
-                            ),
-                        )
-                    except Exception as err:  # ruff: ignore[BLE001]
-                        failed[se.ref.epoch_id] = f"custom part '{part.name}': {err}"
-                part_values[part.name] = values
-                continue
-
-            st = _source_type(part)
-            missing = [se for se in epochs if not axis_resolve.data_file(se.data_dir, f"{st}.csv").exists()]
-            values_map: dict[str, float] = {}
-            if len(missing) < len(epochs):
-                df = compute_score_part(
-                    epochs[0].data_dir,  # shared_ctx 使用時は参照されない
-                    part,
-                    group_defs=group_defs,
-                    generation=run_config.Generation,
-                    dvtbudget_coef=dvtbudget_coef,
-                    board_temperatures=per_epoch_temps if part.type == "dVtBudget" else None,
-                    shared_ctx=ctx,
-                    selection_sets=score_file.selectionSets,
-                    weight_sets=score_file.weightSets,
-                    identity_axes=(EPOCH_COL,),
-                )
-                value_col = st  # collapse 後の列は {EPOCH_COL, 値列} のみ
-                values_map = dict(
-                    zip(df[EPOCH_COL].to_list(), (float(v) for v in df[value_col].to_list()), strict=False)
-                )
-            if missing:
-                if st in dummy_values:
-                    # ダミー値はパーツと設定だけで決まり全 epoch で同一 —
-                    # 1回計算して使い回す(map は欠けた epoch 側から読む)
-                    dummy_val = compute_dummy_part(
-                        missing[0].data_dir,
-                        part,
-                        dummy_values[st],
-                        group_defs=group_defs,
-                        selection_sets=score_file.selectionSets,
-                        weight_sets=score_file.weightSets,
-                    )
-                    for se in missing:
-                        values_map[se.ref.epoch_id] = dummy_val
-                        dummy_used.setdefault(se.ref.epoch_id, []).append(part.name)
-                else:
-                    for se in missing:
-                        failed.setdefault(
-                            se.ref.epoch_id,
-                            f"{st}.csv not found (no vthSkip dummy value configured)",
-                        )
-            part_values[part.name] = values_map
+        part_values = _collect_part_values(state)
     except Exception as err:  # ruff: ignore[BLE001] — バッチ全体エラー → epoch 逐次で切り分け
-        fb = _per_epoch_fallback(
-            epochs,
-            run_config,
-            dvtbudget_coef,
-            custom_parts_path,
-            err,
-            generation_info_path=generation_info_path,
-        )
+        fb = _per_epoch_fallback(epochs, inputs, err)
         fb.failed.update(failed)
         return fb
 
-    # epoch 欠落の検出: filter が空振りした epoch は行ごと消える(nullに
-    # ならない)ため、「パーツごとに全 epoch が揃っているか」で必ず捕まえる
-    for name, values in part_values.items():
-        for epoch_id in epoch_ids:
-            if epoch_id not in failed and epoch_id not in values:
-                failed[epoch_id] = (
-                    f"part '{name}' produced no value for this epoch "
-                    "(a filter probably matched no rows — check the data)"
-                )
-
-    # expression を epoch ごとに評価して行を組み立てる
-    rows: list[dict[str, object]] = []
-    for se in epochs:
-        epoch_id = se.ref.epoch_id
-        if epoch_id in failed:
-            continue
-        values = {name: part_values[name][epoch_id] for name in part_names}
-        score = None
-        if score_file.expression:
-            try:
-                score = evaluate_expression(score_file.expression, values)
-            except Exception as err:  # ruff: ignore[BLE001]
-                failed[epoch_id] = f"expression evaluation failed: {err}"
-                continue
-        rows.append({**_epoch_row(se), "Score": score, **values})
-
+    _mark_epochs_without_values(part_values, state)
+    rows = _assemble_rows(state, part_values)
     # failed になった epoch の dummy_used は報告しない(値が結果に乗らないため)
-    dummy_used = {e: parts for e, parts in dummy_used.items() if e not in failed}
+    dummy_used = {e: parts for e, parts in state.dummy_used.items() if e not in failed}
     return BatchResult(_result_frame(rows, part_names), failed, dummy_used)

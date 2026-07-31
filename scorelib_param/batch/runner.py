@@ -32,6 +32,8 @@ from .history import EpochRef, enumerate_epochs
 from .staging import StagedEpoch, cleanup_epoch, stage_epoch, validate_epoch
 
 if TYPE_CHECKING:
+    from concurrent.futures import Future
+
     from scorelib_param.models import DvtBudgetCoefFile, RunConfig
 
 DEFAULT_BATCH_SIZE = 50
@@ -170,7 +172,7 @@ class BatchRunner:
             ...
     """
 
-    def __init__(
+    def __init__(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略可能キーワード引数は設計(束ねない方針 — docs/dev_workflow.md)
         self,
         histories: Sequence[str | Path] | Mapping[str, str | Path],
         run_config: RunConfig,
@@ -233,7 +235,7 @@ class BatchRunner:
             if self.staging_root in local.parents:
                 fetched_dir = local
         staged = stage_epoch(ref, self.staging_root)
-        err = validate_epoch(staged, self._required_types, self._needs_dvt)
+        err = validate_epoch(staged, self._required_types, needs_dvtbudget=self._needs_dvt)
         if err and not staged.error:
             staged.error = err
         return staged, fetched_dir
@@ -280,17 +282,10 @@ class BatchRunner:
         batches = [refs[i : i + size] for i in range(0, len(refs), size)]
 
         executor = ThreadPoolExecutor(max_workers=max(1, self.max_prefetch)) if self.max_prefetch > 0 else None
-        futures: dict = {}
+        futures: dict[int, Future[list[tuple[StagedEpoch, Path | None]]]] = {}
         try:
             for i in range(len(batches)):
-                if executor is not None:
-                    # 自分と、その先 max_prefetch 個までを投入しておく
-                    for j in range(i, min(i + self.max_prefetch + 1, len(batches))):
-                        if j not in futures:
-                            futures[j] = executor.submit(self._prepare_batch, batches[j])
-                    prepared = futures.pop(i).result()
-                else:
-                    prepared = self._prepare_batch(batches[i])
+                prepared = self._next_prepared(batches, i, executor, futures)
 
                 try:
                     result = self._compute_prepared(prepared)
@@ -303,17 +298,51 @@ class BatchRunner:
                     raise StrictBatchError(msg)
                 yield result
         finally:
-            for fut in futures.values():
-                fut.cancel()
-            if executor is not None:
-                # 取得中のものは完了を待ってから片付ける(放置すると消せない)
-                for fut in list(futures.values()):
-                    if not fut.cancelled():
-                        with contextlib.suppress(Exception):
-                            self._cleanup_batch(fut.result())
-                executor.shutdown(wait=True)
-            if self._own_staging and not self.keep_staging:
-                shutil.rmtree(self.staging_root, ignore_errors=True)
+            self._shutdown_pipeline(executor, futures)
+
+    def _next_prepared(
+        self,
+        batches: list[list[EpochRef]],
+        index: int,
+        executor: ThreadPoolExecutor | None,
+        futures: dict[int, Future[list[tuple[StagedEpoch, Path | None]]]],
+    ) -> list[tuple[StagedEpoch, Path | None]]:
+        """batches[index] の準備結果を得る(次バッチ以降の先行取得の投入もここで行う)。
+
+        Returns:
+            batches[index] を _prepare_batch した結果。executor があれば
+            先行投入済みの future から取り出す(無ければその場で準備する)。
+
+        """
+        if executor is None:
+            return self._prepare_batch(batches[index])
+        # 自分と、その先 max_prefetch 個までを投入しておく
+        for j in range(index, min(index + self.max_prefetch + 1, len(batches))):
+            if j not in futures:
+                futures[j] = executor.submit(self._prepare_batch, batches[j])
+        return futures.pop(index).result()
+
+    def _shutdown_pipeline(
+        self,
+        executor: ThreadPoolExecutor | None,
+        futures: dict[int, Future[list[tuple[StagedEpoch, Path | None]]]],
+    ) -> None:
+        """先行取得パイプラインの後始末(run_iter の finally 節本体)。
+
+        未着手 future の取り消し・取得済み分のステージング削除・自前で作った
+        ステージング領域の削除を行う。
+        """
+        for fut in futures.values():
+            fut.cancel()
+        if executor is not None:
+            # 取得中のものは完了を待ってから片付ける(放置すると消せない)
+            for fut in list(futures.values()):
+                if not fut.cancelled():
+                    with contextlib.suppress(Exception):
+                        self._cleanup_batch(fut.result())
+            executor.shutdown(wait=True)
+        if self._own_staging and not self.keep_staging:
+            shutil.rmtree(self.staging_root, ignore_errors=True)
 
     def _compute_prepared(self, prepared: list[tuple[StagedEpoch, Path | None]]) -> BatchResult:
         good = [s for s, _ in prepared if s.error is None]

@@ -360,7 +360,7 @@ config = io_jsonc.load_run_config("config.jsonc")
 coef = io_jsonc.load_dvtbudget_coef("dvtbudget_coef.jsonc")
 temps = load_board_temperatures("result_tmp/initial_temperature.csv")
 
-result = compute_score_file("result_tmp", config, coef, temps)
+result = compute_score_file("result_tmp", config, dvtbudget_coef=coef, board_temperatures=temps)
 # {"Score": ..., "FBC_A2B_upper1_rel": ..., "dVtBudget_R2A": ...}
 ```
 

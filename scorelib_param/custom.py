@@ -105,8 +105,10 @@ def compute_custom_part(
         ユーザ関数が返した値を float に変換したもの。
 
     Raises:
-        ValueError: 関数がモジュールに見つからないとき、関数が例外を
-            送出したとき、戻り値が有限な1スカラーでないとき。
+        TypeError: 呼べる関数がモジュールに見つからないとき(未定義、
+            または同名だが呼び出し可能でない)。
+        ValueError: 関数が例外を送出したとき、戻り値が有限な1スカラーで
+            ないとき。
 
     """
     fname = score_part.function or score_part.name
@@ -116,8 +118,7 @@ def compute_custom_part(
             f"custom function '{fname}' (score part '{score_part.name}') not found in "
             f"{getattr(module, '__file__', DEFAULT_FILENAME)} — available: {list_custom_functions(module)}"
         )
-        # TypeError への変更は例外型が変わり呼び出し側の挙動に影響するため見送り(将来の品質向上パスで検討)
-        raise ValueError(msg)  # ruff: ignore[TRY004]
+        raise TypeError(msg)
     try:
         value = fn(ctx)
     except Exception as err:

@@ -14,6 +14,29 @@
 
 ## 未リリース
 
+- **品質向上パス: 関数サイズ規約の免除を解消（96 件 → 10 件）・公開 API の
+  省略可能引数をキーワード専用化**（2026-07-31。数値結果・エラー文言は不変。
+  **互換性注意: エンジン API の呼び出し形が一部変わるため、この変更を含む
+  リリースでは版数（最後の数字）を上げること**）。内容:
+  - **公開 API のキーワード専用化**: `compute_score_part` / `compute_score_file` /
+    `compute_dummy_part` は省略可能引数、`apply_dvtbudget` は epoch_col、
+    `validate_epoch` は needs_dvtbudget を `*,` の後ろへ。**位置引数で渡して
+    いた呼び出しは動かなくなる**（キーワード渡しは従来どおり。リポジトリ内・
+    README・ブリッジ見本は追随済み）。dataclass への束ね直しは公開 API では
+    行わない（組み込み側の互換資産のため — docs/dev_workflow.md 参照）
+  - **例外型の変更（TRY004）**: 型の誤りの検査 3 箇所を ValueError → TypeError
+    に（custom 関数が見つからない/呼び出し可能でない・世代情報 json の
+    トップレベル型・import_score_file の入力型）。except Exception で受けて
+    いる UI・バッチ経路には影響なし
+  - **関数分割・内部の引数束ね**: エンジン（models._check_value_shape 分岐41、
+    cli.compute_score_part、batch.compute_score_batch ほか）・UI（画面1/2/3/5
+    の大関数）・scripts を、挙動を固定するテスト（AppTest 19 本増強、計 324 件）
+    の下で分割。try 節の抽出は本体丸ごと1呼び出しで捕捉範囲不変
+  - ruff.toml の関数サイズ系免除（ディレクトリ単位)を全廃。意図して残す例外
+    （公開 API の PLR0913・変換関数の PLR0911 のみ）は該当する関数の def 行の
+    行単位抑止に理由付きで置き、同じファイルの新しい関数に免除が及ばない形に
+    （ラチェット方式）。CI の ruff 検査に素の（--preview 無し）実行を追加し
+    「両モードで警告ゼロ」を機械的に担保
 - **型チェック(Pylance/pyright)を警告ゼロ化し CI に組み込み**（2026-07-31。
   挙動・config 語彙の変更なし = 版数は動かさない）。チームの水準
   「Pylance の警告が出ないコードを書く」に合わせ、pyright 1.1.411 実測

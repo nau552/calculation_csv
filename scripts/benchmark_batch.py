@@ -120,6 +120,36 @@ def _run_one(args: argparse.Namespace) -> None:
     )
 
 
+def _build_child_args(args: argparse.Namespace) -> list[str]:
+    """子プロセス起動用の共通コマンドライン(バッチサイズ以外)を組み立てる。
+
+    Returns:
+        自分自身を子プロセスモードで再起動する引数リスト。バッチサイズは
+        呼び出し側が実行ごとに `--one <size>` として付け足す。
+
+    """
+    child_args = [sys.executable, str(Path(__file__).resolve())]
+    for k in ("config", "dvtbudget_coef", "custom_parts", "staging_dir"):
+        v = getattr(args, k)
+        if v:
+            child_args += [f"--{k.replace('_', '-')}", str(v)]
+    for h in args.history:
+        child_args += ["--history", h]
+    child_args += ["--max-prefetch", str(args.max_prefetch)]
+    return child_args
+
+
+def _print_table(rows: list[tuple[str, list[str] | None]]) -> None:
+    """計測結果(バッチサイズごとの行)を表にまとめて表示する。"""
+    print(f"\n{'batch_size':>10}  {'time[s]':>7}  {'peak[GiB]':>9}  {'epochs':>6}  {'failed':>6}")
+    for size, r in rows:
+        if r is None:
+            print(f"{size:>10}  {'FAILED':>7}")
+        else:
+            _, elapsed, peak, epochs, failed = r
+            print(f"{size:>10}  {elapsed:>7}  {peak:>9}  {epochs:>6}  {failed:>6}")
+
+
 def main(argv: list[str] | None = None) -> None:
     """バッチサイズごとに子プロセスで1回ずつ計測し、表にまとめて表示する。"""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -147,16 +177,9 @@ def main(argv: list[str] | None = None) -> None:
     if args.max_threads:
         env["POLARS_MAX_THREADS"] = str(args.max_threads)
 
-    child_args = [sys.executable, str(Path(__file__).resolve())]
-    for k in ("config", "dvtbudget_coef", "custom_parts", "staging_dir"):
-        v = getattr(args, k)
-        if v:
-            child_args += [f"--{k.replace('_', '-')}", str(v)]
-    for h in args.history:
-        child_args += ["--history", h]
-    child_args += ["--max-prefetch", str(args.max_prefetch)]
+    child_args = _build_child_args(args)
 
-    rows = []
+    rows: list[tuple[str, list[str] | None]] = []
     sizes = [s.strip() for s in args.batch_sizes.split(",") if s.strip()]
     for size in sizes:
         for _ in range(args.repeat):
@@ -177,13 +200,7 @@ def main(argv: list[str] | None = None) -> None:
                 continue
             rows.append((size, result_lines[-1].split("\t")[1:]))
 
-    print(f"\n{'batch_size':>10}  {'time[s]':>7}  {'peak[GiB]':>9}  {'epochs':>6}  {'failed':>6}")
-    for size, r in rows:
-        if r is None:
-            print(f"{size:>10}  {'FAILED':>7}")
-        else:
-            _, elapsed, peak, epochs, failed = r
-            print(f"{size:>10}  {elapsed:>7}  {peak:>9}  {epochs:>6}  {failed:>6}")
+    _print_table(rows)
 
 
 if __name__ == "__main__":

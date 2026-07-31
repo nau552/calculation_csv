@@ -81,6 +81,53 @@ def _scan_map_file(path: Path, code_col: str, text_col: str) -> pl.LazyFrame:
     return pl.scan_csv(path, has_header=False, new_columns=[code_col, text_col])
 
 
+def _join_side_tables(lf: pl.LazyFrame, data_dir: Path, type_: str, missing_axes: set[str]) -> pl.LazyFrame:
+    """`{type_}.csv` 自体に無い軸を付随ファイルの結合で補う(resolve_axes の下請け)。
+
+    parameterLabel_{type_}.csv(Erase/Program/Read の Label + Override)と
+    dataName_{type_}.csv(DataName)から、足りない軸の列だけを結合する。
+
+    Returns:
+        足りない軸のうち付随ファイルにある列を結合した LazyFrame。
+
+    """
+    label_path = data_file(data_dir, f"parameterLabel_{type_}.csv")
+    if missing_axes - {"DataName"} and label_path.exists():
+        label_lf = pl.scan_csv(label_path)
+        label_cols = [c for c in label_lf.collect_schema().names() if c not in JOIN_KEYS]
+        take = [c for c in label_cols if c in missing_axes]
+        if take:
+            lf = lf.join(label_lf.select(JOIN_KEYS + take), on=JOIN_KEYS, how="left")
+
+    if "DataName" in missing_axes:
+        dn_lf = pl.scan_csv(data_file(data_dir, f"dataName_{type_}.csv"))
+        lf = lf.join(dn_lf.select([*JOIN_KEYS, "DataName"]), on=JOIN_KEYS, how="left")
+    return lf
+
+
+def _join_map_files(lf: pl.LazyFrame, data_dir: Path, required_axes: set[str]) -> pl.LazyFrame:
+    """軸に map ファイルがあれば数値コードからテキストへ解決する(resolve_axes の下請け)。
+
+    Returns:
+        map ファイルのある各軸の列をテキスト値で置き換えた LazyFrame
+        (map ファイルの無い軸は数値のまま)。
+
+    """
+    for axis in sorted(required_axes):
+        map_path = _map_file_for_axis(data_dir, axis)
+        if map_path is None:
+            continue
+        code_col, text_col = f"__code_{axis}", f"__text_{axis}"
+        map_lf = _scan_map_file(map_path, code_col, text_col)
+        lf = lf.join(map_lf, left_on=axis, right_on=code_col, how="left")
+        lf = lf.drop(axis).rename({text_col: axis})
+        if axis.endswith(OVERRIDE_SUFFIX) and lf.collect_schema()[axis] != pl.Boolean:
+            # map_Override.csv のテキスト列は通常 csv リーダが Boolean と自動推論
+            # する(TRUE/FALSE リテラル)。テキストのまま来た場合だけ手で正規化
+            lf = lf.with_columns(pl.col(axis).cast(pl.Utf8).str.to_uppercase().is_in(["TRUE", "1"]).alias(axis))
+    return lf
+
+
 def resolve_axes(
     data_dir: str | Path,
     type_: str,
@@ -109,19 +156,7 @@ def resolve_axes(
 
     # {type}.csv 自体に無い軸は parameterLabel_{type}.csv(Erase/Program/Read の
     # Label + Override)または dataName_{type}.csv(DataName)から来る。
-    missing_axes = required_axes - base_cols
-
-    label_path = data_file(data_dir, f"parameterLabel_{type_}.csv")
-    if missing_axes - {"DataName"} and label_path.exists():
-        label_lf = pl.scan_csv(label_path)
-        label_cols = [c for c in label_lf.collect_schema().names() if c not in JOIN_KEYS]
-        take = [c for c in label_cols if c in missing_axes]
-        if take:
-            lf = lf.join(label_lf.select(JOIN_KEYS + take), on=JOIN_KEYS, how="left")
-
-    if "DataName" in missing_axes:
-        dn_lf = pl.scan_csv(data_file(data_dir, f"dataName_{type_}.csv"))
-        lf = lf.join(dn_lf.select([*JOIN_KEYS, "DataName"]), on=JOIN_KEYS, how="left")
+    lf = _join_side_tables(lf, data_dir, type_, required_axes - base_cols)
 
     unresolvable = required_axes - set(lf.collect_schema().names())
     if unresolvable:
@@ -137,18 +172,7 @@ def resolve_axes(
     if "Measure" not in required_axes and "Measure" in lf.collect_schema().names():
         lf = lf.drop("Measure")
 
-    for axis in sorted(required_axes):
-        map_path = _map_file_for_axis(data_dir, axis)
-        if map_path is None:
-            continue
-        code_col, text_col = f"__code_{axis}", f"__text_{axis}"
-        map_lf = _scan_map_file(map_path, code_col, text_col)
-        lf = lf.join(map_lf, left_on=axis, right_on=code_col, how="left")
-        lf = lf.drop(axis).rename({text_col: axis})
-        if axis.endswith(OVERRIDE_SUFFIX) and lf.collect_schema()[axis] != pl.Boolean:
-            # map_Override.csv のテキスト列は通常 csv リーダが Boolean と自動推論
-            # する(TRUE/FALSE リテラル)。テキストのまま来た場合だけ手で正規化
-            lf = lf.with_columns(pl.col(axis).cast(pl.Utf8).str.to_uppercase().is_in(["TRUE", "1"]).alias(axis))
+    lf = _join_map_files(lf, data_dir, required_axes)
 
     # 値列 + 要求された軸だけ残す(要求されていない結合キー等の付随列は落とす)
     keep = [value_col, *sorted(a for a in required_axes if a in lf.collect_schema().names())]
