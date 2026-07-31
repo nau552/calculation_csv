@@ -95,7 +95,7 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 | `apply_transform(lf, col, spec)` | 軸を潰さない行単位変換（`__offset__`/`__weight__` 等の仮想ステップ用）。定数演算（add/sub/mul/div）に加え単項関数 abs = \|x\|、log = ln(max(\|x\|, floor))（0.6.0。KLD の標準計算の形） |
 | `apply_axis_op(lf, col, axis, spec, group_keys)` | 1軸を1つの指示で潰す。filter（スカラー=等値 / リスト=is_in。どちらも軸列を落とし、is_in の残行は後段集計に複製として流れる）/ mean系（value で対象限定可、`weight` で集計直前に重み乗算）/ diff（a−b の自己結合）/ expr（グループごとに評価） |
 | `apply_aggregations(lf, col, order, aggregations)` | order を上から順に適用。**残っている全列をグループキー**にするのが要（グループ派生列が自然にキーとして生き残る仕組み） |
-| `collapse` / `collapse_to_scalar` | 潰し残しの列や null（filterが0行等）を検出してエラーにし、1スカラーを返す |
+| `collapse` / `collapse_to_scalar` | 潰し残しの列や、値列の null / NaN を検出してエラーにし、1スカラーを返す。null/NaN は専用例外 **`CollapseNullError`** — compute_score_part が捕まえてパイプラインを歩き直し、原因ステップ（filter 空振り / 相対化の片側不在 / 係数照会失敗など）を名指しした ValueError に変換する（2026-08-01。旧文言「a filter value probably matched no rows」の推測決め打ちを廃止）。min/max は NaN を黙って飛ばす polars 仕様のため、`_reduce` が「グループ内に NaN があれば結果も NaN」に毒化して伝播を保証する |
 | `aggregate_score_part` | 上2つをつないだ入口 |
 
 ### `scorelib_param/relative.py` — 相対化
@@ -117,7 +117,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | 関数 | 内容 |
 |---|---|
 | `load_board_temperatures(path)` | initial_temperature.csv → {Board: 温度} |
-| `apply_dvtbudget(lf, col, generation, coef, temps)` | Board の実測温度に最も近い温度キーの係数 b を State ごとに引き、`-log10(値)/b*1000` を行単位で適用。Board/State 列が既に潰されていたらエラー |
+| `apply_dvtbudget(lf, col, generation, coef, temps)` | Board の実測温度に最も近い温度キーの係数 b を State ごとに引き、`-log10(値)/b*1000` を行単位で適用。Board/State 列が既に潰されていたらエラー。係数表に Generation が無ければ明示エラー、(Board, State) の照会に失敗した行は **NaN として伝播**させ最終 collapse で検出（2026-08-01 — 以前は null が後段の mean 等で黙って除外され「エラーなしで値がズレる」危険があった。相対化・diff の相手不在も同様に NaN 化） |
 
 ### `scorelib_param/custom.py` — 自作Python関数パーツ
 | 定義 | 内容 |
@@ -137,7 +137,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `find_generation_info(dir, generation)` | これだけファイル名ベース（`{Generation}.json`） |
 | `axis_catalog(dir, type_)` | typeの軸一覧→値候補。dVtBudget は FBC のカタログ。**Measure 軸**（Measure 列を持つ type のみ・実在番号の昇順）と **DataName 軸**（dataName_{type}.csv がある場合）も出す。parameterLabel の**全行空欄の列は出さない**（0.5.3: tPROG の Read_Label のような「この type に無い設定」） |
 | `measure_labels(dir, type_)` | Measure 番号 → dataName の対応（UI の複合表示「dataName (Measure N)」と labels 注記用。dataName_* が無ければ空 = 番号のみ表示） |
-| `_candidates` | 値候補の導出。map系軸は**実データに存在する値だけ**（map順、失敗時は全語彙にフォールバック）、Override は [False, True]、数値軸は csv のユニーク値 |
+| `_candidates` | 値候補の導出。map系軸（**Override 含む**）は**実データに存在する値だけ**（map順、失敗時は全語彙にフォールバック）、数値軸は csv のユニーク値。Override の [False, True] ハードコードは 2026-08-01 に廃止 — 評価側の測定を含まないデータで True が候補に出てしまい、「候補には在るが行が無い」不一致を UI が検出できなかったため（実機報告） |
 
 複数候補の扱い（黙って選ばずエラー）は呼び出し側（ui/state.py）の責務。
 
@@ -153,9 +153,9 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `_hoistable_prefilters(part, group_defs)` | order 内の位置・`__relative__` の明示/暗黙によらず、可換な filter の行絞り [(軸,値),...] をパイプライン先頭に前出しする判定（リスト値=is_in も対象。キャッシュキーでは tuple 化）。除外は split軸・分母事前集計の軸とその `by`（派生軸は元軸と双方向対応）・複合軸の構成軸。列は落とさず行だけ先に絞る純最適化（結果不変、tests/test_prefilter.py）。診断上の変化: 後段の検証（dVtBudget係数カバレッジ等）は filter 後に残る値だけが対象になる |
 | `SharedComputeContext` | 1回の compute_score_file 内でtype単位のcsv読み込みと `__relative__`/`__dvtbudget__` 直後の中間結果を共有するキャッシュ（結果は共有なしと同一。customパーツは対象外）。前絞りが異なるパーツは共有しない（キーに prefilters を含む） |
 | `_apply_axis_step` | 複合軸なら列を `&` で融合してから aggregate に渡す |
-| `compute_score_part(...)` | 1パーツの計算。type=custom は関数呼び出しへ分岐。実装は下請けヘルパー(`_compute_custom_part` / `_base_frame` / `_apply_prefilters` / `_prefix_cache_keys` / `_resume_from_cache` / `_apply_pipeline_step`)へ分割済み(2026-07-31、結果不変)。**省略可能引数(group_defs 以降)はキーワード専用**(公開 API 共通 — 品質向上パスで位置渡しを廃止) |
+| `compute_score_part(...)` | 1パーツの計算。type=custom は関数呼び出しへ分岐。実装は下請けヘルパー(`_compute_custom_part` / `_base_frame` / `_apply_prefilters` / `_prefix_cache_keys` / `_resume_from_cache` / `_apply_steps` / `_apply_pipeline_step`)へ分割済み(2026-07-31、結果不変)。**省略可能引数(group_defs 以降)はキーワード専用**(公開 API 共通 — 品質向上パスで位置渡しを廃止)。最終結果が null / NaN のとき(`CollapseNullError`)は **`_diagnose_pipeline` がエラー経路限定でパイプラインを歩き直し、原因ステップを名指し**した ValueError に変換(2026-08-01。成功時のコストはゼロ。診断が二次エラーで失敗したら元のエラーをそのまま出す) |
 | `_dummy_axis_values(dir, axis, spec)` / `compute_dummy_part(dir, part, dummy_value, ...)` | vthSkip のダミー計算（0.6.0）: type ファイルが無い epoch 用に、軸の全組み合わせ（要素は map → 他 csv の実在値 → 選択リスト → [0] の順で決定）へダミー値を敷き詰め、**変換ステップをスキップ**して集計だけ適用する（ダミー値=「変換後の値」の意味論 — 設計書12節）。relative / dVtBudget パーツは非対応（明示エラー） |
-| `compute_score_file(dir, run_config, ...)` | 全パーツ計算+expression 評価 → `{"Score": ..., パーツ名: ...}`。`optimization.vthSkip` があり type ファイルが無いパーツは compute_dummy_part で計算し stderr に note を出す。**省略可能引数(dvtbudget_coef 以降)はキーワード専用**(compute_dummy_part・apply_dvtbudget の epoch_col も同様) |
+| `compute_score_file(dir, run_config, ...)` | 全パーツ計算+expression 評価 → `{"Score": ..., パーツ名: ...}`。`optimization.vthSkip` があり type ファイルが無いパーツは compute_dummy_part で計算し stderr に note を出す。**省略可能引数(dvtbudget_coef 以降)はキーワード専用**(compute_dummy_part・apply_dvtbudget の epoch_col も同様)。パーツ計算中の ValueError は**失敗パーツを名指し**して再送出(「score part '名前': …」— 深部のエラーはパーツ名を知らないため。2026-08-01) |
 | `main()` | argparse。`--config --data-dir --dvtbudget-coef --initial-temperature --custom-parts --version`。stdout は結果JSONのみ（版は stderr） |
 
 ---
@@ -214,6 +214,8 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `validate_score_file(data)` | エンジンの model_validate + 名前重複 + expression の参照チェック + 宙に浮いた constraint キー + ref 解決の再検証。**pydantic の位置表記をパーツ名に変換**（`_format_pydantic_error`） |
 | `validate_part(part)` | 単一パーツ用の包み |
 | `part_types_without_data(sf, ctx)` | データに測定ファイルの無い type を使うパーツの検出（0.6.0）。別実験の config を読むと起きる正当な状態なのでパーツは残し、一覧の ⚠（「データ無し」）と編集画面の警告に使う。custom は対象外・設定のみ編集モードでは常に空 |
+| `source_data_type(part_type)` | パーツの type → 実際に読む測定データの type（dVtBudget → FBC。エンジン `cli._source_type` と同じ対応）。part_value_mismatches と app の `_catalog_for_part` が共用（2026-08-01 に一本化） |
+| `part_value_mismatches(sf, ctx)` | filter/diff/選択リスト・相対化の分子/分母の値がデータの候補に無いパーツの検出（2026-08-01。設定として有効でも計算は必ず失敗する状態 — 読み込み直後から一覧の ⚠「データ不一致」・編集画面の警告・サイドバーの件数表示に使う）。カタログは `source_data_type` で引く。判定は候補が取れる軸の直接指定値のみ: グループ派生軸・候補不明の軸・選択セット参照(ref)・仮想ステップは対象外（Override 軸の候補が実データ由来になった 2026-08-01 以降、「評価側の測定が無いデータ」の相対化もここで検出できる）。サイドバーの「検証 OK/NG」（設定の構造検証）とは別勘定 |
 
 **コンテキスト（画面1）**
 | 関数 | 内容 |
@@ -249,7 +251,8 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `_SORTABLE_STYLE` | D&D項目のCSS（半透明グレー・左揃え。デフォルトの赤・中央揃えの上書き） |
 | `parse_scalar(text)` | 自由入力 → bool/int/float/str |
 | `measure_format(mlabels)` / `_axis_format` | Measure 値の複合表示「dataName (Measure N)」（名無しは「Measure N」）。選択・保存は常に番号 |
-| `value_widget` / `dict_selection_row` / `selection_widget` / `selection_list_widget` | 値1個 / 複合軸1行 / どちらか自動 / 可変行リスト（単一軸+候補ありは multiselect）。Measure 軸は複合表示 |
+| `value_widget` / `dict_selection_row` / `selection_widget` / `selection_list_widget` | 値1個 / 複合軸1行 / どちらか自動 / 可変行リスト（単一軸+候補ありは multiselect）。Measure 軸は複合表示。**原則「描画は設定を変えない」**（2026-08-01・設計書追記参照）: 候補に無い既存値は multiselect では警告付きで（`_options_with_missing`）、プルダウンでは「(データに無し)」等の**印つき選択肢**として残す — 描画だけで index=0 の値へ書き換わる事故（実機で相対化の分子が化けた）の再発防止。セット/重みセット参照・by 軸・事前集計の軸も同じ定石 |
+| `_per_value_dict_editor` | 「値ごとの数値」辞書（集計時重み spec.weight / 変換の by 別定数 spec.value）の共通編集欄（2026-08-01 に一本化）。既存辞書は候補外キーも印つきで保持、触っていない新規キー（中立値のまま）は足さない。辞書がまだ無いとき（モード選択直後）だけ全候補を中立値で初期化（エンジンは全値カバーを要求するため） |
 | `agg_editor(entry, spec, ctx, key)` | 集計指示エディタ(画面側の文脈 — カタログ・セット名・by 候補・重みセット名・Measure ラベル — は frozen dataclass **`EditorContext`** で受ける。2026-07-31 に束ね直し、op 別の入力欄は `_unary_editor` / `_filter_editor` / `_diff_editor` / `_multi_op_editor` へ分割)。**opに応じた入力欄だけを出す**（value/values の混同がUI上起きない）。filter は候補のある単一軸で multiselect（複数=is_in、Measure 選択時は labels 注記も付与）。op変更時は古いフィールドを掃除。mean系の単一軸エントリには集計時重み欄（`_agg_weight_editor`: なし/重みセット/値ごと/定数。値ラベルは by_value_labels 優先=グループ派生軸対応）。仮想ステップの op は STEP_OPS: 定数演算は `_transform_editor`、単項op（abs/log — 0.6.0）は定数欄なし・log のみ floor 入力 |
 | `relative_editor(part, ctx, key)` | 相対化ブロックのエディタ(`EditorContext` 受け。ON/OFF・split行・mode行・分母事前集計をヘルパー分割 — 2026-07-31)。split軸は**任意の軸**から選択（旧 Override 限定は廃止）、分子/分母は候補プルダウン or 自由入力、Measure 分割時は labels 注記を自動付与。ON/OFF/split変更は state.py の整合関数を呼ぶ。分母事前集計は agg_editor をフル再利用 |
 

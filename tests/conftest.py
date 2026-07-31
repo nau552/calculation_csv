@@ -21,6 +21,32 @@ def data_dir_mini() -> Path:
 
 
 @pytest.fixture
+def data_dir_mini_no_override_true(data_dir_mini: Path, tmp_path: Path) -> Path:
+    """Read_Override が全行 False(基準側のみ)の mini データ複製。
+
+    実機報告(2026-08-01)のダミーデータの形: parameterLabel に評価側
+    (Override=True)の測定が1つも無く、相対化パーツが計算不能になる。
+
+    Returns:
+        複製した一時データディレクトリのパス。
+
+    """
+    dest = tmp_path / "no_override_true"
+    shutil.copytree(data_dir_mini, dest)
+    plabel = dest / "parameterLabel_FBC.csv"
+    lines = plabel.read_text(encoding="utf-8").splitlines()
+    header = lines[0].split(",")
+    idx = header.index("Read_Override")
+    for i, line in enumerate(lines[1:], start=1):
+        cells = line.split(",")
+        if len(cells) == len(header):
+            cells[idx] = "0"
+            lines[i] = ",".join(cells)
+    plabel.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return dest
+
+
+@pytest.fixture
 def fixtures_dir() -> Path:
     """テスト用フィクスチャディレクトリのパス。
 

@@ -688,6 +688,54 @@ def test_part_types_without_data_config_only_never_flags() -> None:
     assert state.part_types_without_data(sf, ctx) == set()
 
 
+def test_part_value_mismatches_flags_values_not_in_data(data_dir_mini: Path, sf: dict[str, Any]) -> None:
+    """filter・相対化の値がデータに無いパーツを読み込み直後から検出することを検証する。
+
+    ユーザー報告のシナリオ: config は Read_Label='upper1' で filter するが
+    データの実値は 'read_level_upper1' — 従来は編集対象に選ぶまで気づけなかった。
+    """
+    ctx = state.build_context(str(data_dir_mini))
+    part = {
+        "_uid": "u1",
+        "name": "p1",
+        "type": "FBC",
+        "order": ["Read_Label", "WL"],
+        "aggregations": {"Read_Label": {"op": "filter", "value": "upper1"}, "WL": {"op": "mean"}},
+    }
+    sf["score_parts"].append(part)
+    got = state.part_value_mismatches(sf, ctx)
+    assert set(got) == {"u1"}
+    assert "Read_Label" in got["u1"][0]
+    assert "upper1" in got["u1"][0]
+
+    # データに実在する値なら検出されない
+    part["aggregations"]["Read_Label"]["value"] = "read_level_upper1"
+    assert state.part_value_mismatches(sf, ctx) == {}
+
+    # 相対化の分子/分母も対象(Measure 99 はデータに無い)
+    part["relative"] = {"split_axis": "Measure", "numerator_when": 99, "denominator_when": 0}
+    got = state.part_value_mismatches(sf, ctx)
+    assert any("99" in m for m in got["u1"])
+
+    # 選択セット参照(ref)は判定対象外(候補との突き合わせは直接指定の値だけ)
+    del part["relative"]
+    part["aggregations"]["Read_Label"] = {"op": "filter", "value": "upper1", "ref": "s1"}
+    assert state.part_value_mismatches(sf, ctx) == {}
+
+    # dVtBudget パーツは FBC.csv を読む(エンジンの _source_type と同じ対応)
+    # — 型名のままカタログを引くと検査から漏れる、の回帰
+    sf["score_parts"] = [
+        {
+            "_uid": "u2",
+            "name": "pd",
+            "type": "dVtBudget",
+            "order": ["Read_Label"],
+            "aggregations": {"Read_Label": {"op": "filter", "value": "upper1"}},
+        }
+    ]
+    assert set(state.part_value_mismatches(sf, ctx)) == {"u2"}
+
+
 def test_build_context_missing_dir() -> None:
     """存在しないディレクトリ指定が ValueError で拒否されることを検証する。"""
     with pytest.raises(ValueError, match="見つかりません"):

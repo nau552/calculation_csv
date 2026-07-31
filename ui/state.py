@@ -793,6 +793,78 @@ def part_types_without_data(score_file: dict[str, Any], ctx: dict[str, Any] | No
     }
 
 
+def source_data_type(part_type: object) -> object:
+    """パーツの type → 実際に読む測定データの type(エンジン cli._source_type と同じ対応)。
+
+    dVtBudget パーツは FBC.csv を読むため、カタログや検証の突き合わせは
+    FBC で行う必要がある(型名のまま引くと dVtBudget パーツだけ漏れる)。
+
+    Returns:
+        実際に読む type 名("dVtBudget" なら "FBC"、それ以外はそのまま)。
+
+    """
+    return "FBC" if part_type == "dVtBudget" else part_type
+
+
+def _missing_axis_value(axis: str, value: object, catalog: dict[str, list | None]) -> str | None:
+    """軸の値がカタログ候補に無ければ警告メッセージ、判定不能・一致なら None を返す。
+
+    Returns:
+        「軸 の値 v はデータにありません」形式のメッセージ。候補が取れない軸
+        (グループ派生軸・候補不明)や値未入力は判定せず None。
+
+    """
+    cands = catalog.get(axis)
+    if not cands or value is None or value in cands:
+        return None
+    return f"{axis} の値 {value!r} はデータにありません"
+
+
+def part_value_mismatches(score_file: dict[str, Any], ctx: dict[str, Any] | None) -> dict[str, list[str]]:
+    """設定の値がデータの候補に無いパーツ: {_uid: 問題メッセージのリスト}。
+
+    設定として有効(pydantic OK)でも、filter/diff/選択リストや相対化の
+    分子/分母の値がデータに存在しなければ計算は必ず失敗する(filter が空振り
+    して null 集計)。テスト計算して初めて気づくのは遠回りなので、一覧の
+    「⚠ データ不一致」と編集画面の警告に使う。判定できるのは候補が取れる軸
+    だけ: グループ派生軸・候補不明の軸・選択セット参照(ref)・仮想ステップ
+    (__x__)は対象外。type のデータ自体が無いパーツは part_types_without_data
+    が担当するのでここでは対象外。
+
+    Returns:
+        候補に無い値を持つパーツの `_uid` → メッセージリスト(問題の無い
+        パーツは載らない)。
+
+    """
+    catalogs = (ctx or {}).get("catalogs") or {}
+    out: dict[str, list[str]] = {}
+    for p in score_file.get("score_parts", []):
+        catalog = catalogs.get(source_data_type(p.get("type")))
+        if not catalog:
+            continue
+        msgs: list[str] = []
+        for entry, spec in (p.get("aggregations") or {}).items():
+            if entry.startswith("__") or not isinstance(spec, dict) or spec.get("ref"):
+                continue
+            value = spec.get("value")
+            values = value if isinstance(value, list) else [value]
+            axes = entry.split("&")
+            for v in values:
+                # 複合軸の行は {軸: 値} 辞書、単一軸はスカラー
+                pairs = v.items() if isinstance(v, dict) else [(axes[0], v)]
+                msgs.extend(m for a, av in pairs if (m := _missing_axis_value(a, av, catalog)))
+        rel = p.get("relative")
+        split_axis = rel.get("split_axis") if isinstance(rel, dict) else None
+        if isinstance(split_axis, str) and isinstance(rel, dict):
+            for k, side in (("numerator_when", "分子"), ("denominator_when", "分母")):
+                m = _missing_axis_value(split_axis, rel.get(k), catalog)
+                if m:
+                    msgs.append(f"相対化の{side}: {m}")
+        if msgs:
+            out[p["_uid"]] = msgs
+    return out
+
+
 # -------------------------------------------------- コンテキスト(画面1)
 
 

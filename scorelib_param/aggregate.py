@@ -40,7 +40,14 @@ def group_column_expr(axis: str, ranges: Mapping[str, tuple[int, int]]) -> pl.Ex
 
 
 def _reduce(lf: pl.LazyFrame, value_col: str, group_keys: Sequence[str], op: str) -> pl.LazyFrame:
-    agg_expr = getattr(pl.col(value_col), op)().alias(value_col)
+    agg_expr = getattr(pl.col(value_col), op)()
+    if op in {"min", "max"}:
+        # polars の min/max は NaN を黙って飛ばす(mean/sum は伝播する)。照会
+        # 失敗の NaN 印(relative.py / dvtbudget.py / diff)が途中の min/max で
+        # 消えると「エラーなしで値がズレる」ため、NaN があれば結果も NaN にする
+        has_nan = pl.col(value_col).cast(pl.Float64).is_nan().any()
+        agg_expr = pl.when(has_nan).then(float("nan")).otherwise(agg_expr)
+    agg_expr = agg_expr.alias(value_col)
     if group_keys:
         return lf.group_by(list(group_keys)).agg(agg_expr)
     return lf.select(agg_expr)
@@ -187,7 +194,11 @@ def _apply_diff_op(
     b = lf.filter(pl.col(axis) == b_val).drop(axis).rename({value_col: "__b__"})
     keys = list(group_keys)
     joined = a.join(b, on=keys, how="left") if keys else a.join(b, how="cross")
-    return joined.with_columns((pl.col(value_col) - pl.col("__b__")).alias(value_col)).drop("__b__")
+    # b 側の相手が見つからなかった行(left join 不成立)は null になる。後段の
+    # 集計が null を黙って除外して「エラーなしで値がズレる」ため、NaN に変えて
+    # 最終 collapse まで伝播させる(原因は compute_score_part が診断する)
+    diffed = (pl.col(value_col) - pl.col("__b__")).fill_null(float("nan"))
+    return joined.with_columns(diffed.alias(value_col)).drop("__b__")
 
 
 def _apply_expr_op(
@@ -306,6 +317,15 @@ def apply_aggregations(
     return lf
 
 
+class CollapseNullError(ValueError):
+    """最終結果の値列に null / NaN が残っていたことを表す。
+
+    原因(filter の空振り・相対化ペア不成立・dVtBudget 係数/温度の照会失敗
+    など)はこの層では分からない。compute_score_part がこの例外を捕まえて
+    パイプラインを歩き直し、原因ステップを名指しした ValueError に変換する。
+    """
+
+
 def collapse(lf: pl.LazyFrame, value_col: str, identity_axes: Sequence[str] = ()) -> pl.DataFrame:
     """`identity_axes` 以外がすべて潰れていることを検証して DataFrame を返す。
 
@@ -318,9 +338,10 @@ def collapse(lf: pl.LazyFrame, value_col: str, identity_axes: Sequence[str] = ()
         identity 軸 + 値列だけを持つ collect 済みの DataFrame。
 
     Raises:
-        ValueError: identity 軸以外の列が潰れずに残っているとき、
-            identity 軸なしで結果が1行に収束していないとき、
-            値列に null が含まれるとき(filter の空振りの疑い)。
+        ValueError: identity 軸以外の列が潰れずに残っているとき、または
+            identity 軸なしで結果が1行に収束していないとき。
+        CollapseNullError: 値列に null / NaN が残っているとき(入力行が
+            0件のまま集計された・照会系ステップが値を失った、のどちらか)。
 
     """
     df = lf.collect()
@@ -334,12 +355,13 @@ def collapse(lf: pl.LazyFrame, value_col: str, identity_axes: Sequence[str] = ()
     if not identity_axes and df.height != 1:
         msg = f"expected aggregation to collapse to a single value, got {df.height} rows"
         raise ValueError(msg)
-    if df[value_col].null_count() > 0:
-        msg = (
-            f"aggregation produced null for '{value_col}' — a filter value probably "
-            "matched no rows (check filter values against the data)"
-        )
-        raise ValueError(msg)
+    # NaN も検査対象: 照会系ステップ(相対化ペア・dVtBudget 係数)は照会に
+    # 失敗した行を null でなく NaN として伝播させる(mean 等が null を黙って
+    # 除外して「エラーなしで値がズレる」のを防ぐため — relative.py / dvtbudget.py)
+    values = df[value_col].cast(pl.Float64)
+    if values.is_null().any() or values.is_nan().any():
+        msg = f"aggregation produced null for '{value_col}'"
+        raise CollapseNullError(msg)
     return df
 
 

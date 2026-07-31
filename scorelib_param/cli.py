@@ -24,6 +24,7 @@ import polars as pl
 
 from . import axis_resolve, custom, io_jsonc
 from .aggregate import (
+    CollapseNullError,
     apply_aggregations,
     apply_transform,
     collapse,
@@ -802,6 +803,140 @@ class _StepContext:
     identity_axes: tuple[str, ...]
 
 
+def _apply_steps(
+    lf: pl.LazyFrame,
+    indexed_steps: list[tuple[int, str]],
+    ctx: _StepContext,
+    shared_ctx: SharedComputeContext | None,
+    cache_keys: dict[int, tuple],
+) -> pl.LazyFrame:
+    """ステップ列(order)を順に適用する(compute_score_part の下請け)。
+
+    Returns:
+        全ステップ適用後の LazyFrame。キャッシュ点(cache_keys にある位置)では
+        collect して shared_ctx.prefix_cache に保存し、以降はその実体から続ける。
+
+    """
+    for j, step in indexed_steps:
+        lf = _apply_pipeline_step(lf, step, ctx)
+        if shared_ctx is not None and j in cache_keys:
+            df = lf.collect()
+            shared_ctx.prefix_cache[cache_keys[j]] = df
+            lf = df.lazy()
+    return lf
+
+
+def _probe_frame(lf: pl.LazyFrame, value_col: str) -> tuple[int, int]:
+    """診断用: フレームの行数と、値列が null / NaN の行数を数える。
+
+    Returns:
+        (行数, 値列が null または NaN の行数)のタプル。
+
+    """
+    v = pl.col(value_col).cast(pl.Float64)
+    df = lf.select(pl.len().alias("__rows__"), (v.is_null() | v.is_nan()).sum().alias("__bad__")).collect()
+    return int(df["__rows__"][0]), int(df["__bad__"][0])
+
+
+def _diagnose_empty_step(step: str, ctx: _StepContext, before: pl.LazyFrame) -> str:
+    """診断用: 行数が 0 になったステップの原因を言葉にする。
+
+    Returns:
+        原因の説明(filter の空振り・相対化の片側不在など)。
+
+    """
+    rel = ctx.score_part.relative
+    if step == RELATIVE_STEP and rel is not None:
+        axis = rel.split_axis
+        n_num = int(before.filter(pl.col(axis) == rel.numerator_when).select(pl.len()).collect().item())
+        n_den = int(before.filter(pl.col(axis) == rel.denominator_when).select(pl.len()).collect().item())
+        if n_num == 0:
+            return (
+                f"relative split '{axis}': no rows where {axis} == {rel.numerator_when!r} "
+                "(evaluation side) — the data does not contain that side"
+            )
+        if n_den == 0:
+            return (
+                f"relative split '{axis}': no rows where {axis} == {rel.denominator_when!r} "
+                "(reference side) — the data does not contain that side"
+            )
+        return f"relative split '{axis}': rows exist on both sides but no pairs matched on the remaining axes"
+    spec = ctx.score_part.aggregations.get(step)
+    if spec is not None and spec.op == "filter":
+        return f"filter {step} == {spec.value!r} matched no rows"
+    if spec is not None and spec.op == "diff" and isinstance(spec.value, list):
+        return f"diff selection {step} == {spec.value[0]!r} matched no rows"
+    return f"step '{step}' left no rows"
+
+
+def _diagnose_bad_step(step: str, ctx: _StepContext, after: pl.LazyFrame, bad: int, rows: int) -> str:
+    """診断用: 値列に null / NaN を持ち込んだステップの原因を言葉にする。
+
+    Returns:
+        原因の説明(dVtBudget 係数/温度の照会失敗・相対化の相手不在など)。
+
+    """
+    v = pl.col(ctx.source_type).cast(pl.Float64)
+    if step == DVTBUDGET_STEP:
+        pairs = after.filter(v.is_null() | v.is_nan()).select("Board", "State").unique().limit(8).collect().rows()
+        return (
+            f"dVtBudget coefficient/temperature lookup failed for {bad} of {rows} rows "
+            f"(no entry for (Board, State) = {pairs}; check dvtbudget_coef for "
+            f"generation '{ctx.generation}' and the board temperatures)"
+        )
+    rel = ctx.score_part.relative
+    if step == RELATIVE_STEP and rel is not None:
+        return (
+            f"relative split '{rel.split_axis}': {bad} of {rows} evaluation-side rows "
+            "had no reference-side partner on the remaining axes"
+        )
+    spec = ctx.score_part.aggregations.get(step)
+    if spec is not None and spec.op == "diff" and isinstance(spec.value, list):
+        return f"diff: {bad} of {rows} rows for {spec.value[0]!r} had no {spec.value[1]!r} partner"
+    return f"step '{step}' produced {bad} missing value(s) out of {rows} rows"
+
+
+def _diagnose_pipeline(lf: pl.LazyFrame, steps: list[str], ctx: _StepContext) -> str | None:
+    """最終結果の null / NaN の原因を、パイプラインを歩き直して特定する(エラー経路専用)。
+
+    成功時には呼ばれない(コストはゼロ)。prefilter(前出し最適化)は適用せず
+    素の順で歩く — 結果不変の最適化なので原因の位置は同じで、ステップ名で
+    報告できる方が分かりやすい。
+
+    Returns:
+        原因の説明。診断中に二次エラーが起きた・特定できなかった場合は None
+        (呼び出し側は元のエラーをそのまま出す)。
+
+    """
+    try:
+        return _diagnose_walk(lf, steps, ctx)
+    # 診断はおまけ: 二次エラーで元のエラーを隠さない
+    except Exception:  # ruff: ignore[BLE001]
+        return None
+
+
+def _diagnose_walk(lf: pl.LazyFrame, steps: list[str], ctx: _StepContext) -> str | None:
+    """診断の本体: ステップを順に適用しながら行数と null / NaN を監視する。
+
+    Returns:
+        最初に行または値を失ったステップの説明。見つからなければ None。
+
+    """
+    value_col = ctx.source_type
+    rows, bad = _probe_frame(lf, value_col)
+    if rows == 0:
+        return "the source data has no rows"
+    for step in steps:
+        before, prev_rows, prev_bad = lf, rows, bad
+        lf = _apply_pipeline_step(lf, step, ctx)
+        rows, bad = _probe_frame(lf, value_col)
+        if rows == 0 and prev_rows > 0:
+            return _diagnose_empty_step(step, ctx, before)
+        if bad > 0 and prev_bad == 0:
+            return _diagnose_bad_step(step, ctx, lf, bad, rows)
+    return None
+
+
 def _apply_pipeline_step(lf: pl.LazyFrame, step: str, ctx: _StepContext) -> pl.LazyFrame:
     """仮想ステップ含む order のエントリ1つを適用する(compute_score_part の下請け)。
 
@@ -918,8 +1053,11 @@ def compute_score_part(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略
         ValueError: identity_axes を shared_ctx 無し・custom パーツ・2軸
             以上で使ったとき、custom パーツなのに custom_module が無い
             とき、dVtBudget パーツに generation / dvtbudget_coef /
-            board_temperatures が揃っていないとき、または order の仮想
-            ステップに対応する集計指示が無いとき。
+            board_temperatures が揃っていないとき、order の仮想
+            ステップに対応する集計指示が無いとき、または計算結果が
+            null / NaN で原因ステップを特定できたとき(名指しの説明つき)。
+        CollapseNullError: 計算結果が null / NaN で、原因ステップを
+            特定できなかったとき。
 
     """
     if identity_axes:
@@ -959,16 +1097,23 @@ def compute_score_part(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略
         board_temperatures=board_temperatures,
         identity_axes=identity_axes,
     )
-    for j in range(start, len(steps)):
-        lf = _apply_pipeline_step(lf, steps[j], ctx)
-        if shared_ctx is not None and j in cache_keys:
-            df = lf.collect()
-            shared_ctx.prefix_cache[cache_keys[j]] = df
-            lf = df.lazy()
-
-    if identity_axes:
-        return collapse(lf, source_type, identity_axes)
-    return collapse_to_scalar(lf, source_type)
+    try:
+        lf = _apply_steps(lf, list(enumerate(steps))[start:], ctx, shared_ctx, cache_keys)
+        if identity_axes:
+            return collapse(lf, source_type, identity_axes)
+        return collapse_to_scalar(lf, source_type)
+    except CollapseNullError as err:
+        # 最終結果の null / NaN は「どこかのステップが行または値を失った」
+        # 事実しか伝えない。エラー経路に限りパイプラインを素の順で歩き直し、
+        # 原因ステップ(filter 空振り / 相対化の片側不在 / 係数照会失敗など)を
+        # 名指しした ValueError に変換する
+        detail = _diagnose_pipeline(
+            _base_frame(data_dir, score_part, group_defs, shared_ctx, identity_axes), steps, ctx
+        )
+        if detail is None:
+            raise
+        msg = f"{err} — {detail}"
+        raise ValueError(msg) from err
 
 
 def compute_score_file(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略可能キーワード引数は設計(束ねない方針 — docs/dev_workflow.md)
@@ -987,7 +1132,9 @@ def compute_score_file(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略
 
     Raises:
         ValueError: type="custom" のパーツがあるのに custom_parts.py が
-            見つからないとき。
+            見つからないとき。また、パーツ計算中の ValueError は
+            「score part '名前': 元メッセージ」の形で失敗パーツを名指しして
+            再送出する(元メッセージが既に名指ししていればそのまま)。
 
     """
     score_file = run_config.to_score_file()
@@ -1022,37 +1169,47 @@ def compute_score_file(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略
     values: dict[str, float] = {}
     for score_part in score_file.score_parts:
         st = _source_type(score_part)
-        if (
+        use_dummy = (
             score_part.type != CUSTOM_TYPE
             and st in dummy_values
             and not axis_resolve.data_file(Path(data_dir), f"{st}.csv").exists()
-        ):
-            values[score_part.name] = compute_dummy_part(
-                data_dir,
-                score_part,
-                dummy_values[st],
-                group_defs=group_defs,
-                selection_sets=score_file.selectionSets,
-                weight_sets=score_file.weightSets,
-            )
+        )
+        try:
+            if use_dummy:
+                values[score_part.name] = compute_dummy_part(
+                    data_dir,
+                    score_part,
+                    dummy_values[st],
+                    group_defs=group_defs,
+                    selection_sets=score_file.selectionSets,
+                    weight_sets=score_file.weightSets,
+                )
+            else:
+                values[score_part.name] = compute_score_part(
+                    data_dir,
+                    score_part,
+                    group_defs=group_defs,
+                    generation=run_config.Generation,
+                    dvtbudget_coef=dvtbudget_coef,
+                    board_temperatures=board_temperatures,
+                    shared_ctx=shared_ctx,
+                    selection_sets=score_file.selectionSets,
+                    weight_sets=score_file.weightSets,
+                    custom_module=custom_module,
+                )
+        except ValueError as err:
+            # どのパーツで失敗したかを常に名指しする(深部のエラー — null 集計
+            # など — はパーツ名を知らないため。既に名指し済みなら包み直さない)
+            if f"'{score_part.name}'" not in str(err):
+                msg = f"score part '{score_part.name}': {err}"
+                raise ValueError(msg) from err
+            raise
+        if use_dummy:
             print(
                 f"note: part '{score_part.name}' computed with vthSkip dummy value "
                 f"{dummy_values[st]} ({st}.csv not found in {data_dir})",
                 file=sys.stderr,
             )
-            continue
-        values[score_part.name] = compute_score_part(
-            data_dir,
-            score_part,
-            group_defs=group_defs,
-            generation=run_config.Generation,
-            dvtbudget_coef=dvtbudget_coef,
-            board_temperatures=board_temperatures,
-            shared_ctx=shared_ctx,
-            selection_sets=score_file.selectionSets,
-            weight_sets=score_file.weightSets,
-            custom_module=custom_module,
-        )
 
     score = evaluate_expression(score_file.expression, values) if score_file.expression else None
     return {"Score": score, **values}

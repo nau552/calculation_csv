@@ -105,6 +105,26 @@ def _axis_format(axis: str, measure_labels: dict[int, str] | None) -> Callable[[
     return measure_format(measure_labels) if axis == "Measure" else str
 
 
+def _options_with_missing(cands: list, current: list) -> tuple[list, list]:
+    """選択肢(multiselect 用)と「データに無い既存値」を作る。
+
+    データに無い既存値も選択肢に残す — エディタを開いただけで設定値が黙って
+    消えるのを防ぐ(外すかどうかはユーザーが決める)。
+
+    Returns:
+        (候補 + データに無い既存値, データに無い既存値)のタプル。
+
+    """
+    missing = [v for v in current if v is not None and v not in cands]
+    return [*cands, *missing], missing
+
+
+def _warn_missing_values(axis: str, missing: list) -> None:
+    """既存の設定値がデータの候補に無いことを警告する(値は保持されている)。"""
+    shown = ", ".join(repr(v) for v in missing)
+    st.warning(f"{axis} の値 {shown} はデータにありません(選択から外すと設定から削除されます)")
+
+
 def parse_scalar(text: str) -> bool | int | float | str:
     """自由入力テキスト → 型付きの軸の値(bool / int / float / str)。
 
@@ -156,10 +176,27 @@ def value_widget(
 
     """
     if axis_input.candidates:
-        index = axis_input.candidates.index(current) if current in axis_input.candidates else 0
-        return container.selectbox(
-            axis_input.label, axis_input.candidates, index=index, key=key, format_func=axis_input.format_func
-        )
+        options = list(axis_input.candidates)
+        # 候補に無い既存値は「(データに無し)」の印つきで選択肢に残す —
+        # エディタを描画しただけで index=0 の値へ黙って書き換わるのを防ぐ
+        # (split_axis の選択肢・multiselect 系と同じ定石。実機で相対化の
+        # 分子 True が描画だけで False に化けた 2026-08-01 の再発防止)
+        marked = current is not None and current not in options
+        if marked:
+            options = [*options, current]
+
+        def fmt(v: object) -> str:
+            """選択肢を表示する(データに無い既存値には印を付ける)。
+
+            Returns:
+                通常の表示文字列(印の対象値のみ「(データに無し)」を付加)。
+
+            """
+            base = axis_input.format_func(v)
+            return f"{base}(データに無し)" if marked and v == current else base
+
+        index = options.index(current) if current in options else 0
+        return container.selectbox(axis_input.label, options, index=index, key=key, format_func=fmt)
     text = container.text_input(axis_input.label, value="" if current is None else str(current), key=key)
     return parse_scalar(text) if text.strip() else None
 
@@ -225,9 +262,12 @@ def selection_list_widget(
     """
     cands = catalog.get(axes[0])
     if len(axes) == 1 and cands:
-        default = [v for v in values if v in cands]
+        options, missing = _options_with_missing(cands, values)
+        if missing:
+            _warn_missing_values(axes[0], missing)
+        default = [v for v in values if v is not None]
         return st.multiselect(
-            f"{axes[0]} の値", cands, default=default, key=key, format_func=_axis_format(axes[0], measure_labels)
+            f"{axes[0]} の値", options, default=default, key=key, format_func=_axis_format(axes[0], measure_labels)
         )
 
     out = []
@@ -247,12 +287,28 @@ def selection_list_widget(
 
 def _ref_widget(spec: dict[str, Any], set_names: list[str], key: str) -> None:
     if not set_names:
+        # 既存の参照は書き潰さない(描画だけでは設定を変えない — 検証エラーが別途出る)
         st.caption("選択セットが未定義です(画面3で作成)")
-        spec["ref"] = None
         return
     current = spec.get("ref")
-    index = set_names.index(current) if current in set_names else 0
-    spec["ref"] = st.selectbox("選択セット", set_names, index=index, key=f"{key}_ref")
+    options: list = list(set_names)
+    # 存在しないセット名の参照(インポート由来など)も印つきで選択肢に残す —
+    # 描画しただけで先頭のセットへ黙って書き換わるのを防ぐ(value_widget と
+    # 同じ定石。検証エラーは別途パーツ単位で表示される)
+    if current is not None and current not in options:
+        options = [*options, current]
+
+    def _label(name: object) -> str:
+        """存在しないセット参照の選択肢に印を付けて表示する。
+
+        Returns:
+            セット名(現在の参照先が存在しない場合のみ「(存在しません)」を付加)。
+
+        """
+        return f"{name}(存在しません)" if name == current and current not in set_names else str(name)
+
+    index = options.index(current) if current in options else 0
+    spec["ref"] = st.selectbox("選択セット", options, index=index, key=f"{key}_ref", format_func=_label)
 
 
 _TRANSFORM_LABELS = {
@@ -311,17 +367,37 @@ def _transform_editor(spec: dict[str, Any], op: str, ctx: EditorContext, key: st
         return
 
     if not ctx.by_candidates:
+        # 既存の by 軸は書き潰さない(描画だけでは設定を変えない)
         st.caption("値ごとの定数を使うにはグループ定義(画面3)を作成してください")
-        spec.pop("by", None)
         return
     cur = spec.get("by")
+    by_options: list = list(ctx.by_candidates)
+    # 候補に無い既存の by 軸(定義が消された等)も印つきで選択肢に残す —
+    # 描画しただけで先頭候補へ黙って書き換わるのを防ぐ(value_widget と同じ定石)
+    if cur is not None and cur not in by_options:
+        by_options = [*by_options, cur]
+
+    def _by_label(axis: object) -> str:
+        """定義の無い by 軸の選択肢に印を付けて表示する。
+
+        Returns:
+            軸名(現在の by 軸に定義が無い場合のみ「(定義がありません)」を付加)。
+
+        """
+        return f"{axis}(定義がありません)" if axis == cur and cur not in ctx.by_candidates else str(axis)
+
     spec["by"] = st.selectbox(
         "対象軸(この軸の値ごとに定数を変える)",
-        ctx.by_candidates,
-        index=ctx.by_candidates.index(cur) if cur in ctx.by_candidates else 0,
+        by_options,
+        index=by_options.index(cur) if cur in by_options else 0,
         key=f"{key}_tby",
+        format_func=_by_label,
         help="通常はグループ派生軸(例: WLgroup)。この軸がまだ列として残っている位置にステップを置いてください",
     )
+    if cur is not None and spec["by"] != cur:
+        # ユーザーが by 軸を変えた: 旧軸の値ごと辞書は無効なので破棄し、下で
+        # 新軸の候補から作り直す(操作起点の整理 — 描画だけでは消さない)
+        spec.pop("value", None)
 
     sources = ["重みセット(ref)", "直接入力"]
     src = st.radio(
@@ -333,62 +409,81 @@ def _transform_editor(spec: dict[str, Any], op: str, ctx: EditorContext, key: st
     )
     if src == sources[0]:
         if not ctx.weight_set_names:
+            # 既存の参照は書き潰さない(描画だけでは設定を変えない)
             st.caption("重みセットが未定義です(画面3のグループ定義で作成、または設定jsoncの WLgroupWeight を読み込み)")
-            spec["ref"] = None
             return
         spec.pop("value", None)
         cur_ref = spec.get("ref")
+        ref_options: list = list(ctx.weight_set_names)
+        # 存在しない重みセット参照も印つきで選択肢に残す(value_widget と同じ定石 —
+        # 描画しただけで先頭のセットへ黙って書き換わるのを防ぐ)
+        if cur_ref is not None and cur_ref not in ref_options:
+            ref_options = [*ref_options, cur_ref]
         spec["ref"] = st.selectbox(
             "重みセット",
-            ctx.weight_set_names,
-            index=ctx.weight_set_names.index(cur_ref) if cur_ref in ctx.weight_set_names else 0,
+            ref_options,
+            index=ref_options.index(cur_ref) if cur_ref in ref_options else 0,
             key=f"{key}_tref",
+            format_func=lambda n, _cur=cur_ref, _known=ctx.weight_set_names: (
+                f"{n}(存在しません)" if n == _cur and n not in _known else str(n)
+            ),
         )
         return
 
     spec.pop("ref", None)
-    labels = ctx.by_value_labels.get(spec["by"]) or []
-    v = spec.get("value")
-    current = v if isinstance(v, dict) else {}
-    if labels:
-        weights = {}
-        for i, label in enumerate(labels):
-            v = current.get(label)
-            weights[label] = st.number_input(
-                str(label),
-                value=float(v) if isinstance(v, (int, float)) else default,
-                key=f"{key}_tw{i}",
-            )
-        spec["value"] = weights
-    elif current:
-        # 値の候補が分からない軸: 既存の辞書のキーだけ編集できる
-        spec["value"] = {
-            k: st.number_input(str(k), value=float(v), key=f"{key}_twk{i}") for i, (k, v) in enumerate(current.items())
-        }
-    else:
+    by_axis = spec.get("by")
+    labels = (ctx.by_value_labels.get(by_axis) if isinstance(by_axis, str) else None) or []
+    if not _per_value_dict_editor(spec, "value", labels, default, f"{key}_tw"):
         st.caption("この軸の値の候補が分かりません。グループ派生軸を選ぶか、jsonc で直接記入してください")
 
 
-def _weight_by_value_editor(spec: dict[str, Any], labels: list[Any], key: str) -> None:
-    """集計時重みの「値ごとに入力」欄(spec['weight'] を辞書で編集する)。"""
-    w = spec.get("weight")
-    current = w if isinstance(w, dict) else {}
+def _per_value_dict_editor(spec: dict[str, Any], field: str, labels: list[Any], default: float, key: str) -> bool:
+    """「値ごとの数値」辞書(集計時重み・変換の by 別定数)の共通編集欄。
+
+    描画だけでは設定を変えない: 既存辞書は(候補に無いキーも印つきで)保持し、
+    触っていない新規キー(中立値のまま)は足さない。辞書がまだ無いとき
+    (=ユーザーがこのモードを選んだ直後)にだけ全候補を中立値で初期化する
+    (エンジンは全値のカバーを要求するため)。
+
+    Returns:
+        入力欄を描画したら True。候補も既存辞書も無く何も描画しなかったら
+        False(呼び出し側が案内文を出す)。
+
+    """
+    v = spec.get(field)
+    current = v if isinstance(v, dict) else dict.fromkeys(labels, default)
     if labels:
         weights = {}
         for i, label in enumerate(labels):
             v = current.get(label)
-            weights[label] = st.number_input(
+            entered = st.number_input(
                 str(label),
-                value=float(v) if isinstance(v, (int, float)) else 1.0,
-                key=f"{key}_wv{i}",
+                value=float(v) if isinstance(v, (int, float)) else default,
+                key=f"{key}{i}",
             )
-        spec["weight"] = weights
-    elif current:
+            if label in current or entered != default:
+                weights[label] = entered
+        # 候補に無い既存キーも印つきで残す(描画だけで辞書から消えるのを防ぐ)
+        for i, (k, v) in enumerate((k, v) for k, v in current.items() if k not in labels):
+            weights[k] = st.number_input(
+                f"{k}(データに無し)",
+                value=float(v) if isinstance(v, (int, float)) else default,
+                key=f"{key}x{i}",
+            )
+        spec[field] = weights
+        return True
+    if current:
         # 値の候補が分からない軸: 既存の辞書のキーだけ編集できる
-        spec["weight"] = {
-            k: st.number_input(str(k), value=float(v), key=f"{key}_wvk{i}") for i, (k, v) in enumerate(current.items())
+        spec[field] = {
+            k: st.number_input(str(k), value=float(v), key=f"{key}k{i}") for i, (k, v) in enumerate(current.items())
         }
-    else:
+        return True
+    return False
+
+
+def _weight_by_value_editor(spec: dict[str, Any], labels: list[Any], key: str) -> None:
+    """集計時重みの「値ごとに入力」欄(spec['weight'] を辞書で編集する — _per_value_dict_editor 共用)。"""
+    if not _per_value_dict_editor(spec, "weight", labels, 1.0, f"{key}_wv"):
         st.caption("この軸の値の候補が分かりません。重みセットを使うか、jsonc で直接記入してください")
 
 
@@ -430,17 +525,24 @@ def _agg_weight_editor(
     if mode == modes[1]:
         spec.pop("weight", None)
         if not weight_set_names:
+            # 既存の参照は書き潰さない(描画だけでは設定を変えない)
             st.caption(
                 "重みセットが未定義です(画面3のグループ定義で作成、または設定jsoncの WLgroupWeight / weightSets)"
             )
-            spec["weight_ref"] = None
             return
         cur = spec.get("weight_ref")
+        wref_options: list = list(weight_set_names)
+        # 存在しない重みセット参照も印つきで選択肢に残す(value_widget と同じ定石)
+        if cur is not None and cur not in wref_options:
+            wref_options = [*wref_options, cur]
         spec["weight_ref"] = st.selectbox(
             "重みセット",
-            weight_set_names,
-            index=weight_set_names.index(cur) if cur in weight_set_names else 0,
+            wref_options,
+            index=wref_options.index(cur) if cur in wref_options else 0,
             key=f"{key}_wref",
+            format_func=lambda n, _cur=cur, _known=weight_set_names: (
+                f"{n}(存在しません)" if n == _cur and n not in _known else str(n)
+            ),
         )
         return
     spec.pop("weight_ref", None)
@@ -515,10 +617,13 @@ def _filter_editor(spec: dict[str, Any], axes: list[str], ctx: EditorContext, ke
         # すべて残し、後段の集計に複製として流す)
         cur = spec.get("value")
         cur_list = cur if isinstance(cur, list) else ([cur] if cur is not None else [])
+        options, missing = _options_with_missing(cands, cur_list)
+        if missing:
+            _warn_missing_values(axes[0], missing)
         picked = st.multiselect(
             f"{axes[0]} の値(複数選ぶと該当する値の行をすべて残します)",
-            cands,
-            default=[v for v in cur_list if v in cands],
+            options,
+            default=cur_list,
             key=f"{key}_fv",
             format_func=_axis_format(axes[0], ctx.measure_labels),
         )
@@ -681,19 +786,31 @@ def _relative_mode_row(rel: dict[str, Any], key: str) -> None:
     """mode(ratio/diff)と ratio 用 offset の入力(1行2列)。"""
     c4, c5 = st.columns(2)
     modes = ["ratio", "diff"]
-    rel["mode"] = c4.selectbox(
+    cur_mode = rel.get("mode", "ratio")
+    mode_opts: list = list(modes)
+    # 不正な既存値も印つきで選択肢に残す(value_widget と同じ定石。検証エラーは別途表示)
+    if cur_mode not in mode_opts:
+        mode_opts = [*mode_opts, cur_mode]
+    new_mode = c4.selectbox(
         "mode",
-        modes,
-        index=modes.index(rel.get("mode", "ratio")),
+        mode_opts,
+        index=mode_opts.index(cur_mode),
         key=f"{key}_mode",
+        format_func=lambda m, _cur=cur_mode: f"{m}(不正な値)" if m == _cur and m not in modes else str(m),
         help="ratio: (分子+offset)/(分母+offset)　diff: 分子 - 分母",
     )
-    if rel["mode"] == "ratio":
-        rel["denominator_offset"] = c5.number_input(
+    if new_mode != cur_mode:
+        # ユーザーが変えたときだけ書く(offset の削除も同時)。描画だけでは
+        # キーを作らない・消さない
+        rel["mode"] = new_mode
+        if new_mode != "ratio":
+            rel.pop("denominator_offset", None)
+    if new_mode == "ratio":
+        offset = c5.number_input(
             "offset(分子分母の両方に加算)", value=float(rel.get("denominator_offset", 0)), key=f"{key}_off"
         )
-    else:
-        rel.pop("denominator_offset", None)
+        if "denominator_offset" in rel or offset != 0.0:
+            rel["denominator_offset"] = offset
 
 
 def _denominator_pre_agg_editor(rel: dict[str, Any], ctx: EditorContext, key: str) -> None:
@@ -705,27 +822,39 @@ def _denominator_pre_agg_editor(rel: dict[str, Any], ctx: EditorContext, key: st
             "分母(基準測定)側だけに、比を取る前の集計を適用します(例: 分母はWL平均、分子はWLごと)。"
             "opごとの対象選択も通常の集計指示と同じように使えます"
         )
-        steps = rel.setdefault("denominator_pre_aggregation", [])
+        # 描画だけでは rel を変えない: キーは作らない(追加ボタンで作る)・
+        # 空になっても消さない(空リストは設定として無害で、消すと「描画した
+        # だけで設定が変わる」不変条件が崩れる)
+        steps = rel.get("denominator_pre_aggregation") or []
+        known_axes = sorted(ctx.catalog)
         for i, step in enumerate(steps):
             c_axis, c_del = st.columns([8, 1])
-            axis_opts = sorted(ctx.catalog)
+            axis_opts: list = list(known_axes)
+            cur_axis = step.get("axis")
+            # カタログに無い既存の軸も印つきで選択肢に残す(value_widget と同じ定石)
+            if cur_axis is not None and cur_axis not in axis_opts:
+                axis_opts = [*axis_opts, cur_axis]
             step["axis"] = c_axis.selectbox(
                 "軸",
                 axis_opts,
-                index=axis_opts.index(step.get("axis")) if step.get("axis") in axis_opts else 0,
+                index=axis_opts.index(cur_axis) if cur_axis in axis_opts else 0,
                 key=f"{key}_pre{i}_axis",
+                format_func=lambda a, _cur=cur_axis, _known=known_axes: (
+                    f"{a}(軸がありません)" if a == _cur and a not in _known else str(a)
+                ),
             )
             if c_del.button("✕", key=f"{key}_pre{i}_del", help="この事前集計を削除"):
                 # 直後の st.rerun() が例外でループごと抜けるため、削除後に反復は続かない
                 steps.pop(i)
+                if not steps:
+                    # ユーザーの削除操作で空になったときだけキーごと消す(描画では消さない)
+                    rel.pop("denominator_pre_aggregation", None)
                 st.rerun()
             agg_editor(step["axis"], step, ctx, key=f"{key}_pre{i}")
             st.divider()
         if st.button("+ 事前集計を追加", key=f"{key}_pre_add"):
-            steps.append({"axis": min(ctx.catalog), "op": "mean"})
+            rel.setdefault("denominator_pre_aggregation", []).append({"axis": min(ctx.catalog), "op": "mean"})
             st.rerun()
-        if not steps:
-            rel.pop("denominator_pre_aggregation", None)
 
 
 def relative_editor(part: dict[str, Any], ctx: EditorContext, key: str) -> None:

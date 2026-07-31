@@ -202,13 +202,14 @@ def measure_labels(data_dir: str | Path, type_: str) -> dict[int, str]:
 
 
 def _candidates(data_dir: Path, source_type: str, axis: str, tcsv: Path | None) -> list | None:
-    if axis.endswith(OVERRIDE_SUFFIX):
-        # False(非Override=基準測定)を先頭に: 常に存在する側だから
-        return [False, True]
     map_path = _map_file_for_axis(data_dir, axis)
     if map_path is not None:
         m = pl.read_csv(map_path, has_header=False, new_columns=["code", "text"])
         full = m["text"].to_list()
+        if axis.endswith(OVERRIDE_SUFFIX) and not all(isinstance(v, bool) for v in full):
+            # 解決後の Override 列は bool(axis_resolve 参照)。map のテキストが
+            # 文字列で読まれた場合だけ同じ規則で bool へ正規化して突き合わせる
+            full = [str(v).upper() in {"TRUE", "1"} for v in full]
         # map の全語彙ではなく、過去データに実在する値を優先する(map順は保持):
         # 雛形パーツは先頭候補で filter するため、データに無い値を候補に出すと
         # 「filter が0行にマッチ」で雛形が壊れる。照会に失敗したら全語彙に

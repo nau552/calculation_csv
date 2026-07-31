@@ -36,6 +36,17 @@ def full_dir(tmp_path: Path, data_dir_mini: Path, dvtbudget_coef_path: Path, fix
 ALL_MINI_TYPES = ["FBC", "KLD", "PROGLOOP", "PROGSTATUS", "dVthSGWLD", "tPROG", "tR"]
 
 
+def test_override_candidates_reflect_actual_data(data_dir_mini: Path, data_dir_mini_no_override_true: Path) -> None:
+    """Override 軸の候補が実データに在る側だけになることを検証する。
+
+    以前は [False, True] のハードコードで、評価側(True)の測定を含まない
+    データでも True が候補に出てしまい、「候補には在るが行が無い」不一致を
+    UI が検出できなかった(実機報告 2026-08-01)。
+    """
+    assert axis_catalog(data_dir_mini, "FBC")["Read_Override"] == [False, True]
+    assert axis_catalog(data_dir_mini_no_override_true, "FBC")["Read_Override"] == [False]
+
+
 def test_detect_types(data_dir_mini: Path) -> None:
     """Mini データから全 type が検出されることを検証する。"""
     assert detect_types(data_dir_mini) == ALL_MINI_TYPES

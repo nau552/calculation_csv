@@ -185,6 +185,9 @@ docstring-code-line-length = "dynamic"
 "ui/widgets.py" = [
     "B909",    # ループ中の反復対象の変更の検出。行削除ボタン → pop → st.rerun() は
                # 直後に例外でループを抜ける Streamlit の定石で、反復は続かない
+    "RUF069",  # float の == 比較の警告(preview)。値ごと辞書エディタの「入力が
+               # 中立値のままか」の番兵比較で、number_input の戻り値は変更が
+               # 無ければ厳密に既定値と一致する(近似比較にすると意図が変わる)
 ]
 
 # reference_scripts は単体実行スクリプト置き場

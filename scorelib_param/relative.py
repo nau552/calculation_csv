@@ -62,4 +62,7 @@ def apply_relative(
     else:
         offset = relative.denominator_offset
         combined = (pl.col(value_col) + offset) / (pl.col("__denom__") + offset)
-    return out.with_columns(combined.alias(value_col)).drop("__denom__")
+    # 分母の相手が見つからなかった行(left join 不成立)は null になる。後段の
+    # mean/sum は null を黙って除外して「エラーなしで値がズレる」ため、NaN に
+    # 変えて最終 collapse まで伝播させる(原因は compute_score_part が診断する)
+    return out.with_columns(combined.fill_null(float("nan")).alias(value_col)).drop("__denom__")

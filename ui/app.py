@@ -237,7 +237,9 @@ def _merged_catalog(ctx: dict[str, Any]) -> dict:
 
 
 def _catalog_for_part(ctx: dict[str, Any], part: dict[str, object]) -> dict:
-    return ctx["catalogs"].get(part.get("type"), _merged_catalog(ctx))
+    # 実際に読む type で引く(dVtBudget パーツは FBC — state.source_data_type)。
+    # データに無い type だけマージカタログへフォールバック
+    return ctx["catalogs"].get(state.source_data_type(part.get("type")), _merged_catalog(ctx))
 
 
 def _with_group_axes(catalog: dict, sf: dict) -> dict:
@@ -1040,10 +1042,18 @@ def _part_list_overview(sf: dict, ctx: dict[str, Any], sel_uid: str | None) -> s
     # データに測定ファイルの無い type のパーツも ⚠ 対象(設定としては有効な
     # ままなので検証NGとは別扱い — 編集画面に警告文が出る)
     no_data = state.part_types_without_data(sf, ctx)
+    # filter 等の値がデータに無いパーツも ⚠ 対象(設定としては有効だが計算は
+    # 必ず失敗する。編集対象に選ばなくても読み込み直後から気づけるように)
+    mismatch = state.part_value_mismatches(sf, ctx)
     for r, p in zip(rows, sf["score_parts"], strict=False):
         uid_ = p["_uid"]
-        r["検証"] = "⚠ NG" if uid_ in invalid else ("⚠ データ無し" if uid_ in no_data else "OK")
-    invalid |= no_data
+        if uid_ in invalid:
+            r["検証"] = "⚠ NG"
+        elif uid_ in no_data:
+            r["検証"] = "⚠ データ無し"
+        else:
+            r["検証"] = "⚠ データ不一致" if uid_ in mismatch else "OK"
+    invalid |= no_data | set(mismatch)
     parts_dnd = False
     if widgets.HAS_SORTABLES and len(sf["score_parts"]) > 1:
         labels = state.part_list_labels(sf, sel_uid, invalid, rows=rows)
@@ -1160,6 +1170,8 @@ def _part_body_editor(part: dict, ctx: dict[str, Any], sf: dict, uid: str) -> No
             f"type '{part.get('type')}' の測定データがありません — このパーツは"
             "テスト計算できません(編集・保存は可能。不要なら削除してください)"
         )
+    for w in state.part_value_mismatches({"score_parts": [part]}, ctx).get(uid, []):
+        st.warning(w)
     if part.get("type") == "custom":
         _custom_part_editor(part, ctx, uid)
     else:
@@ -1418,11 +1430,18 @@ def _group_def_editor(sf: dict, name: str, numeric_axes: list[str]) -> None:
     gd = sf["groupDefs"][name]
     axis_opts = numeric_axes or [gd.get("axis", "WL")]
     cur_axis = gd.get("axis")
+    # データに無い既存の対象軸も印つきで選択肢に残す(widgets.value_widget と
+    # 同じ定石 — 描画しただけで先頭の軸へ黙って書き換わるのを防ぐ)
+    if cur_axis is not None and cur_axis not in axis_opts:
+        axis_opts = [*axis_opts, cur_axis]
     gd["axis"] = st.selectbox(
         "対象軸",
         axis_opts,
-        index=axis_opts.index(cur_axis) if cur_axis in axis_opts else 0,
+        index=axis_opts.index(cur_axis) if isinstance(cur_axis, str) and cur_axis in axis_opts else 0,
         key=f"gdef_{name}_axis",
+        format_func=lambda a, _cur=cur_axis, _known=numeric_axes: (
+            f"{a}(軸がありません)" if a == _cur and a not in _known else str(a)
+        ),
     )
     physical = st.checkbox(
         "範囲を Physical 番号で記入する(現行スクリプトの WLgroupDefinLogical=False 相当)",
@@ -1717,6 +1736,10 @@ def main() -> None:
         if sf["score_parts"]:
             n = len(state.validate_score_file(sf))
             (st.success if n == 0 else st.error)("検証 OK" if n == 0 else f"検証エラー {n} 件")
+            # 検証(設定の構造)とは別勘定の、読み込み中データとの突き合わせ結果
+            m = len(state.part_value_mismatches(sf, st.session_state.get("context")))
+            if m:
+                st.warning(f"データ不一致 {m} パーツ")
         st.caption(
             f"engine scorelib_param {scorelib_param.__version__}",
             help="このUIに同梱されたエンジンの版。実験実行側(SVNの scorelib)と一致しているかの確認用",

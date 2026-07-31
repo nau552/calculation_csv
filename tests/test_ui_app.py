@@ -136,6 +136,170 @@ def test_part_with_absent_type_shows_warning(at: AppTest, data_dir_mini: Path) -
     assert at.session_state["score_file"]["score_parts"][0]["type"] == "GONE"
 
 
+def test_part_value_mismatch_visible_and_value_preserved(
+    at: AppTest, data_dir_mini: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """データに無い値で filter するパーツの扱いを検証する(ユーザー報告のシナリオ)。
+
+    従来は (1) 編集対象に選ぶまで一覧に ⚠ が出ない、(2) エディタを開くと候補に
+    無い値が黙って消える、(3) テスト計算のエラーがパーツ名を名指ししない、の
+    三重で原因に辿り着けなかった。3点とも固定する。
+    """
+    from ui import widgets
+
+    monkeypatch.setattr(widgets, "HAS_SORTABLES", False)  # 一覧の表(検証列)を読むため
+    _load_data(at, data_dir_mini)
+    at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
+    at.button(key="add_part_btn").click().run()  # 1つ目: 正常パーツ(こちらが選択される)
+    tail = ["WL", "STR", "State", "Board", "Chip", "Block"]
+    bad = {
+        "_uid": "x2",
+        "name": "p_bad",
+        "type": "FBC",
+        "order": ["Read_Label", *tail],
+        "aggregations": {
+            "Read_Label": {"op": "filter", "value": "upper1"},
+            **{a: {"op": "mean"} for a in tail},
+        },
+    }
+    at.session_state["score_file"]["score_parts"].append(bad)
+    at.run()
+    assert not at.exception
+    # (1) 編集対象に選ばなくても一覧に「データ不一致」が出る(選択中は1つ目のパーツ)
+    rows = at.dataframe[0].value
+    assert list(rows["検証"]) == ["OK", "⚠ データ不一致"]
+    # サイドバーの「検証 OK」(設定の構造)とは別勘定で、不一致の件数も出る
+    assert any("検証 OK" in s.value for s in at.success)
+    assert any("データ不一致 1 パーツ" in w.value for w in at.warning)
+    # (2) 編集対象に選ぶと警告が出て、候補に無い値は保持される(黙って消えない)
+    at.selectbox(key="part_sel").set_value("x2").run()
+    assert any("データにありません" in w.value for w in at.warning)
+    assert at.session_state["score_file"]["score_parts"][1]["aggregations"]["Read_Label"]["value"] == "upper1"
+    # (3) テスト計算のエラーが失敗パーツを名指しする
+    at.sidebar.radio(key="screen").set_value(SCREEN_TEST).run()
+    at.text_input(key="test_dir").set_value(str(data_dir_mini))
+    at.button(key="run_btn").click().run()
+    assert any("score part 'p_bad'" in e.value for e in at.error)
+
+
+def test_render_never_mutates_score_file(at: AppTest, data_dir_mini_no_override_true: Path) -> None:
+    """不変条件: 画面を開く・パーツ/エントリを選ぶだけでは設定は一切変わらない。
+
+    実機報告(2026-08-01)「エディタを描画しただけで相対化の分子が False に
+    書き換わる」の一般化。書き戻し系ウィジェットが候補外の既存値を差し替える/
+    落とすバグのクラス全体をこの1本で捕まえる。データは評価側
+    (Read_Override=True)の測定が無い形にし、候補に無い値・存在しない参照を
+    意図的に詰めた「全部盛り」設定を使う。**エディタや設定の形を増やしたら
+    この設定にも足すこと**(testing_guide 参照)。
+    """
+    import copy
+
+    from ui import state
+
+    _load_data(at, data_dir_mini_no_override_true)
+    tail = {a: {"op": "mean"} for a in ["WL", "STR", "Board", "Chip", "Block"]}
+    rel = {
+        "split_axis": "Read_Override",
+        "numerator_when": True,  # データに無い(候補は [False] のみ)
+        "denominator_when": False,
+        "mode": "ratio",
+        "denominator_offset": 1.0,
+    }
+    measure_spec = {"op": "filter", "value": 1}
+    state.annotate_measure_labels(measure_spec, at.session_state["context"]["measure_labels"]["FBC"])
+    parts = [
+        {  # 相対化(分子がデータに無し)+分母事前集計
+            "_uid": "p1",
+            "name": "rel_full",
+            "type": "FBC",
+            "relative": {**rel, "denominator_pre_aggregation": [{"axis": "WL", "op": "mean"}]},
+            "order": ["State", "WL", "STR", "Board", "Chip", "Block"],
+            "aggregations": {"State": {"op": "filter", "value": "R2A"}, **copy.deepcopy(tail)},
+        },
+        {  # 空の事前集計キーが描画で消えないこと
+            "_uid": "p2",
+            "name": "rel_empty_pre",
+            "type": "FBC",
+            "relative": {**rel, "denominator_pre_aggregation": []},
+            "order": ["WL", "STR", "Board", "Chip", "Block"],
+            "aggregations": copy.deepcopy(tail),
+        },
+        {  # データに無い filter 値・diff 複合軸(片側データに無し)・存在しない重みセット参照・
+            # 候補に無いキーを含む重み辞書・by つき変換(候補外キー入り)
+            "_uid": "p3",
+            "name": "mixed",
+            "type": "FBC",
+            "order": ["Read_Label", "State&Read_Label", "__offset__", "WL", "STR", "Board", "Chip", "Block"],
+            "aggregations": {
+                "Read_Label": {"op": "filter", "value": "upper1"},
+                "State&Read_Label": {
+                    "op": "diff",
+                    "value": [
+                        {"State": "R2A", "Read_Label": "upper1"},
+                        {"State": "A2R", "Read_Label": "read_level_lower1"},
+                    ],
+                },
+                "__offset__": {"op": "mul", "value": {"g1": 2.0, "gx": 3.0}, "by": "WLG"},
+                "WL": {"op": "mean", "weight_ref": "Wnope"},
+                "STR": {"op": "mean", "weight": {0: 0.5, 99: 2.0}},
+                "Board": {"op": "mean"},
+                "Chip": {"op": "mean"},
+                "Block": {"op": "mean"},
+            },
+        },
+        {  # expr op と Measure filter(labels は正規の注記を事前付与)
+            "_uid": "p4",
+            "name": "exprpart",
+            "type": "FBC",
+            "order": ["Measure", "State", "WL", "STR", "Board", "Chip", "Block"],
+            "aggregations": {
+                "Measure": measure_spec,
+                "State": {"op": "expr", "expr": "by['R2A']"},
+                **copy.deepcopy(tail),
+            },
+        },
+        {  # 読み込まれていない custom 関数と params
+            "_uid": "p5",
+            "name": "custompart",
+            "type": "custom",
+            "function": "nope_func",
+            "params": {"a": 1.5},
+        },
+        {  # 存在しない選択セット参照(実在セット S1 と並ぶ)
+            "_uid": "p6",
+            "name": "refpart",
+            "type": "FBC",
+            "order": ["State", "WL", "STR", "Board", "Chip", "Block"],
+            "aggregations": {"State": {"op": "diff", "ref": "Snope"}, **copy.deepcopy(tail)},
+        },
+    ]
+    sf = at.session_state["score_file"]
+    sf["score_parts"] = parts
+    sf["selectionSets"]["S1"] = ["R2A", "A2R"]
+    sf["groupDefs"]["WLG"] = {"axis": "WL", "definedInLogical": True, "groups": {"g1": [0, 2]}}
+    sf["weightSets"] = {"W1": {"g1": 1.0}}
+    sf["expression"] = "rel_full + mixed"
+    sf["constraintThreshold"] = {"rel_full": {"value": 1.0}}
+    at.run()
+    assert not at.exception
+    before = copy.deepcopy(at.session_state["score_file"])
+
+    screens = at.sidebar.radio(key="screen").options
+    for s in screens[1:]:
+        at.sidebar.radio(key="screen").set_value(s).run()
+        assert not at.exception, s
+    at.sidebar.radio(key="screen").set_value(screens[1]).run()
+    for p in parts:
+        at.selectbox(key="part_sel").set_value(p["_uid"]).run()
+        assert not at.exception, p["name"]
+        entry_sel = [s for s in at.selectbox if s.key == f"{p['_uid']}_sel_entry"]
+        for entry in entry_sel[0].options if entry_sel else []:
+            at.selectbox(key=f"{p['_uid']}_sel_entry").set_value(entry).run()
+            assert not at.exception, (p["name"], entry)
+
+    assert at.session_state["score_file"] == before
+
+
 def test_create_part_and_compute(at: AppTest, data_dir_mini: Path) -> None:
     """パーツ作成からテスト計算までの流れを検証する。"""
     _load_data(at, data_dir_mini)

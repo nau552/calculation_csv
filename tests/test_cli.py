@@ -223,6 +223,104 @@ def test_compute_score_file_returns_all_parts(
     assert result["Score"] == pytest.approx(expected_score)
 
 
+def test_compute_score_file_error_names_the_part(data_dir_mini: Path) -> None:
+    """パーツ計算のエラーが失敗したパーツを名指しすることを検証する。
+
+    filter の空振り(データに無い値)による集計エラーは深部で起きてパーツ名を
+    知らない。どのパーツか分からないと設定を直せない(ユーザー報告)ため、
+    compute_score_file が「score part '名前': 」を前置する。
+    """
+    from scorelib_param.models import RunConfig
+
+    tail = ["WL", "STR", "State", "Board", "Chip", "Block"]
+    rc = RunConfig.model_validate(
+        {
+            "Generation": "B9LS",
+            "optimization": {
+                "score_parts": [
+                    {
+                        "name": "bad_filter",
+                        "type": "FBC",
+                        "order": ["Read_Label", *tail],
+                        "aggregations": {
+                            # データの実値は 'read_level_upper1' 等 — 'upper1' は空振りする
+                            "Read_Label": {"op": "filter", "value": "upper1"},
+                            **{a: {"op": "mean"} for a in tail},
+                        },
+                    }
+                ],
+            },
+        }
+    )
+    # パーツ名に加えて、原因ステップ(filter の空振り)も名指しされること
+    with pytest.raises(ValueError, match=r"score part 'bad_filter'.*filter Read_Label == 'upper1' matched no rows"):
+        compute_score_file(data_dir_mini, rc)
+
+
+def test_relative_missing_side_error_names_the_cause(data_dir_mini_no_override_true: Path) -> None:
+    """相対化の評価側が無いデータのエラーが原因を名指しすることを検証する(実機報告 2026-08-01)。
+
+    以前は「a filter value probably matched no rows」という推測の決め打ち文言で、
+    filter や係数表と原因探しが迷走した。
+    """
+    from scorelib_param.models import ScorePart
+
+    tail = ["WL", "STR", "Board", "Chip", "Block"]
+    part = ScorePart.model_validate(
+        {
+            "name": "rel",
+            "type": "FBC",
+            "relative": {
+                "split_axis": "Read_Override",
+                "numerator_when": True,
+                "denominator_when": False,
+                "denominator_offset": 1,
+            },
+            "order": list(tail),
+            "aggregations": {a: {"op": "mean"} for a in tail},
+        }
+    )
+    with pytest.raises(ValueError, match="no rows where Read_Override == True"):
+        compute_score_part(data_dir_mini_no_override_true, part)
+
+
+def test_partial_lookup_miss_errors_instead_of_silent_drop(
+    data_dir_mini: Path, run_config: RunConfig, dvt_inputs: DvtInputs
+) -> None:
+    """係数/温度の部分欠けが黙って値を歪めず、原因つきエラーになることを検証する。
+
+    以前は照会に失敗した行の null を mean/max が黙って除外し、**エラーなしで
+    別の値**が出ていた(実測で 16.26 → -0.23 に化けることを確認 — 2026-08-01)。
+    """
+    part = next(p for p in run_config.optimization.score_parts if p.name == "dVtBudget_R2A")
+    temps = dict(dvt_inputs["board_temperatures"])
+    temps.pop(max(temps))
+    with pytest.raises(ValueError, match="coefficient/temperature lookup failed"):
+        compute_score_part(
+            data_dir_mini,
+            part,
+            group_defs=run_config.group_defs(),
+            generation=run_config.Generation,
+            dvtbudget_coef=dvt_inputs["dvtbudget_coef"],
+            board_temperatures=temps,
+        )
+
+
+def test_dvtbudget_missing_generation_rejected(
+    data_dir_mini: Path, run_config: RunConfig, dvt_inputs: DvtInputs
+) -> None:
+    """係数表に無い Generation が(生の KeyError でなく)明示エラーになることを検証する。"""
+    part = next(p for p in run_config.optimization.score_parts if p.name == "dVtBudget_R2A")
+    with pytest.raises(ValueError, match="no entries for generation 'B0XX'"):
+        compute_score_part(
+            data_dir_mini,
+            part,
+            group_defs=run_config.group_defs(),
+            generation="B0XX",
+            **dvt_inputs,
+        )
+
+
 def test_custom_part_computes(data_dir_mini: Path, fixtures_dir: Path) -> None:
     """type=custom のパーツが計算され、expression に合成されることを検証する。"""
     from scorelib_param.models import RunConfig

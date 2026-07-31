@@ -106,7 +106,8 @@ def apply_dvtbudget(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略可
 
     Raises:
         ValueError: Board / State(epoch_col 指定時はその列も)がすでに
-            集計で潰れていて `lf` に残っていない時。
+            集計で潰れていて `lf` に残っていない時、または係数表に
+            `generation` のエントリが無い時。
 
     """
     schema_cols = lf.collect_schema().names()
@@ -119,6 +120,9 @@ def apply_dvtbudget(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略可
         )
         raise ValueError(msg)
 
+    if generation not in coef.root:
+        msg = f"dvtbudget_coef has no entries for generation '{generation}' (available: {sorted(coef.root)})"
+        raise ValueError(msg)
     gen_coefs = coef.root[generation]
     temp_keys = list(gen_coefs.keys())
 
@@ -138,4 +142,8 @@ def apply_dvtbudget(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略可
     join_keys = ([epoch_col] if epoch_col else []) + ["Board", "State"]
     coef_lf = pl.DataFrame(rows).lazy()
     lf = lf.join(coef_lf, on=join_keys, how="left")
-    return lf.with_columns((-(pl.col(value_col).log10()) / pl.col("__b__") * 1000).alias(value_col)).drop("__b__")
+    converted = -(pl.col(value_col).log10()) / pl.col("__b__") * 1000
+    # 係数・温度の照会に失敗した行(__b__ が null)は null になる。後段の集計が
+    # null を黙って除外して「エラーなしで値がズレる」ため、NaN に変えて最終
+    # collapse まで伝播させる(原因は compute_score_part が診断する)
+    return lf.with_columns(converted.fill_null(float("nan")).alias(value_col)).drop("__b__")
