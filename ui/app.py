@@ -1008,13 +1008,13 @@ def _sync_part_selection(ss: SessionStateProxy, sf: dict) -> list[str]:
         全パーツの _uid のリスト(表示順)。
 
     """
-    # パーツ選択は _uid を**キー付き**ウィジェット状態("part_sel")で持つ。
-    # これによりプルダウン操作が引き起こす再実行の**開始時点**で新しい選択が
-    # 分かる — キー無しだと上に描画済みの一覧が1操作遅れてしまう。
-    # プログラムからの選択移動(追加・複製)は part_sel_pending 経由:
-    # 同一実行内でウィジェットのインスタンス化後にキー付き状態を書くと
-    # 例外になるため、次の実行の冒頭で反映する。並べ替えは対応不要
-    # (uid は変わらないので選択が自動で追従する)。
+    # パーツ選択は _uid を ss["part_sel"](アプリ管理の状態)で持つ。プルダウン
+    # 本体はラベル変更でキーごと作り直すため(streamlit#11268 対策 —
+    # screen_parts 参照)、ウィジェット状態は選択の置き場にしない。選び直しは
+    # selectbox 直後の st.rerun() で反映するので一覧のマーカーは遅れない。
+    # プログラムからの選択移動(追加・複製)は part_sel_pending 経由で次の実行の
+    # 冒頭(ここ)で反映する。並べ替えは対応不要(uid は変わらないので選択が
+    # 自動で追従する)。
     uids = [p["_uid"] for p in sf["score_parts"]]
     pending = ss.pop("part_sel_pending", None)
     if pending in uids:
@@ -1213,12 +1213,23 @@ def screen_parts() -> None:
     st.divider()
 
     select_labels = state.part_select_labels(sf, invalid)
-    st.selectbox(
+    sel_uid = ss.get("part_sel")
+    # キー付き selectbox は「選択中のラベルだけが変わった」とき表示が更新されない
+    # (改名しても欄が古い名前のまま — streamlit#11268)。sortable_list と同じく、
+    # ラベルが変わったらキーごと部品を作り直す。選択の実体は _uid で
+    # ss["part_sel"] に持ち続ける(同名パーツの誤解決を防ぐ — 進行記録 #12)
+    labels_key = f"part_sel_{hash(tuple(select_labels.get(u, '?') for u in uids))}"
+    picked = st.selectbox(
         "編集するパーツ",
         uids,
-        key="part_sel",
+        index=uids.index(sel_uid) if sel_uid in uids else 0,
+        key=labels_key,
         format_func=lambda u: select_labels.get(u, "?"),
     )
+    if picked != sel_uid:
+        # 選び直しは即再実行して、上に描画済みの一覧・マーカーを追随させる
+        ss["part_sel"] = picked
+        st.rerun()
     idx = ss.selected_part  # 画面冒頭で part_sel から導出済み
     part = sf["score_parts"][idx]
     uid = part["_uid"]

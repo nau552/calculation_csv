@@ -17,6 +17,7 @@ from ui import state, widgets
 
 if TYPE_CHECKING:
     from streamlit.testing.v1 import AppTest
+    from streamlit.testing.v1.element_tree import Selectbox
 
 APP = str(Path(__file__).resolve().parent.parent / "ui" / "app.py")
 MINI_TYPES = ["FBC", "KLD", "PROGLOOP", "PROGSTATUS", "dVthSGWLD", "tPROG", "tR"]
@@ -45,6 +46,19 @@ def at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppTest:
     t.run()
     assert not t.exception
     return t
+
+
+def _part_selector(at: AppTest) -> Selectbox:
+    """「編集するパーツ」欄の selectbox を返す。
+
+    ラベルが変わるとキーごと再マウントされる(part_sel_<hash> —
+    streamlit#11268 対策)ため、固定キーでなく前方一致で探す。
+
+    Returns:
+        AppTest の Selectbox 要素。
+
+    """
+    return next(s for s in at.selectbox if str(s.key).startswith("part_sel"))
 
 
 def _load_data(at: AppTest, data_dir: Path) -> None:
@@ -172,7 +186,7 @@ def test_part_value_mismatch_visible_and_value_preserved(
     assert any("検証 OK" in s.value for s in at.success)
     assert any("データ不一致 1 パーツ" in w.value for w in at.warning)
     # (2) 編集対象に選ぶと警告が出て、候補に無い値は保持される(黙って消えない)
-    at.selectbox(key="part_sel").set_value("x2").run()
+    _part_selector(at).set_value("x2").run()
     assert any("データにありません" in w.value for w in at.warning)
     assert at.session_state["score_file"]["score_parts"][1]["aggregations"]["Read_Label"]["value"] == "upper1"
     # (3) テスト計算のエラーが失敗パーツを名指しする
@@ -290,7 +304,7 @@ def test_render_never_mutates_score_file(at: AppTest, data_dir_mini_no_override_
         assert not at.exception, s
     at.sidebar.radio(key="screen").set_value(screens[1]).run()
     for p in parts:
-        at.selectbox(key="part_sel").set_value(p["_uid"]).run()
+        _part_selector(at).set_value(p["_uid"]).run()
         assert not at.exception, p["name"]
         entry_sel = [s for s in at.selectbox if s.key == f"{p['_uid']}_sel_entry"]
         for entry in entry_sel[0].options if entry_sel else []:
@@ -329,6 +343,32 @@ def test_expression_insert_button_updates_input(at: AppTest, data_dir_mini: Path
     assert not at.exception
     assert at.session_state["score_file"]["expression"] == "part_1"
     assert at.text_input(key="expr_input").value == "part_1"
+
+
+def test_part_rename_updates_selector(at: AppTest, data_dir_mini: Path) -> None:
+    """パーツ改名が「編集するパーツ」欄に追随することを検証する(実機報告 2026-08-01)。
+
+    キー付き selectbox は選択中のラベルだけが変わると表示が更新されない
+    (streamlit#11268。D&D 一覧は既に再マウント対策済みで追随していた)ため、
+    ラベルが変わったらキーごと再マウントする。再マウント(キーの変化)・
+    新ラベルの選択肢・選択の保持の3点を固定する。
+    """
+    _load_data(at, data_dir_mini)
+    at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
+    at.button(key="add_part_btn").click().run()
+    at.button(key="add_part_btn").click().run()
+    uid0 = at.session_state["score_file"]["score_parts"][0]["_uid"]
+    _part_selector(at).set_value(uid0).run()
+    sel = _part_selector(at)
+    key_before = sel.key
+    assert "1. part_1" in sel.options
+
+    at.text_input(key=f"{uid0}_name").set_value("renamed_part").run()
+    sel = _part_selector(at)
+    assert sel.key != key_before  # ラベル変更でキーごと再マウントされている
+    assert any("renamed_part" in str(o) for o in sel.options)
+    assert sel.value == uid0  # 選択は保持される
+    assert at.session_state["part_sel"] == uid0
 
 
 def test_part_reorder_buttons(at: AppTest, data_dir_mini: Path) -> None:

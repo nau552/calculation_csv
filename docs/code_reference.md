@@ -267,7 +267,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `_order_entry_label` / `_order_editor` | orderの1行ラベル / 常時ドラッグ可能リスト+「編集するエントリ」プルダウン+常時表示エディタ（削除ボタン内蔵）。フォールバックは ✎/↑↓/✕ 行 |
 | `_add_entry_controls` | 軸追加・複合軸束ね・`__offset__`・仮想ステップ配置 |
 | `_custom_part_editor` | customパーツ用（関数プルダウン+params行エディタ） |
-| `screen_parts` | 画面2。**パーツ選択は _uid をキー付き状態("part_sel")で保持**（run開始時に選択が確定=マーカー即時追従。追加/複製は part_sel_pending で次runに予約）。検証NGは ⚠ |
+| `screen_parts` | 画面2。**パーツ選択は _uid を ss["part_sel"]（アプリ管理の状態）で保持**。プルダウン本体はラベルの hash 入りキー（`part_sel_<hash>`）で、**ラベルが変わるとキーごと再マウント**（改名しても欄が古い名前のまま、という streamlit#11268 の回避 — sortable_list と同方式。2026-08-01）。選び直しは selectbox 直後の st.rerun() で反映するためマーカーは遅れない。追加/複製は part_sel_pending で次runに予約。検証NGは ⚠ |
 | `screen_sets` / `_selection_sets_section` / `_group_defs_section` | 画面3。選択セットとグループ定義の管理 |
 | `screen_compose` | 画面4。expression（パーツ名クリック挿入）+ constraintThreshold 行エディタ |
 | `screen_test_export` | 画面5。テスト計算（ダミー展開中は「数値は無意味」警告、設定のみ編集中はディレクトリ入力の案内・未入力は明確なエラー）/ score.jsonc・パーツ単体エクスポート / インポート |
