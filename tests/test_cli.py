@@ -261,7 +261,7 @@ def test_compute_score_file_reports_all_failing_parts(data_dir_mini: Path) -> No
     """複数パーツの失敗が1回の例外にまとめて列挙されることを検証する。
 
     従来は1個目の失敗で即座に落ちたため「1つ直して動かしたら次のエラー」の
-    往復になっていた(ユーザー要望 2026-08-01)。全パーツを計算し終えてから、
+    往復になっていた(ユーザー要望 2026-07-31)。全パーツを計算し終えてから、
     失敗した全パーツを1行ずつ名指しした例外で**必ず**落ちる(正常なパーツが
     あっても部分結果は返さない)。
     """
@@ -298,7 +298,7 @@ def test_compute_score_file_reports_all_failing_parts(data_dir_mini: Path) -> No
 
 
 def test_relative_missing_side_error_names_the_cause(data_dir_mini_no_override_true: Path) -> None:
-    """相対化の評価側が無いデータのエラーが原因を名指しすることを検証する(実機報告 2026-08-01)。
+    """相対化の評価側が無いデータのエラーが原因を名指しすることを検証する(実機報告 2026-07-31)。
 
     以前は「a filter value probably matched no rows」という推測の決め打ち文言で、
     filter や係数表と原因探しが迷走した。
@@ -330,7 +330,7 @@ def test_partial_lookup_miss_errors_instead_of_silent_drop(
     """係数/温度の部分欠けが黙って値を歪めず、原因つきエラーになることを検証する。
 
     以前は照会に失敗した行の null を mean/max が黙って除外し、**エラーなしで
-    別の値**が出ていた(実測で 16.26 → -0.23 に化けることを確認 — 2026-08-01)。
+    別の値**が出ていた(実測で 16.26 → -0.23 に化けることを確認 — 2026-07-31)。
     """
     part = next(p for p in run_config.optimization.score_parts if p.name == "dVtBudget_R2A")
     temps = dict(dvt_inputs["board_temperatures"])

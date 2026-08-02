@@ -1,0 +1,791 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>scorelib 処理フロー図解</title>
+<style>
+:root {
+  --bg: #F5F6F3;
+  --surface: #FFFFFF;
+  --ink: #20282D;
+  --muted: #5B6770;
+  --line: #DCE1DA;
+  --engine: #0E7C86;
+  --engine-soft: #E3F1F2;
+  --ui-c: #B45D14;
+  --ui-soft: #F7ECDE;
+  --batch: #6D4FA3;
+  --batch-soft: #EDE7F6;
+  --err: #B3403A;
+  --err-soft: #F7E7E5;
+  --code-bg: #EDF0EB;
+  --nav-bg: #EFF1EC;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15191C;
+    --surface: #1E2428;
+    --ink: #E6E9E4;
+    --muted: #9AA5AC;
+    --line: #333C42;
+    --engine: #4FB8C0;
+    --engine-soft: #143439;
+    --ui-c: #E09A55;
+    --ui-soft: #382B1A;
+    --batch: #A98FD6;
+    --batch-soft: #2B2340;
+    --err: #E07A70;
+    --err-soft: #3E2322;
+    --code-bg: #262D32;
+    --nav-bg: #1A2024;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15191C;
+  --surface: #1E2428;
+  --ink: #E6E9E4;
+  --muted: #9AA5AC;
+  --line: #333C42;
+  --engine: #4FB8C0;
+  --engine-soft: #143439;
+  --ui-c: #E09A55;
+  --ui-soft: #382B1A;
+  --batch: #A98FD6;
+  --batch-soft: #2B2340;
+  --err: #E07A70;
+  --err-soft: #3E2322;
+  --code-bg: #262D32;
+  --nav-bg: #1A2024;
+}
+:root[data-theme="light"] {
+  --bg: #F5F6F3;
+  --surface: #FFFFFF;
+  --ink: #20282D;
+  --muted: #5B6770;
+  --line: #DCE1DA;
+  --engine: #0E7C86;
+  --engine-soft: #E3F1F2;
+  --ui-c: #B45D14;
+  --ui-soft: #F7ECDE;
+  --batch: #6D4FA3;
+  --batch-soft: #EDE7F6;
+  --err: #B3403A;
+  --err-soft: #F7E7E5;
+  --code-bg: #EDF0EB;
+  --nav-bg: #EFF1EC;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", "Meiryo", sans-serif;
+  font-size: 15px;
+  line-height: 1.85;
+}
+code, .loc {
+  font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-size: 0.88em;
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.loc { color: var(--muted); white-space: nowrap; }
+
+.wrap { display: flex; max-width: 1360px; margin: 0 auto; }
+nav {
+  flex: 0 0 250px;
+  position: sticky; top: 0;
+  align-self: flex-start;
+  max-height: 100vh; overflow-y: auto;
+  padding: 28px 18px 40px 22px;
+  background: var(--nav-bg);
+  border-right: 1px solid var(--line);
+  font-size: 13px;
+}
+nav .nav-title { font-weight: 700; font-size: 14px; margin-bottom: 10px; }
+nav a { display: block; color: var(--ink); text-decoration: none; padding: 3px 8px; border-radius: 5px; }
+nav a:hover, nav a:focus-visible { background: var(--surface); outline: none; }
+nav a:focus-visible { box-shadow: 0 0 0 2px var(--engine); }
+nav .g { margin-top: 12px; font-weight: 700; font-size: 11.5px; letter-spacing: 0.08em; color: var(--muted); }
+nav .g.eng { color: var(--engine); }
+nav .g.uic { color: var(--ui-c); }
+nav .g.bat { color: var(--batch); }
+
+main { flex: 1; min-width: 0; padding: 34px 44px 90px; }
+@media (max-width: 900px) {
+  .wrap { flex-direction: column; }
+  nav { position: static; flex: none; max-height: none; border-right: none; border-bottom: 1px solid var(--line); }
+  main { padding: 24px 18px 60px; }
+}
+
+header.page h1 { font-size: 27px; margin: 0 0 6px; line-height: 1.4; }
+header.page p.lede { color: var(--muted); margin: 0; max-width: 46em; }
+
+section { margin-top: 52px; }
+h2 {
+  font-size: 20px; margin: 0 0 4px;
+  padding-top: 10px; border-top: 2px solid var(--line);
+  text-wrap: balance;
+}
+h3 { font-size: 16px; margin: 26px 0 6px; }
+p { max-width: 48em; margin: 10px 0; }
+ul { max-width: 48em; padding-left: 1.4em; }
+li { margin: 4px 0; }
+
+.tag {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  letter-spacing: 0.08em; border-radius: 4px;
+  padding: 1px 8px; margin-bottom: 4px; vertical-align: 2px;
+}
+.tag.eng { background: var(--engine-soft); color: var(--engine); }
+.tag.uic { background: var(--ui-soft); color: var(--ui-c); }
+.tag.bat { background: var(--batch-soft); color: var(--batch); }
+
+.diagram {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin: 16px 0;
+  overflow-x: auto;
+}
+.diagram figcaption { font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
+figure { margin: 16px 0; }
+
+.tbl-wrap { overflow-x: auto; margin: 14px 0; }
+table {
+  border-collapse: collapse; font-size: 13.5px;
+  background: var(--surface); min-width: 560px;
+}
+th, td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
+th { background: var(--code-bg); font-size: 12.5px; }
+td { line-height: 1.7; }
+
+.note {
+  border-left: 3px solid var(--engine);
+  background: var(--surface);
+  padding: 10px 14px; margin: 14px 0;
+  max-width: 52em; border-radius: 0 6px 6px 0;
+  font-size: 14px;
+}
+.note.warn { border-left-color: var(--err); }
+.note b:first-child { display: block; font-size: 12.5px; letter-spacing: 0.05em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav aria-label="目次">
+  <div class="nav-title">scorelib 処理フロー図解</div>
+  <a href="#arch">全体アーキテクチャ</a>
+  <div class="g eng">エンジン (scorelib_param)</div>
+  <a href="#cli">ケース1: CLI 単発計算</a>
+  <a href="#part">ケース2: 1パーツの計算パイプライン</a>
+  <a href="#steps">ケース3: 各ステップの中身</a>
+  <a href="#resolve">ケース4: csv の読み込みと結合</a>
+  <a href="#custom">ケース5: custom パーツ</a>
+  <a href="#vthskip">ケース6: vthSkip ダミー計算</a>
+  <a href="#diag">ケース7: 計算エラー時の診断</a>
+  <div class="g uic">UI (Streamlit)</div>
+  <a href="#uiloop">UI の基本ループ (1 run)</a>
+  <a href="#load">ケース8: 画面1 データ読み込み</a>
+  <a href="#edit">ケース9: 画面2 パーツ編集</a>
+  <a href="#test">ケース10: テスト計算・エクスポート</a>
+  <a href="#undo">ケース11: 元に戻す・下書き</a>
+  <div class="g bat">バッチ (scorelib_param.batch)</div>
+  <a href="#batch">ケース12: バッチ一括計算</a>
+  <a href="#bridge">ケース13: 最適化フローからの呼ばれ方</a>
+  <div class="g">付録</div>
+  <a href="#validate">検証機能の呼び出しマップ</a>
+  <a href="#findings">調査で見つかった注意点</a>
+</nav>
+
+<main>
+<header class="page">
+  <h1>scorelib 処理フロー図解</h1>
+  <p class="lede">「どこから何が呼ばれて、どういう処理が行われるか」を、代表的な13ケースの図で追う資料です。図中の各箱に関数名とソースの位置(ファイル名:行番号)を入れてあります。行番号は 2026-07-31 時点(ver.0.7.1 + 同日の未リリース修正、main ブランチ)のものです。</p>
+</header>
+  <div class="note"><b>リポジトリ同梱版についての注記</b>
+  図の描画ライブラリ(mermaid)は docs/assets/mermaid.min.js として同梱しています。ネット接続なしで、エクスプローラーからのダブルクリックだけで図まで表示されます。</div>
+
+<!-- ============================================================ -->
+<section id="arch">
+  <h2>全体アーキテクチャ</h2>
+  <p>リポジトリは大きく3層です。<b style="color:var(--engine)">エンジン</b>(scorelib_param/)が検証と計算のすべてを持ち、<b style="color:var(--ui-c)">UI</b>(ui/)はエンジンを import して呼ぶ薄いラッパー、<b style="color:var(--batch)">バッチ</b>(scorelib_param/batch/)は同じエンジンで過去実験の epoch 群を一括計算します。本番の最適化スクリプト(python3.7)からは、どちらもサブプロセスとして起動されます。</p>
+  <figure class="diagram">
+  <figcaption>色分け: 青緑=エンジン / 橙=UI / 紫=バッチ。以降の図もこの色分けです。</figcaption>
+  <pre class="mermaid">
+flowchart LR
+  subgraph inputs["入力"]
+    CFG["設定 config.jsonc<br>(score_parts / expression / groupDefs ...)"]
+    DATA["測定結果ディレクトリ<br>(FBC.csv, parameterLabel_*.csv, map_*.csv ...)"]
+    COEF["dVtBudget 係数 jsonc<br>+ initial_temperature.csv"]
+    CP["custom_parts.py<br>(リポジトリ直下・固定位置)"]
+  end
+  subgraph engine["エンジン scorelib_param/"]
+    MODELS["models.py<br>検証(文法)"]
+    RESOLVE["axis_resolve.py<br>csv結合"]
+    CALC["aggregate / relative / dvtbudget<br>計算"]
+    EXPR["expression.py<br>合成式"]
+    CLI["cli.py<br>全体を束ねる入口"]
+  end
+  subgraph uiL["UI ui/ (Streamlit)"]
+    APP["app.py 5画面"]
+    STATE["state.py 編集ロジック(純関数)"]
+    WIDG["widgets.py 再利用部品"]
+  end
+  subgraph batchL["バッチ scorelib_param/batch/"]
+    RUNNER["runner.py / staging.py / compute.py"]
+  end
+  OPT["最適化スクリプト turbo.py (py3.7)<br>scripts/ のブリッジ実装例を組み込み"]
+  CFG --> CLI
+  DATA --> RESOLVE
+  COEF --> CLI
+  CP --> CLI
+  CLI --> MODELS
+  CLI --> RESOLVE
+  CLI --> CALC
+  CLI --> EXPR
+  APP --> STATE
+  APP --> WIDG
+  STATE -- "import(検証・候補・テスト計算)" --> CLI
+  RUNNER -- "compute_score_part を epoch 束で呼ぶ" --> CLI
+  OPT -- "subprocess: python -m scorelib_param.cli" --> CLI
+  OPT -- "subprocess: python -m scorelib_param.batch" --> RUNNER
+  classDef eng fill:#DDEEEF,stroke:#0E7C86,color:#123;
+  classDef uic fill:#F6E8D4,stroke:#B45D14,color:#321;
+  classDef bat fill:#E8E1F4,stroke:#6D4FA3,color:#213;
+  classDef inp fill:#F0F1EC,stroke:#8A948C,color:#123;
+  class MODELS,RESOLVE,CALC,EXPR,CLI eng;
+  class APP,STATE,WIDG uic;
+  class RUNNER bat;
+  class CFG,DATA,COEF,CP,OPT inp;
+  </pre>
+  </figure>
+  <div class="note"><b>1パーツの計算の骨格(全ケース共通)</b>
+  {type}.csv を読む → 必要な軸だけラベル・map csv を結合 → グループ派生列を作る → order のステップを上から順に適用(相対化 → dVtBudget変換 → 軸の集計...) → 全軸を潰し切って1スカラー。全パーツの値を expression で合成したものが Score です。</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="cli">
+  <span class="tag eng">ENGINE</span>
+  <h2>ケース1: CLI 単発計算(本番の1 epoch 分)</h2>
+  <p>本番の最適化ループが毎 epoch 呼ぶ形です。<code>python -m scorelib_param.cli --config ... --data-dir ...</code> を実行すると、stdout に結果 JSON が1つだけ出ます(版数表示や警告はすべて stderr)。</p>
+  <figure class="diagram">
+  <pre class="mermaid">
+flowchart TD
+  A["main()<br>cli.py:1252"] --> B["argparse で引数解決<br>--config --data-dir --dvtbudget-coef<br>--initial-temperature --custom-parts<br>--generation-info --version"]
+  B --> C["io_jsonc.load_run_config()<br>io_jsonc.py:15<br>jsonc.load → RunConfig.model_validate<br>= 設定の検証はこの時点で完了"]
+  C --> D["係数・温度の読み込み(指定時のみ)<br>load_dvtbudget_coef / load_board_temperatures<br>io_jsonc.py:45 / dvtbudget.py:28"]
+  D --> E["compute_score_file()<br>cli.py:1155 (→ ケース1b)"]
+  E --> F["stderr: scorelib_param 版数<br>stdout: 結果 JSON<br>cli.py:1290-1291"]
+  E -. "計算エラー(例外)" .-> G["トレースバックが stderr へ<br>非ゼロ終了(main は握らない)"]
+  classDef eng fill:#DDEEEF,stroke:#0E7C86,color:#123;
+  classDef err fill:#F5DDDB,stroke:#B3403A,color:#311;
+  class A,B,C,D,E,F eng;
+  class G err;
+  </pre>
+  </figure>
+
+  <h3>ケース1b: compute_score_file の内部(パーツのループ)</h3>
+  <p>ここが「全パーツを計算して Score を合成する」中心です。パーツ計算のエラーは<b>全パーツ分を集めてから</b>まとめて例外で落とします(1件ならその例外をそのまま、複数なら「N score parts failed:」)。失敗が1件でもあれば値は返しません。</p>
+  <figure class="diagram">
+  <pre class="mermaid">
+flowchart TD
+  A["compute_score_file()<br>cli.py:1155"] --> B["run_config.to_score_file()<br>models.py:867<br>WLgroup 系キーを groupDefs / weightSets に統合"]
+  B --> C["resolve_group_defs()<br>cli.py:491<br>Physical記法の総数Nを解決<br>(Generation.json 優先、無ければ csv の max+1)"]
+  C --> D["_load_custom_module_if_needed()<br>cli.py:1120<br>custom パーツがある時だけ custom_parts.py を import"]
+  D --> E["SharedComputeContext 生成<br>cli.py:558<br>type単位の csv 読みと中間結果を全パーツで共有"]
+  E --> F{"パーツごとのループ<br>cli.py:1196"}
+  F --> G{"ダミー分岐判定 cli.py:1198<br>次の3つが全部成立するか:<br>・custom パーツではない<br>・その type に vthSkip のダミー値がある<br>・{type}.csv が実在しない"}
+  G -- "はい" --> H["compute_dummy_part()<br>cli.py:376 (→ ケース6)<br>+ stderr に note"]
+  G -- "いいえ" --> I["compute_score_part()<br>cli.py:1024 (→ ケース2)"]
+  H --> J{"例外?"}
+  I --> J
+  J -- "ValueError / TypeError" --> K["パーツ名を文言に足して<br>part_errors に溜めて次のパーツへ<br>cli.py:1226-1234"]
+  K --> F
+  J -- "成功" --> F
+  F -- "全パーツ終了" --> L{"part_errors は空?"}
+  L -- "1件" --> M["その例外をそのまま raise<br>cli.py:1243"]
+  L -- "複数" --> N["'N score parts failed:' に<br>1行1パーツでまとめて raise<br>cli.py:1245-1246"]
+  L -- "空" --> O["evaluate_expression()<br>expression.py:59<br>simpleeval で合成式を評価"]
+  O --> P["返り値: {Score: 式の値, パーツ名: 値, ...}<br>cli.py:1249"]
+  classDef eng fill:#DDEEEF,stroke:#0E7C86,color:#123;
+  classDef err fill:#F5DDDB,stroke:#B3403A,color:#311;
+  class A,B,C,D,E,F,G,H,I,J,O,P eng;
+  class K,L,M,N err;
+  </pre>
+  </figure>
+  <div class="note"><b>設定の検証タイミング</b>
+  pydantic の検証(models.py)は <code>load_run_config</code> の <code>model_validate</code> で計算前に全部走ります。WLgroup 系キー(実験スクリプト形式)の groupDefs / weightSets への取り込み(before validator)と、op ごとの形状検査(after validator)もここ。選択セットの <code>ref</code> だけは例外で、パーツ計算の直前に <code>resolve_selection_refs()</code> <span class="loc">models.py:564</span> が中身へ展開し、<b>展開後にもう一度 model_validate</b> します(インライン記述と同じ検査を通すため)。</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="part">
+  <span class="tag eng">ENGINE</span>
+  <h2>ケース2: 1パーツの計算パイプライン(compute_score_part)</h2>
+  <p>エンジンの心臓部です。order のステップを上から順に適用し、全軸を潰し切って1スカラーにします。途中に「前絞り」(可換な filter の先頭前出し)と「共有キャッシュ」(相対化・dVtBudget 直後の中間結果をパーツ間で使い回す)の2つの最適化が入りますが、<b>結果は最適化なしと同一</b>になるよう設計されています。</p>
+  <figure class="diagram">
+  <pre class="mermaid">
+flowchart TD
+  A["compute_score_part()<br>cli.py:1024"] --> B{"type == custom?"}
+  B -- "はい" --> C["_compute_custom_part()<br>cli.py:650 (→ ケース5)"]
+  B -- "いいえ" --> D["resolve_selection_refs()<br>models.py:564<br>ref を選択セットの中身に展開して再検証"]
+  D --> E["_base_frame()  cli.py:688<br>共有ctxあり: resolved(type) から必要列だけ再射影<br>共有ctxなし: resolve_axes() で csv 結合 (→ ケース4)"]
+  E --> F["_with_group_columns()  cli.py:148<br>グループ派生列(WLgroup等)を生成<br>どの範囲にも入らない値は一覧つきエラー"]
+  F --> G["_hoistable_prefilters() → _apply_prefilters()<br>cli.py:282 / 716<br>可換な filter の行絞りだけ先頭へ前出し<br>(split軸・分母事前集計の軸・複合軸の構成軸は除外)"]
+  G --> H["_effective_order()  cli.py:212<br>省略された __relative__ を先頭、<br>__dvtbudget__ を相対化直後に補完"]
+  H --> I["_prefix_cache_keys() → _resume_from_cache()<br>cli.py:731 / 769<br>相対化・dVtBudget 直後の中間結果が<br>キャッシュにあればそこから再開"]
+  I --> J{"_apply_steps: ステップを順に適用<br>cli.py:807"}
+  J --> K["_apply_pipeline_step()<br>cli.py:941 (→ ケース3)"]
+  K --> J
+  J -- "全ステップ終了" --> L["collapse_to_scalar()<br>aggregate.py:368<br>潰し残しの列 → ValueError<br>null / NaN → CollapseNullError"]
+  L -- "成功" --> M["パーツの値(float)"]
+  L -- "CollapseNullError" --> N["_diagnose_pipeline()<br>cli.py:900 (→ ケース7)<br>原因ステップを名指しした ValueError に変換"]
+  classDef eng fill:#DDEEEF,stroke:#0E7C86,color:#123;
+  classDef err fill:#F5DDDB,stroke:#B3403A,color:#311;
+  class A,B,C,D,E,F,G,H,I,J,K,L,M eng;
+  class N err;
+  </pre>
+  </figure>
+
+  <h3>共有キャッシュ(SharedComputeContext)の仕組み</h3>
+  <ul>
+    <li><b>csv 解決キャッシュ</b>: 生成時 <span class="loc">cli.py:558</span> に custom 以外の全パーツの必要軸の<b>和集合</b>を type ごとに前計算し、<code>resolved(type)</code> が初回だけ csv を読んでメモ化。各パーツは自分の必要列だけ<b>再射影</b>して使うので、単独読み込みと同じ列構成になります(正しさの要)。</li>
+    <li><b>prefix キャッシュ</b>: キャッシュ点は <code>__relative__</code> / <code>__dvtbudget__</code> の直後だけ <span class="loc">cli.py:766</span>。キーには type・必要軸・グループ定義の中身・前絞りの内容・そこまでのステップ内容(JSON化)がすべて入るので、<b>設定が少しでも違うパーツ同士は共有されません</b>。</li>
+  </ul>
+
+  <h3>order に書かない軸の扱い</h3>
+  <p>各集計ステップは「値列と、いま潰す軸」以外の<b>残っている全列をキー</b>にして group_by します(<code>apply_aggregations</code> <span class="loc">aggregate.py:315</span>)。order に書かない軸は列として残り続けるので、毎回このキーに入り、集計の次元として保たれます。グループ派生列やバッチの Epoch 列が勝手に潰れないのも同じ理由です。</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="steps">
+  <span class="tag eng">ENGINE</span>
+  <h2>ケース3: 各ステップの中身(_apply_pipeline_step の分岐)</h2>
+  <p>order の1エントリがどの処理に振り分けられるかです。</p>
+  <figure class="diagram">
+  <pre class="mermaid">
+flowchart TD
+  A["_apply_pipeline_step()<br>cli.py:941"] --> B{"ステップ名は?"}
+  B -- "__relative__" --> C["apply_relative()<br>relative.py:27"]
+  B -- "__dvtbudget__" --> D["apply_dvtbudget()<br>dvtbudget.py:86"]
+  B -- "その他の __名前__<br>(仮想ステップ)" --> E["apply_transform()<br>aggregate.py:97<br>行単位変換: add/sub/mul/div(定数)<br>abs / log(床つき, 0.6.0)<br>by 指定で軸の値ごとの定数も可"]
+  B -- "軸名" --> F["_apply_axis_step()<br>cli.py:590"]
+  F --> G{"複合軸(State＆Read_Label 等)?"}
+  G -- "はい" --> H["列を ＆ で融合してから<br>apply_aggregations へ  cli.py:612-622"]
+  G -- "いいえ" --> I["apply_aggregations()<br>aggregate.py:284"]
+  H --> I
+  I --> J["apply_axis_op()<br>aggregate.py:249<br>1軸を1つの指示で潰す(下の分岐表)"]
+  classDef eng fill:#DDEEEF,stroke:#0E7C86,color:#123;
+  class A,B,C,D,E,F,G,H,I,J eng;
+  </pre>
+  </figure>
+
+  <h3>apply_axis_op の op 分岐</h3>
+  <div class="tbl-wrap"><table>
+    <tr><th>op</th><th>処理</th><th>場所</th></tr>
+    <tr><td><code>filter</code> (スカラー)</td><td>等値で行を絞り、軸列を落とす</td><td><span class="loc">aggregate.py:273</span></td></tr>
+    <tr><td><code>filter</code> (リスト)</td><td>is_in で絞り軸列を落とす。残った複数行は後段集計に複製として流れる</td><td><span class="loc">aggregate.py:271</span></td></tr>
+    <tr><td><code>mean / sum / min / max</code></td><td>value で対象限定 → weight があれば潰す直前に乗算(mean(weight×値)。正規化はしない) → 残り全列をキーに集計。min/max は「グループ内に NaN があれば結果も NaN」に毒化(polars が NaN を黙って飛ばす仕様への対策)</td><td><span class="loc">aggregate.py:146</span></td></tr>
+    <tr><td><code>diff</code></td><td>value の2値 [a, b] で自己結合し a−b。相手不在の行は NaN 化して伝播</td><td><span class="loc">aggregate.py:176</span></td></tr>
+    <tr><td><code>expr</code></td><td>グループごとに式を評価(values=軸の全値、by[軸値] が使える)</td><td><span class="loc">aggregate.py:204</span></td></tr>
+  </table></div>
+
+  <h3>相対化(__relative__)の手順</h3>
+  <figure class="diagram">
+  <pre class="mermaid">
+flowchart TD
+  A["apply_relative()  relative.py:27"] --> B["split_axis の値で行を2つに分割<br>分子 = numerator_when の行<br>分母 = denominator_when の行<br>(split軸の列はここで消える)  relative.py:41-42"]
+  B --> C["分母だけ事前集計<br>denominator_pre_aggregation を順に適用<br>relative.py:44-47"]
+  C --> D["残っている全列一致で左結合<br>分母が1スカラーなら cross join でブロードキャスト<br>relative.py:50-57"]
+  D --> E{"mode"}
+  E -- "ratio" --> F["(分子+offset) / (分母+offset)<br>relative.py:62-64"]
+  E -- "diff" --> G["分子 − 分母 (offsetは相殺され不使用)<br>relative.py:58-61"]
+  F --> H["相手不在(null)は NaN 化して伝播<br>relative.py:68<br>→ 最終 collapse で必ず検出される"]
+  G --> H
+  classDef eng fill:#DDEEEF,stroke:#0E7C86,color:#123;
+  class A,B,C,D,E,F,G,H eng;
+  </pre>
+  </figure>
+
+  <h3>dVtBudget 変換(__dvtbudget__)の手順</h3>
+  <p><code>apply_dvtbudget</code> <span class="loc">dvtbudget.py:86</span>: Board / State 列が残っていることを確認 → 係数表に Generation が無ければ明示エラー → Board の実測温度に<b>最も近い温度キー</b>の係数 b を State ごとに引いて小さな対応表を作る <span class="loc">dvtbudget.py:131-140</span> → (Board, State) で左結合 → 行単位で <code>-log10(値) / b × 1000</code> <span class="loc">dvtbudget.py:145</span>。係数照会に失敗した行は NaN 化して伝播させ、最終 collapse で捕まえます(黙って値がズレることはない)。</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="resolve">
+  <span class="tag eng">ENGINE</span>
+  <h2>ケース4: csv の読み込みと結合(axis_resolve)</h2>
+  <p>全展開(FBC_expanded.csv 相当)は作らず、<b>パーツが言及した軸のぶんだけ</b>付随ファイルを lazy join します。結合キーは常に <code>JOIN_KEYS = (InBatchEpoch, Board, Chip, Block, Measure)</code> <span class="loc">axis_resolve.py:35</span> です。</p>
+  <figure class="diagram">
+  <pre class="mermaid">
+flowchart TD
+  A["resolve_axes(data_dir, type, 必要な軸)<br>axis_resolve.py:136"] --> B["scan_csv('{type}.csv')<br>無ければ {type}.csv.gz  axis_resolve.py:40"]
+  B --> C{"必要な軸のうち<br>本体に無い列は?"}
+  C -- "測定条件の軸<br>(State, Read_Label 等)" --> D["parameterLabel_{type}.csv を<br>JOIN_KEYS で左結合<br>axis_resolve.py:94-100"]
+  C -- "DataName" --> E["dataName_{type}.csv を<br>JOIN_KEYS で左結合<br>axis_resolve.py:102-110"]
+  C -- "まだ解決できない軸" --> F["ValueError(軸名つき)<br>axis_resolve.py:166-172"]
+  D --> G{"Measure は要求された?"}
+  E --> G
+  G -- "いいえ" --> H["Measure 列を落とす<br>axis_resolve.py:177-178"]
+  G -- "はい" --> I["軸として残す<br>(相対化・filter の識別子軸)"]
+  H --> J["map_*.csv で数値コード → 表示名に変換<br>_map_file_for_axis: X_Label→map_Label.csv 等<br>Override は Boolean 正規化<br>axis_resolve.py:113-132"]
+  I --> J
+  J --> K["値列 + 要求された軸列だけに射影して返す<br>axis_resolve.py:183-184"]
+  classDef eng fill:#DDEEEF,stroke:#0E7C86,color:#123;
+  classDef err fill:#F5DDDB,stroke:#B3403A,color:#311;
+  class A,B,C,D,E,G,H,I,J,K eng;
+  class F err;
+  </pre>
+  </figure>
+  <p>UI の値候補・type 検出(introspect.py)も同じデータを見ますが、こちらは「実データに存在する値だけ」を候補に出す(map 順)、「値列を持つ csv だけを type と認める」など、<b>設計時に安全な選択肢だけを見せる</b>ためのロジックが足されています <span class="loc">introspect.py:47 / 151 / 228</span>。</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="custom">
+  <span class="tag eng">ENGINE</span>
+  <h2>ケース5: custom パーツ(自作 Python 関数)</h2>
+  <p>集計パイプラインで書けない計算は、リポジトリ直下 <code>custom_parts.py</code> の関数を type="custom" のパーツとして呼びます。ファイル位置が固定なのは、実験入力(config)から任意コードを実行させないためです。</p>
+  <figure class="diagram">
+  <pre class="mermaid">
+flowchart TD
+  A["compute_score_file()"] --> B["_load_custom_module_if_needed()<br>cli.py:1120<br>custom パーツが1つでもあれば<br>custom_parts.py を importlib でロード<br>(= トップレベル実行。SVN レビュー済み前提)"]
+  B --> C["compute_score_part() が custom を検知<br>cli.py:1074"]
+  C --> D["_compute_custom_part()  cli.py:650<br>CustomContext を組み立て:<br>data_dir / generation /<br>group_defs(Physical→Logical 解決済み) / params"]
+  D --> E["compute_custom_part()  custom.py:97<br>関数名 = function または name<br>見つからない・呼べない → TypeError(一覧つき)"]
+  E --> F["関数を実行し戻り値を検証<br>有限な1スカラーでなければ ValueError<br>custom.py:122-130"]
+  classDef eng fill:#DDEEEF,stroke:#0E7C86,color:#123;
+  class A,B,C,D,E,F eng;
+  </pre>
+  </figure>
+  <p>custom パーツは共有キャッシュの対象外で、バッチの identity_axes とも併用できません(バッチでは epoch ごとのループで呼ばれます)。</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="vthskip">
+  <span class="tag eng">ENGINE</span>
+  <h2>ケース6: vthSkip ダミー計算(測定ファイルが無い epoch)</h2>
+  <p>vthSkip 中の epoch には KLD / dVthSGWLD の測定ファイルがありません。config の <code>optimization.vthSkip</code> にダミー値があると、該当 type のファイルが無いパーツだけ <code>compute_dummy_part</code> <span class="loc">cli.py:376</span> で計算されます(stderr に note が出ます)。<b>トリガーはファイル不在</b>で、vthSkip.epochs はエンジンでは参照されません。</p>
+  <figure class="diagram">
+  <pre class="mermaid">
+flowchart TD
+  A["compute_dummy_part()  cli.py:376"] --> B["relative あり / type=dVtBudget は明示エラー<br>cli.py:403-408"]
+  B --> C["パーツが言及する各軸の値一覧を決定<br>_dummy_axis_values  cli.py:340<br>優先順: map ファイル → 他の測定csvの実在値<br>→ 集計指示の選択リスト → [0]"]
+  C --> D["全組み合わせにダミー値を敷き詰めた<br>フレームを生成  cli.py:414-419"]
+  D --> E["グループ派生列の生成 → order を適用<br>ただし __xxx__ 変換ステップは全部スキップ<br>cli.py:422-425<br>(ダミー値=変換後の値、の意味論)"]
+  E --> F["collapse_to_scalar → パーツの値<br>cli.py:426"]
+  classDef eng fill:#DDEEEF,stroke:#0E7C86,color:#123;
+  class A,B,C,D,E,F eng;
+  </pre>
+  </figure>
+  <div class="note"><b>UI の雛形が重みを「集計時重み」で持つ理由</b>
+  KLD 雛形の SGWLD 重み 0.1 は変換ステップではなく集計時重み(spec.weight)です。変換ステップはダミー計算でスキップされるため、集計時重みにしておくとダミー計算でも同じ重みが掛かります <span class="loc">state.py:182</span>。</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="diag">
+  <span class="tag eng">ENGINE</span>
+  <h2>ケース7: 計算エラー時の診断(2026-07-31 の新機構)</h2>
+  <p>最終結果が null / NaN のとき、以前は「filter が0行にマッチしたのでは」という推測文言でした。現在は<b>エラー時だけ</b>パイプラインを歩き直し、原因ステップを名指しします(成功時のコストはゼロ)。</p>
+  <figure class="diagram">
+  <pre class="mermaid">
+flowchart TD
+  A["collapse / collapse_to_scalar<br>aggregate.py:329 / 368"] --> B{"最終結果は?"}
+  B -- "正常な1スカラー" --> C["パーツの値を返す"]
+  B -- "潰し残しの列あり" --> D["ValueError(列名つき)<br>aggregate.py:349-357"]
+  B -- "null / NaN" --> E["CollapseNullError<br>aggregate.py:361-364"]
+  E --> F["_diagnose_pipeline()  cli.py:900<br>base_frame を作り直し、前絞りを適用せず<br>素の order で1ステップずつ再実行<br>各ステップ後に行数と null/NaN 数を観測"]
+  F --> G{"どこで壊れた?"}
+  G -- "行数が0になった" --> H["_diagnose_empty_step  cli.py:842<br>相対化: 分子/分母の片側不在 or ペア不成立<br>filter: マッチ0行 / diff: a側マッチ0行"]
+  G -- "null/NaN が発生した" --> I["_diagnose_bad_step  cli.py:873<br>dVtBudget: 照会失敗の (Board,State) を最大8組列挙<br>相対化・diff: 相手不在の行数"]
+  G -- "診断自体が失敗" --> J["元の CollapseNullError をそのまま出す<br>cli.py:915-916(二次エラーで隠さない)"]
+  H --> K["原因を名指しした ValueError に変換<br>cli.py:1116-1117"]
+  I --> K
+  K --> L["compute_score_file が全パーツ分を収集<br>(→ ケース1b)"]
+  classDef eng fill:#DDEEEF,stroke:#0E7C86,color:#123;
+  classDef err fill:#F5DDDB,stroke:#B3403A,color:#311;
+  class A,B,C,F,G eng;
+  class D,E,H,I,J,K,L err;
+  </pre>
+  </figure>
+</section>
+
+<!-- ============================================================ -->
+<section id="uiloop">
+  <span class="tag uic">UI</span>
+  <h2>UI の基本ループ(1 run で何が起きるか)</h2>
+  <p>Streamlit は操作のたびにスクリプト全体を上から再実行します(= 1 run)。編集中の内容は <code>st.session_state</code> に置かれ、その中の <code>score_file</code>(素の dict)が唯一の真実です。<code>main()</code> <span class="loc">app.py:1776</span> が毎 run 同じ順で処理します。</p>
+  <figure class="diagram">
+  <pre class="mermaid">
+flowchart TD
+  A["main()  app.py:1776"] --> B["_init()  app.py:95<br>score_file / context / history 等を初期化(初回のみ)"]
+  B --> C["screen_pending を反映  app.py:1782<br>(元に戻す後の画面ジャンプ。radio 描画前が必須)"]
+  C --> D["サイドバー描画  app.py:1786<br>ユーザ名(_sidebar_user) / 画面 radio /<br>元に戻すボタン / 設定の誤り件数 / エンジン版"]
+  D --> E["_offer_draft_restore()  app.py:167<br>下書きがあれば復元提案(この間 st.stop で画面を止める)"]
+  E --> F["before = _snapshot(score_file)<br>app.py:1817 変更検知の基準"]
+  F --> G["画面ディスパッチ  app.py:1818-1827<br>screen_data / screen_parts / screen_sets /<br>screen_compose / screen_test_export"]
+  G --> H{"描画中に score_file が<br>書き換わった?  app.py:1828"}
+  H -- "はい" --> I["st.rerun()<br>一覧・⚠・ラベルを即追随させる<br>(この run では履歴・自動保存に到達しない)"]
+  H -- "いいえ" --> J["_track_history()  app.py:128<br>変化していたら操作前の状態を履歴に積む(20件)"]
+  J --> K["_autosave()  app.py:227<br>ユーザ名があれば ~/.scorelib_drafts/名前.jsonc へ保存"]
+  I --> A
+  classDef uic fill:#F6E8D4,stroke:#B45D14,color:#321;
+  class A,B,C,D,E,F,G,H,I,J,K uic;
+  </pre>
+  </figure>
+  <div class="tbl-wrap"><table>
+    <tr><th>session_state キー</th><th>役割</th></tr>
+    <tr><td><code>score_file</code></td><td>編集中の ScoreFile 素 dict(唯一の真実)。各パーツにはウィジェットキー用の内部ID <code>_uid</code> が付く</td></tr>
+    <tr><td><code>context</code></td><td>画面1が作る ctx dict(type一覧・軸カタログ・Measureラベル・各ファイルのパス等)</td></tr>
+    <tr><td><code>part_sel</code> / <code>part_sel_pending</code></td><td>選択パーツの _uid / 次 run 冒頭で反映する選択予約(追加・複製・元に戻す用)</td></tr>
+    <tr><td><code>history</code> / <code>last_snapshot</code></td><td>元に戻す履歴(JSON文字列スナップショット、最大20件)</td></tr>
+    <tr><td><code>widget_epoch</code></td><td>_wk() の世代番号。元に戻すたびに +1 され、設定由来の全ウィジェットが作り直される</td></tr>
+    <tr><td><code>screen</code> / <code>screen_pending</code></td><td>画面 radio の値 / 元に戻す後の画面ジャンプ予約</td></tr>
+  </table></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="load">
+  <span class="tag uic">UI</span>
+  <h2>ケース8: 画面1 データ読み込みの分岐</h2>
+  <p>入力は「① スコア設定(jsonc)+ ② データ」の2段+読み込みボタン1つ。②の選択(実測データ / ダミー(測定前) / なし)と開発者モード(--dev のパス指定)の組み合わせで、呼ばれる関数が変わります。すべてのエラーは <code>_handle_load</code> <span class="loc">app.py:492</span> の except に集約されて画面に出ます。</p>
+  <figure class="diagram">
+  <pre class="mermaid">
+flowchart TD
+  A["読み込みボタン → _handle_load()<br>app.py:492"] --> B["_resolve_start_config()  app.py:325<br>①のアップロード(またはパス)を読む"]
+  B --> C{"②のデータは?"}
+  C -- "なし" --> D["_finish_config_only_load()  app.py:350<br>state.load_config_only()  state.py:1874<br>設定だけから score_file と ctx を作る<br>(カタログは設定が言及する軸名・値候補なし)"]
+  C -- "実測データ" --> E["_resolve_measured_data()  app.py:369"]
+  C -- "ダミー(測定前)" --> F["_resolve_dummy_data()  app.py:399"]
+  E --> G["zip なら extract_bundle_zip()  state.py:1250<br>(zip-slip対策・単一トップフォルダ降下)<br>→ locate_bundle_inputs()  state.py:1288<br>深さ4まで探索し、設定・係数・custom を<br>中身の形で特定(同役割2件以上はエラー)"]
+  F --> H["parse_chip_counts()  state.py:1168<br>→ expand_dummy_bundle()  state.py:1202<br>Board/Chip 1つのダミー一式を<br>dummy.expand_boards_chips で複製展開<br>(行の複製だけ。数値は作らない)"]
+  G --> I["優先順位の適用  app.py:454-464<br>個別アップロード ＞ ①の設定 ＞ zip内・パス指定"]
+  H --> I
+  I --> J["state.build_context()  state.py:1088"]
+  J --> K["introspect.detect_types → 軸カタログ<br>axis_catalog / measure_labels /<br>係数・設定の自動検出(候補複数はエラー)<br>custom 関数の一覧化"]
+  K --> L["ss.score_file 差し替え(①があれば)<br>+ ensure_uids + WLgroup 取り込み toast<br>→ st.rerun()"]
+  D --> L
+  L --> M["_recognition_section()  app.py:742<br>認識結果: 軸本数・世代情報との食い違い警告・<br>カタログのプレビュー"]
+  classDef uic fill:#F6E8D4,stroke:#B45D14,color:#321;
+  classDef eng fill:#DDEEEF,stroke:#0E7C86,color:#123;
+  class A,B,C,D,E,F,G,I,L,M uic;
+  class H,J,K eng;
+  </pre>
+  </figure>
+</section>
+
+<!-- ============================================================ -->
+<section id="edit">
+  <span class="tag uic">UI</span>
+  <h2>ケース9: 画面2 パーツ編集</h2>
+  <p>編集ロジックは streamlit 非依存の純関数(state.py)に置かれ、app.py はウィジェット配置と session_state の受け渡しだけを行います。編集のたびにエンジンと同一の検証が走り、一覧・プルダウンに ⚠ が付きます。</p>
+  <figure class="diagram">
+  <pre class="mermaid">
+flowchart TD
+  A["screen_parts()  app.py:1230"] --> B["_sync_part_selection()  app.py:1024<br>part_sel_pending → part_sel → selected_part を毎 run 再導出"]
+  B --> C["_part_list_overview()  app.py:1049<br>一覧(D&amp;D 並べ替え可)+ 状態列:<br>⚠設定エラー / ⚠データ無し / ⚠データに無い値 / OK"]
+  C --> D["_part_add_controls()  app.py:1110"]
+  D --> E{"追加時の雛形"}
+  E -- "KLD / dVthSGWLD" --> F["_typed_skeleton()  state.py:182<br>標準計算入り雛形(初期値であって強制ではない)"]
+  E -- "その他の type" --> G["part_skeleton()  state.py:220<br>そのまま計算が通る雛形<br>(全軸デフォルト順+デフォルトop)"]
+  E -- "custom" --> H["custom_part_skeleton()  state.py:251"]
+  C --> I["パーツ選択プルダウン  app.py:1249<br>ラベルの hash 入りキーで再マウント<br>(改名が欄に追随しない streamlit#11268 の回避)"]
+  I --> J["_part_header_editor()  app.py:1155<br>名前・type(変更時 switch_part_type で不整合除去)"]
+  J --> K["_part_body_editor()  app.py:1196"]
+  K --> L["widgets.relative_editor()  widgets.py:862<br>ON: enable_relative  state.py:370<br>OFF: disable_relative  state.py:384<br>split変更: change_split_axis  state.py:423<br>いずれも order との整合を自動で取る"]
+  K --> M["_order_editor()  app.py:945<br>D&amp;D リスト+編集するエントリ+常時表示エディタ"]
+  M --> N["widgets.agg_editor()  widgets.py:690<br>op に応じた入力欄だけを描画(下の表)"]
+  K --> O["state.validate_part() の結果を表示<br>app.py:1221-1227"]
+  classDef uic fill:#F6E8D4,stroke:#B45D14,color:#321;
+  class A,B,C,D,E,F,G,H,I,J,K,L,M,N,O uic;
+  </pre>
+  </figure>
+
+  <h3>agg_editor の op 別サブエディタ</h3>
+  <div class="tbl-wrap"><table>
+    <tr><th>op</th><th>サブエディタ</th><th>出る入力欄</th></tr>
+    <tr><td>abs / log</td><td><code>_unary_editor</code> <span class="loc">widgets.py:592</span></td><td>定数欄なし。log のみ floor(既定 1e-6)</td></tr>
+    <tr><td>add / sub / mul / div</td><td><code>_transform_editor</code> <span class="loc">widgets.py:344</span></td><td>定数(全行共通)/ 軸の値ごと(by + 重みセット ref or 直接入力)</td></tr>
+    <tr><td>filter</td><td><code>_filter_editor</code> <span class="loc">widgets.py:609</span></td><td>候補ありの単一軸は multiselect(複数=is_in)。Measure は「dataName (Measure N)」複合表示+labels 注記の自動付与</td></tr>
+    <tr><td>diff</td><td><code>_diff_editor</code> <span class="loc">widgets.py:637</span></td><td>a, b の2値 直接指定 / 選択セット(ref)</td></tr>
+    <tr><td>mean / sum / min / max</td><td><code>_multi_op_editor</code> <span class="loc">widgets.py:659</span></td><td>全値 / 値を選択 / 選択セット(ref)+単一軸なら集計時重み欄(なし / 重みセット / 値ごと / 定数)</td></tr>
+    <tr><td>expr</td><td>(agg_editor 本体)</td><td>式の text_input <span class="loc">widgets.py:710</span></td></tr>
+  </table></div>
+
+  <div class="note"><b>原則「描画は設定を変えない」(2026-07-31)</b>
+  候補に無い既存値は、multiselect では警告つきで選択肢に残し(<code>_options_with_missing</code> <span class="loc">widgets.py:108</span>)、プルダウンでは「(データに無し)」等の印つき選択肢として残します。描画しただけで index=0 の値へ書き換わる事故(実機で相対化の分子が化けた)の再発防止で、消すかどうかは常にユーザーが決めます。</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="test">
+  <span class="tag uic">UI</span>
+  <h2>ケース10: テスト計算・エクスポート(画面5)</h2>
+  <p>テスト計算はサブプロセスではなく、エンジンの <code>compute_score_file</code> を<b>直接呼びます</b>。本番 CLI と同じコードが走るので、UI で通ればエンジンでも通ります。</p>
+  <figure class="diagram">
+  <pre class="mermaid">
+flowchart TD
+  A["計算を実行 → _run_test_compute()<br>app.py:1635"] --> B{"ガード"}
+  B -- "ディレクトリ未入力 / パーツ0件" --> C["st.error で中止"]
+  B -- "config_problem_messages が非空<br>state.py:796" --> D["設定の誤りを全件表示して中止<br>(構造の誤り+データに無い値+データ無し type)"]
+  B -- "OK" --> E["state.run_test_compute()  state.py:1736<br>ScoreFile dict → RunConfig を組み立て<br>係数の解決・温度の読み込み"]
+  E --> F["scorelib_param.cli.compute_score_file()<br>state.py:1788 直呼び (→ ケース1b)"]
+  F --> G["結果 dict を dataframe 表示<br>例外は st.error('計算エラー: ...')"]
+  H["エクスポート  _export_section  app.py:1695"] --> I["state.score_file_to_jsonc()  state.py:1577<br>検証NGの間はボタン自体を出さない<br>WL軸の WLgroup 定義と WLgroupWeight は<br>WLgroup 系キーに書き出す(実験スクリプトが読む場所)"]
+  H --> J["パーツ単体: state.export_part()  state.py:1682<br>参照する選択セット・グループ定義を同梱した自己完結 jsonc"]
+  K["インポート  _import_section  app.py:1728"] --> L["state.import_score_file()  state.py:1920<br>ScoreFile / RunConfig 両形式を受理<br>エラーはパーツ名付き"]
+  classDef uic fill:#F6E8D4,stroke:#B45D14,color:#321;
+  classDef eng fill:#DDEEEF,stroke:#0E7C86,color:#123;
+  classDef err fill:#F5DDDB,stroke:#B3403A,color:#311;
+  class A,B,E,G,H,I,J,K,L uic;
+  class F eng;
+  class C,D err;
+  </pre>
+  </figure>
+</section>
+
+<!-- ============================================================ -->
+<section id="undo">
+  <span class="tag uic">UI</span>
+  <h2>ケース11: 元に戻す・下書き</h2>
+  <h3>元に戻す(2026-07-31 に機構ごと作り直し)</h3>
+  <figure class="diagram">
+  <pre class="mermaid">
+flowchart TD
+  A["run 末尾の _track_history()  app.py:128<br>score_file が変化していたら<br>『操作前の状態』+ 編集していた画面・選択パーツを<br>history に積む(最大20件)"] --> B["元に戻すボタン → _undo()  app.py:147"]
+  B --> C["history.pop() で score_file を復元"]
+  C --> D["widget_epoch += 1  app.py:158<br>設定由来の全ウィジェットキーが変わり部品ごと再マウント<br>(キー固定だとブラウザが古い表示を持ち続けるため)"]
+  D --> E["screen_pending / part_sel_pending に<br>記録した場所を予約 → st.rerun()<br>次 run 冒頭で画面と選択パーツが復元位置へ跳ぶ"]
+  classDef uic fill:#F6E8D4,stroke:#B45D14,color:#321;
+  class A,B,C,D,E uic;
+  </pre>
+  </figure>
+  <h3>下書き(ユーザ名ごとの自動保存)</h3>
+  <p>ユーザ名は認証ヘッダ(既定 <code>X-Remote-User</code>)があればそれ、無ければサイドバーの名前入力 <span class="loc">app.py:68</span>。未入力の間は保存も復元提案も止まります。落ち着いた run の末尾でだけ <code>_autosave</code> <span class="loc">app.py:227</span> が <code>~/.scorelib_drafts/&lt;名前&gt;.jsonc</code> へ score_file+画面1の入力を保存し、次回アクセス時に <code>_offer_draft_restore</code> <span class="loc">app.py:167</span> が復元を提案します(復元時はデータ読み込みも再実行し、失敗しても警告つきで編集は続行できます)。</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="batch">
+  <span class="tag bat">BATCH</span>
+  <h2>ケース12: バッチ一括計算(過去実験データ)</h2>
+  <p><code>python -m scorelib_param.batch --config ... --history ... --out scores.csv</code>。複数の result_history(過去実験の epoch 群)を受け取り、識別列 <code>Epoch</code> を通してバッチ単位に一括計算します。単一 epoch 計算と数値等価(テストで保証)。</p>
+  <figure class="diagram">
+  <pre class="mermaid">
+flowchart TD
+  A["__main__.main()  batch/__main__.py:75"] --> B["--max-threads → POLARS_MAX_THREADS 設定<br>その後で runner を import(遅延 import が必須:<br>polars は最初の import でスレッド数が固定される)"]
+  B --> C["BatchRunner.run() / run_iter()<br>runner.py:360 / 270"]
+  C --> D["enumerate_epochs()  history.py:67<br>result.NNNN を列挙し Epoch ID を振る<br>(ラベル#{番号}。重複ラベル・空はエラー)"]
+  D --> E["_resolve_batch_size()  runner.py:254<br>auto: 先頭 epoch を実測し<br>空きメモリの1/3 ÷ (実測×3.0) で決定"]
+  E --> F{"バッチごとのループ<br>先行取得: ThreadPoolExecutor で<br>最大 max_prefetch バッチ先まで準備"}
+  F --> G["stage_epoch()  staging.py:147<br>tar.gz/zip はビューdirへ展開<br>(絶対パス・.. 拒否 / 1段 flatten /<br>symlink 不可ならコピー)<br>csv のみなら元 dir をそのまま使う"]
+  G --> H["validate_epoch()  staging.py:165<br>config が参照する type のファイル存在チェック<br>(vthSkip ダミー値のある type は対象外)"]
+  H --> I["compute_score_batch()  compute.py:445"]
+  I --> J["cleanup_epoch()  staging.py:189<br>自分が作ったビューdirだけ削除<br>(入力元は絶対に触らない)"]
+  J --> F
+  F -- "全バッチ終了" --> K["scores.csv 書き出し<br>失敗 epoch は stderr と .failed.csv へ理由つき<br>vthSkip ダミー使用も stderr に note<br>__main__.py:162-190"]
+  classDef bat fill:#E8E1F4,stroke:#6D4FA3,color:#213;
+  class A,B,C,D,E,F,G,H,I,J,K bat;
+  </pre>
+  </figure>
+
+  <h3>compute_score_batch の内部と自動フォールバック</h3>
+  <figure class="diagram">
+  <pre class="mermaid">
+flowchart TD
+  A["compute_score_batch()  compute.py:445"] --> B["BatchComputeContext  compute.py:68<br>type ごとに全 epoch を resolve_axes →<br>Epoch 列を付与して縦結合(streaming collect)"]
+  B --> C["パーツごとに compute_score_part(...,<br>identity_axes=('Epoch',)) を1回だけ呼ぶ<br>compute.py:352 → cli.py:1024<br>= Epoch 列を潰さず残し epoch ごと1行で返す"]
+  C --> D["custom パーツ: epoch ごとのループ  compute.py:290<br>type ファイルの無い epoch: vthSkip ダミー値で埋め<br>(compute_dummy_part を1回計算して使い回し)  compute.py:319"]
+  D --> E["_mark_epochs_without_values  compute.py:403<br>『パーツごとに全 epoch が揃っているか』検証<br>(filter 空振りで行ごと消えた epoch を捕まえる)"]
+  E --> F["expression を epoch ごとに評価  compute.py:419<br>→ BatchResult(scores / failed / dummy_used)"]
+  A -. "一括計算が例外" .-> G["_per_epoch_fallback  compute.py:224<br>epoch を1つずつ compute_score_file で逐次計算<br>原因 epoch を特定・除外し正常 epoch の値を救う"]
+  classDef bat fill:#E8E1F4,stroke:#6D4FA3,color:#213;
+  classDef eng fill:#DDEEEF,stroke:#0E7C86,color:#123;
+  classDef err fill:#F5DDDB,stroke:#B3403A,color:#311;
+  class A,B,D,E,F bat;
+  class C eng;
+  class G err;
+  </pre>
+  </figure>
+  <p>「Epoch ごとに1行」が成り立つ理由はケース2「order に書かない軸の扱い」と同じです: Epoch 列は order のどのステップでも潰されないので、常にグループキーとして生き残ります。</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="bridge">
+  <span class="tag bat">BATCH</span>
+  <h2>ケース13: 最適化フローからの呼ばれ方(ブリッジ2種)</h2>
+  <p>現行の最適化スクリプト(python3.7)はエンジンを import できないため、サブプロセス起動のブリッジを scripts/ に実装例として置いてあります。どちらも py3.7 互換・scorelib 非依存で、そのままコピーして使えます。</p>
+  <figure class="diagram">
+  <pre class="mermaid">
+sequenceDiagram
+  participant T as turbo.py (py3.7)<br>最適化ループ
+  participant B1 as get_score_bridge_example.py<br>compute_epoch_score()
+  participant E as python -m scorelib_param.cli
+  participant B2 as batch_bridge_example.py<br>compute_batch_scores()
+  participant BA as python -m scorelib_param.batch
+  Note over T: 毎 epoch のスコア計算<br>(score_function="gui_score" 分岐)
+  T->>B1: config(dict可) + data_dir
+  B1->>B1: config を一時 jsonc 化<br>(pandas/numpy 型を素の Python 型へ)
+  B1->>E: subprocess 起動(PYTHONPATH 前置)
+  E-->>B1: stdout の結果 JSON
+  B1-->>T: dict {Score, パーツ名: 値, ...}<br>→ DataFrame 化して既存フローへ
+  Note over T: 過去データ一括(初期モデル構築)
+  T->>B2: config + histories + out_csv
+  B2->>BA: subprocess 起動<br>(--history 繰り返し / --batch-size auto)
+  BA-->>B2: scores.csv + .failed.csv<br>(ログは out_csv.log へ)
+  B2-->>T: (scores の list, failed の dict)
+  </pre>
+  </figure>
+  <div class="note"><b>config はファイルパス渡しが正</b>
+  現行の config ローダは読み込み時に WLgroupWeight 等を pandas Series へ加工するため、dict を渡す経路は「json 化できる形に戻せる範囲」しか対応しません(範囲展開など逆変換不能な加工は不可)。元ファイルのパスを渡すのが正、と両ブリッジの docstring に明記されています。</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="validate">
+  <h2>付録: 検証機能の呼び出しマップ</h2>
+  <p>UI の「⚠」や「設定の誤り」がどの関数から来るかの対応表です。エラー文言は常にエンジン自身のもの(検証の二重実装はしない設計)。</p>
+  <div class="tbl-wrap"><table>
+    <tr><th>関数</th><th>何を検出するか</th><th>表示される場所</th></tr>
+    <tr><td><code>validate_score_file</code> <span class="loc">state.py:707</span></td><td>構造の誤り: エンジンの model_validate+名前重複+式の参照切れ+宙に浮いた制約キー(pydantic の位置表記をパーツ名に変換)</td><td>画面4の下部 / 画面5(NGならエクスポート不可)</td></tr>
+    <tr><td><code>validate_part</code> <span class="loc">state.py:754</span></td><td>単一パーツの構造の誤り</td><td>一覧の「⚠ 設定エラー」/ 編集画面の st.error</td></tr>
+    <tr><td><code>part_value_mismatches</code> <span class="loc">state.py:848</span></td><td>filter・diff・選択リスト・相対化の分子/分母の値がデータの候補に無い(設定として有効でも計算は必ず失敗する状態)</td><td>一覧の「⚠ データに無い値」/ 編集画面の警告</td></tr>
+    <tr><td><code>part_types_without_data</code> <span class="loc">state.py:775</span></td><td>データに測定ファイルの無い type(別実験の config を読むと起きる正当な状態)</td><td>一覧の「⚠ データ無し」/ 編集画面の警告</td></tr>
+    <tr><td><code>config_problem_messages</code> <span class="loc">state.py:796</span></td><td>上記3つの統合=「設定の誤り」の全メッセージ</td><td>サイドバーの件数+展開表示 / テスト計算の実行前ガード</td></tr>
+    <tr><td><code>group_def_warnings</code> <span class="loc">state.py:1452</span></td><td>グループ定義の範囲とデータ由来の軸本数の整合(範囲超過・未カバー値)</td><td>画面1の認識結果 / 画面3</td></tr>
+    <tr><td><code>geninfo_mismatch_warnings</code> <span class="loc">state.py:1410</span></td><td>世代情報 json とデータ由来本数の食い違い(診断情報)</td><td>画面1の認識結果</td></tr>
+  </table></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="findings">
+  <h2>付録: 調査で見つかった注意点(2026-07-31 に修正済み)</h2>
+  <p>この資料を作るためにコードを網羅的に読んだ際に見つかった潜在不具合とドキュメントの追随漏れです。<b>すべて同日に修正済み</b>(テスト5本追加・全342件パス。エンジン側の2件は CHANGELOG「未リリース」節に記録、版上げは次リリース時)。図中の行番号は修正後のコードに合わせてあります。</p>
+  <h3>修正した潜在不具合</h3>
+  <ul>
+    <li><b>画面2「雛形を再生成」の例外画面</b>: 「⚠ データ無し」の type のパーツで押すと KeyError になっていた → カタログ(custom は関数一覧)の無い type ではボタンを無効化 <span class="loc">app.py:1174-1183</span>。他 type のカタログで代替すると誤った雛形が黙ってできるため、代替はしない。</li>
+    <li><b>dataName_*.csv 欠落時にパーツ名なしで全体が落ちる</b>: DataName 軸の結合だけ存在確認をせずに読んでいたため、polars の FileNotFoundError がパーツ名の名指しなしで漏れていた → parameterLabel_ 側と同じ「解決できない軸」の軸名つきエラーに <span class="loc">axis_resolve.py:102-110</span>。</li>
+    <li><b>分母事前集計の追加で例外</b>: 軸カタログが空のパーツ(設定のみ編集)で「+ 事前集計を追加」を押すと min() が空列で落ちていた → 無効化 <span class="loc">widgets.py:855-859</span>。</li>
+    <li><b>introspect が .csv.gz を見ない非対称</b>: エンジン・バッチは gz を直読みできるのに、UI の type 検出・軸カタログは .csv だけを探していた → data_file と同じ扱いで .csv.gz も対象に <span class="loc">introspect.py:26-44</span>。</li>
+    <li><b>画面3・4だけの編集が自動保存されない</b>: 保存条件に groupDefs / weightSets / constraintThreshold を追加 <span class="loc">app.py:230-235</span>。</li>
+  </ul>
+  <h3>直したドキュメントの追随漏れ</h3>
+  <ul>
+    <li>code_reference.md: CLI 引数一覧への <code>--generation-info</code> 追記、undo の廃止済み旧記述(「ウィジェット状態も破棄」)の削除、agg_editor の op 列挙への expr 追加、import_config_group_defs の WLgroupWeight 取り込みほか計9箇所。</li>
+    <li>batch_design.md: 実装が先行した点(vthSkip ダミー埋め・--max-threads と遅延 import・resolved() の streaming collect など)を「実装との差分メモ」節として追記。</li>
+  </ul>
+</section>
+
+</main>
+</div>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+if (window.mermaid) {
+  mermaid.initialize({ startOnLoad: false, securityLevel: "loose", theme: "neutral" });
+  mermaid.run();
+}
+</script>
+</body>
+</html>

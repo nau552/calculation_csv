@@ -180,7 +180,7 @@ def value_widget(
         # 候補に無い既存値は「(データに無し)」の印つきで選択肢に残す —
         # エディタを描画しただけで index=0 の値へ黙って書き換わるのを防ぐ
         # (split_axis の選択肢・multiselect 系と同じ定石。実機で相対化の
-        # 分子 True が描画だけで False に化けた 2026-08-01 の再発防止)
+        # 分子 True が描画だけで False に化けた 2026-07-31 の再発防止)
         marked = current is not None and current not in options
         if marked:
             options = [*options, current]
@@ -852,7 +852,9 @@ def _denominator_pre_agg_editor(rel: dict[str, Any], ctx: EditorContext, key: st
                 st.rerun()
             agg_editor(step["axis"], step, ctx, key=f"{key}_pre{i}")
             st.divider()
-        if st.button("+ 事前集計を追加", key=f"{key}_pre_add"):
+        # カタログが空(設定のみ編集で軸を1つも持たないパーツ)では初期軸を
+        # 選べないため無効化する(押すと min() が空列で落ちる)
+        if st.button("+ 事前集計を追加", key=f"{key}_pre_add", disabled=not ctx.catalog):
             rel.setdefault("denominator_pre_aggregation", []).append({"axis": min(ctx.catalog), "op": "mean"})
             st.rerun()
 
@@ -860,8 +862,7 @@ def _denominator_pre_agg_editor(rel: dict[str, Any], ctx: EditorContext, key: st
 def relative_editor(part: dict[str, Any], ctx: EditorContext, key: str) -> None:
     """相対化ブロックのエディタ。
 
-    part['relative'] の存在=ON(エンジンに
-    enabled フラグは無い)。OFF にしたら split 軸を `order` へ復帰させる
+    part['relative'] の存在=ON。OFF にしたら split 軸を `order` へ復帰させる
     (放置するとエンジンが暗黙に集約して分子と分母の行が混ざる)。
     ON にしたとき・split 軸を変えたときは対称に、新しい split 軸を `order`
     から外す。

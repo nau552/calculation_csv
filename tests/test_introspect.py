@@ -1,6 +1,7 @@
 # Copyright (c) 2026
 """scorelib_param.introspect のテスト: 過去実験の出力ディレクトリからの UI向けメタデータ(type・軸・値候補)の導出。"""
 
+import gzip
 import shutil
 from pathlib import Path
 from typing import cast
@@ -41,7 +42,7 @@ def test_override_candidates_reflect_actual_data(data_dir_mini: Path, data_dir_m
 
     以前は [False, True] のハードコードで、評価側(True)の測定を含まない
     データでも True が候補に出てしまい、「候補には在るが行が無い」不一致を
-    UI が検出できなかった(実機報告 2026-08-01)。
+    UI が検出できなかった(実機報告 2026-07-31)。
     """
     assert axis_catalog(data_dir_mini, "FBC")["Read_Override"] == [False, True]
     assert axis_catalog(data_dir_mini_no_override_true, "FBC")["Read_Override"] == [False]
@@ -169,6 +170,27 @@ def test_axis_catalog_without_measure_column(tmp_path: Path) -> None:
     (tmp_path / "SUMMARY.csv").write_text("Board,Chip,SUMMARY\n0,0,1.5\n0,1,2.5\n")
     catalog = axis_catalog(tmp_path, "SUMMARY")
     assert list(catalog) == ["Board", "Chip"]
+
+
+def test_gz_only_files_detected_like_engine(tmp_path: Path, data_dir_mini: Path) -> None:
+    """Gz 単体圧縮(.csv.gz)だけのファイルでも type 検出・カタログ・Measure ラベルが出る。
+
+    エンジン(axis_resolve.data_file)は gz を直読みできるのに、こちらは .csv
+    だけを探していたため「エンジンでは計算できるのに UI では type が出ない」
+    非対称があった(2026-07-31 修正)。
+    """
+    d = tmp_path / "run"
+    shutil.copytree(data_dir_mini, d)
+    for name in ("FBC.csv", "parameterLabel_FBC.csv", "dataName_FBC.csv"):
+        src = d / name
+        with src.open("rb") as fin, gzip.open(d / f"{name}.gz", "wb") as fout:
+            shutil.copyfileobj(fin, fout)
+        src.unlink()
+    assert "FBC" in detect_types(d)
+    catalog = axis_catalog(d, "FBC")
+    assert catalog["State"] == ["R2A", "A2R", "A2B", "B2A"]
+    assert "DataName" in catalog
+    assert measure_labels(d, "FBC")[0] == "reference_param_read_level_1"
 
 
 def test_dataname_map_accepts_both_spellings(tmp_path: Path, data_dir_mini: Path) -> None:

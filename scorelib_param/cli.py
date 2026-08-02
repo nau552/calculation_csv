@@ -14,6 +14,7 @@ stdout に JSON オブジェクトを1つだけ出力する: {"Score": ..., "<�
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import sys
 from dataclasses import dataclass
@@ -22,7 +23,7 @@ from typing import TYPE_CHECKING, overload
 
 import polars as pl
 
-from . import axis_resolve, custom, io_jsonc
+from . import __version__, axis_resolve, custom, io_jsonc, jsonc
 from .aggregate import (
     CollapseNullError,
     apply_aggregations,
@@ -410,9 +411,6 @@ def compute_dummy_part(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略
     axes = sorted(_required_axes(score_part, group_defs))
     axis_values = {a: _dummy_axis_values(data_dir, a, score_part.aggregations.get(a)) for a in axes}
 
-    # ダミー計算(vthSkip)経路でのみ使うため、使うときだけ読み込む
-    import itertools  # ruff: ignore[PLC0415]
-
     rows = list(itertools.product(*axis_values.values())) if axes else [()]
     data: dict[str, list] = {a: [r[i] for r in rows] for i, a in enumerate(axis_values)}
     data[source_type] = [float(dummy_value)] * len(rows)
@@ -476,9 +474,6 @@ def load_axis_counts(generation_info_path: str | Path) -> dict[str, int]:
         含まれない)。
 
     """
-    # 世代情報 json を読むこの経路でのみ使うため、使うときだけ読み込む
-    from . import jsonc  # ruff: ignore[PLC0415]
-
     info = jsonc.load(generation_info_path)
     counts: dict[str, int] = {}
     if isinstance(info, dict):
@@ -1117,8 +1112,10 @@ def compute_score_part(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略
         raise ValueError(msg) from err
 
 
-def _load_custom_module_if_needed(score_file: ScoreFile, custom_parts_path: str | Path | None) -> ModuleType | None:
-    """type="custom" のパーツがあれば custom_parts.py を読み込む(compute_score_file の下請け)。
+def _load_custom_module_if_needed(
+    score_parts: list[ScorePart], custom_parts_path: str | Path | None
+) -> ModuleType | None:
+    """type="custom" のパーツがあれば custom_parts.py を読み込む(単発・バッチ共通の下請け)。
 
     リポジトリ直下の SVN 管理された custom_parts.py の関数を呼ぶ。config に
     パスは持たせない(configから任意コードを実行できてしまうため)。
@@ -1131,7 +1128,7 @@ def _load_custom_module_if_needed(score_file: ScoreFile, custom_parts_path: str 
         ValueError: custom パーツがあるのにファイルが見つからないとき。
 
     """
-    if not any(p.type == CUSTOM_TYPE for p in score_file.score_parts):
+    if not any(p.type == CUSTOM_TYPE for p in score_parts):
         return None
     path = Path(custom_parts_path) if custom_parts_path else custom.default_custom_parts_path()
     if not path.is_file():
@@ -1179,7 +1176,7 @@ def compute_score_file(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略
     score_file = run_config.to_score_file()
     group_defs = resolve_group_defs(run_config, data_dir, generation_info_path)
 
-    custom_module = _load_custom_module_if_needed(score_file, custom_parts_path)
+    custom_module = _load_custom_module_if_needed(score_file.score_parts, custom_parts_path)
     _warn_unmatched_constraints(score_file)
 
     # vthSkip(測定フロー側の設定): 指定 type のファイルが無い epoch は
@@ -1251,9 +1248,6 @@ def compute_score_file(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略
 
 def main(argv: list[str] | None = None) -> None:
     """コマンドライン実行の入り口(引数解析 → 計算 → stdout へ JSON 出力)。"""
-    # 版数表示(--version / stderr)でのみ使うため、使うときだけ読み込む
-    from . import __version__  # ruff: ignore[PLC0415]
-
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", action="version", version=f"scorelib_param {__version__}")
     parser.add_argument("--config", required=True, help="run config jsonc (Generation + optimization{...})")

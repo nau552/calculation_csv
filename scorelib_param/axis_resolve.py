@@ -100,8 +100,13 @@ def _join_side_tables(lf: pl.LazyFrame, data_dir: Path, type_: str, missing_axes
             lf = lf.join(label_lf.select(JOIN_KEYS + take), on=JOIN_KEYS, how="left")
 
     if "DataName" in missing_axes:
-        dn_lf = pl.scan_csv(data_file(data_dir, f"dataName_{type_}.csv"))
-        lf = lf.join(dn_lf.select([*JOIN_KEYS, "DataName"]), on=JOIN_KEYS, how="left")
+        dn_path = data_file(data_dir, f"dataName_{type_}.csv")
+        # parameterLabel 側と同じくファイルが無ければ結合しない — 未解決の
+        # DataName は resolve_axes の軸名つき ValueError になる(存在確認なしで
+        # scan すると polars の FileNotFoundError がパーツ名の名指しなしで漏れる)
+        if dn_path.exists():
+            dn_lf = pl.scan_csv(dn_path)
+            lf = lf.join(dn_lf.select([*JOIN_KEYS, "DataName"]), on=JOIN_KEYS, how="left")
     return lf
 
 

@@ -78,7 +78,7 @@ def _load_data(at: AppTest, data_dir: Path) -> None:
     at.text_input(key="data_dir_input").set_value(str(data_dir))
     at.button(key="load_btn").click().run()
     assert not at.exception
-    assert at.session_state["context"]["types"] == MINI_TYPES
+    assert set(MINI_TYPES) <= set(at.session_state["context"]["part_types"])
 
 
 def _create_part(at: AppTest) -> str:
@@ -169,7 +169,7 @@ def test_part_value_mismatch_visible_and_value_preserved(
     従来は (1) 編集対象に選ぶまで一覧に ⚠ が出ない、(2) エディタを開くと候補に
     無い値が黙って消える、(3) テスト計算まで走ってから原因の分からないエラーに
     なる、の三重で原因に辿り着けなかった。3点とも固定する(計算前ガードの
-    全メッセージ列挙は 2026-08-01 の一本化合意。エンジン側の名指しは
+    全メッセージ列挙は 2026-07-31 の一本化合意。エンジン側の名指しは
     test_cli.py が担保)。
     """
     from ui import widgets
@@ -213,7 +213,7 @@ def test_part_value_mismatch_visible_and_value_preserved(
 def test_render_never_mutates_score_file(at: AppTest, data_dir_mini_no_override_true: Path) -> None:
     """不変条件: 画面を開く・パーツ/エントリを選ぶだけでは設定は一切変わらない。
 
-    実機報告(2026-08-01)「エディタを描画しただけで相対化の分子が False に
+    実機報告(2026-07-31)「エディタを描画しただけで相対化の分子が False に
     書き換わる」の一般化。書き戻し系ウィジェットが候補外の既存値を差し替える/
     落とすバグのクラス全体をこの1本で捕まえる。データは評価側
     (Read_Override=True)の測定が無い形にし、候補に無い値・存在しない参照を
@@ -360,7 +360,7 @@ def test_expression_insert_button_updates_input(at: AppTest, data_dir_mini: Path
 
 
 def test_part_rename_updates_selector(at: AppTest, data_dir_mini: Path) -> None:
-    """パーツ改名が「編集するパーツ」欄に追随することを検証する(実機報告 2026-08-01)。
+    """パーツ改名が「編集するパーツ」欄に追随することを検証する(実機報告 2026-07-31)。
 
     キー付き selectbox は選択中のラベルだけが変わると表示が更新されない
     (streamlit#11268。D&D 一覧は既に再マウント対策済みで追随していた)ため、
@@ -616,7 +616,7 @@ def test_undo_reverts_last_action(at: AppTest, data_dir_mini: Path) -> None:
 
 
 def test_undo_restores_display_and_location(at: AppTest, data_dir_mini: Path) -> None:
-    """「元に戻す」が表示・場所・データを全部戻すことを検証する(実機報告 2026-08-01)。
+    """「元に戻す」が表示・場所・データを全部戻すことを検証する(実機報告 2026-07-31)。
 
     旧実装は設定データだけ戻していた: キー固定のウィジェットはブラウザ側の
     表示が残り(改名した入力欄が古い文字列のまま等)、別の画面/パーツを見て
@@ -713,7 +713,7 @@ def test_draft_autosaved_and_restored(
     at2.button(key="restore_btn").click().run()
     assert not at2.exception
     assert [p["name"] for p in at2.session_state["score_file"]["score_parts"]] == ["part_1", "part_2"]
-    assert at2.session_state["context"]["types"] == MINI_TYPES
+    assert set(MINI_TYPES) <= set(at2.session_state["context"]["part_types"])
     assert "dVtBudget" in at2.session_state["context"]["part_types"]
     at2.toggle(key="paths_mode").set_value(True).run()
     assert at2.text_input(key="data_dir_input").value == str(data_dir_mini.resolve())
@@ -1211,3 +1211,83 @@ def test_existing_score_config_in_data_dir_button(
     sf = at.session_state["score_file"]
     assert [p["name"] for p in sf["score_parts"]] == ["FBC_A2B_upper1_rel", "dVtBudget_R2A"]
     assert "WLgroup" in sf["groupDefs"]
+
+
+def test_existing_score_button_keeps_defin_logical_and_weight(
+    at: AppTest, tmp_path: Path, data_dir_mini: Path, fixtures_dir: Path
+) -> None:
+    """「既存スコア設定を読み込む」で WLgroupDefinLogical / WLgroupWeight が保たれること。
+
+    既存スコア設定は to_score_file() 経由で groupDefs / weightSets に統合済み
+    のものが入るため、Physical 記法(WLgroupDefinLogical=False)や重みが
+    この経路で欠落・既定値化しないことを固定する。
+    """
+    d = tmp_path / "run"
+    shutil.copytree(data_dir_mini, d)
+    text = (fixtures_dir / "config.jsonc").read_text(encoding="utf-8")
+    text = text.replace('"WLgroup": {', '"WLgroupDefinLogical": "False", "WLgroupWeight": 2, "WLgroup": {', 1)
+    (d / "config.jsonc").write_text(text, encoding="utf-8")
+    _load_data(at, d)
+    next(b for b in at.button if b.label == "設定jsonc内の既存スコア設定を読み込んで編集を始める").click().run()
+    assert not at.exception
+    sf = at.session_state["score_file"]
+    assert sf["groupDefs"]["WLgroup"]["definedInLogical"] is False
+    assert sf["weightSets"]["WLgroupWeight"] == 2
+
+
+def test_regen_button_disabled_for_absent_type(at: AppTest, data_dir_mini: Path) -> None:
+    """データに無い type では「雛形を再生成」を無効化することを検証する。
+
+    以前は押すと ctx["catalogs"] に type が無く KeyError の例外画面になった。
+    他 type のカタログで代替すると軸構成の違う誤った雛形が黙ってできるため、
+    無効化が正(2026-07-31 修正)。
+    """
+    _load_data(at, data_dir_mini)
+    at.session_state["score_file"]["score_parts"] = [
+        {"_uid": "x1", "name": "p_gone", "type": "GONE", "order": [], "aggregations": {}},
+    ]
+    at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
+    assert not at.exception
+    assert at.button(key="x1_regen").disabled
+    # データのある type のパーツでは従来どおり押せる
+    at.button(key="add_part_btn").click().run()
+    uid = at.session_state["score_file"]["score_parts"][-1]["_uid"]
+    assert not at.button(key=f"{uid}_regen").disabled
+    at.button(key=f"{uid}_regen").click().run()
+    assert not at.exception
+
+
+def test_pre_agg_add_disabled_without_axes(at: AppTest) -> None:
+    """軸カタログが空のパーツでは「+ 事前集計を追加」を無効化することを検証する。
+
+    設定のみ編集で軸を1つも持たないパーツに相対化を ON にすると到達し、
+    以前は押すと min() が空列で落ちた(2026-07-31 修正)。
+    """
+    sf, ctx = state.load_config_only('{"score_parts": [{"name": "p1", "type": "T1"}], "expression": "p1"}')
+    at.session_state["score_file"] = sf
+    at.session_state["context"] = ctx
+    at.sidebar.radio(key="screen").set_value(SCREEN_PARTS).run()
+    assert not at.exception
+    uid = at.session_state["score_file"]["score_parts"][0]["_uid"]
+    at.checkbox(key=f"{uid}_rel_on").set_value(True).run()
+    assert not at.exception
+    add_btn = next(b for b in at.button if str(b.key).endswith("_pre_add"))
+    assert add_btn.disabled
+
+
+def test_autosave_covers_group_defs_only_session(at: AppTest, data_dir_mini: Path) -> None:
+    """グループ定義だけを編集したセッションも下書きに保存されることを検証する。
+
+    以前の保存条件は score_parts / selectionSets / expression のみで、
+    画面3のグループ定義・重みセットだけの編集は下書きに残らなかった。
+    """
+    _load_data(at, data_dir_mini)
+    at.text_input(key="draft_user_input").set_value("taro").run()
+    at.session_state["score_file"]["groupDefs"] = {
+        "WLgroup": {"axis": "WL", "groups": {"g1": [0, 3]}},
+    }
+    at.run()
+    assert not at.exception
+    draft = cast("dict[str, Any]", state.load_draft(state.draft_path_for("taro")))
+    assert draft is not None
+    assert "WLgroup" in draft["score_file"]["groupDefs"]

@@ -179,8 +179,13 @@ WL 以外の軸（STR 等）のグループ定義も UI から追加できる。
 `optimization.WLgroup`（実験スクリプトが読む場所）へ書き戻さず、合成後 config に
 新旧2定義が並ぶ形になっており、前提と食い違っていた（手編集時の変え忘れ・
 「どちらが使われるか」の混乱もユーザー指摘）。0.7.0 で**エクスポートは WL 軸の
-WLgroup 定義を旧形式キーだけに書き、定義の在り処を1つにする**形へ修正
-（ScoreFile は旧形式キーを読める。設計判断の詳細は CHANGELOG ver.0.7.0）。
+WLgroup 定義を WLgroup 系キーだけに書き、定義の在り処を1つにする**形へ修正
+（ScoreFile は WLgroup 系キーを読める。設計判断の詳細は CHANGELOG ver.0.7.0）。
+
+**呼称の訂正（2026-08-03）**: WLgroup / WLgroupDefinLogical / WLgroupWeight を
+一部の文書・コメントで「旧形式キー」と呼んでいたが、これは実験スクリプトが読む
+config の**正式な形式**であり「旧」ではない（groupDefs / weightSets はそれを
+任意軸へ一般化した内部の入れ物）。呼び方を「WLgroup 系キー」に全体で統一した。
 
 ### 3.5 dVtBudget（大幅訂正）
 

@@ -350,3 +350,29 @@ python -m scorelib_param.batch \
 - 識別軸名: `Epoch`
 - fetcher: 初期実装は pass-through のみ。インターフェースは本設計で固定し、
   scp / マウント先読みコピー等は転送手段確定後に追加
+
+## 12. 実装との差分メモ（2026-07-31 追記。処理フロー図解の作成時にコードと突き合わせ）
+
+本設計書の承認(7/21)以降に実装が先行した点。設計の意図は変わっていない。
+
+- §5.1: `resolved()` は lazy concat のまま返すのではなく、concat 直後に
+  `collect(engine="streaming")` した DataFrame をキャッシュする(親
+  SharedComputeContext の契約が DataFrame のため)。§6.3 の pushdown が効くのは
+  type ごとの resolve までで、パーツごとの filter は collect 済みフレームへの適用
+- §8-3: epoch 欠落の検出は「行数 = epoch 数」ではなく epoch_id ごとの
+  membership 確認(`_mark_epochs_without_values` — 既に failed の epoch を
+  二重報告しないため)
+- vthSkip ダミー埋めは本設計書に無い後付け機能(0.6.0):
+  `_fill_missing_epochs` が type ファイルの無い epoch をダミー値で埋め、
+  `BatchResult.dummy_used` と CLI の stderr note で報告。runner の事前検証も
+  ダミー値のある type を必須対象から外す
+- §9 の CLI には実装で `--custom-parts` / `--generation-info` / `--max-threads`
+  （POLARS_MAX_THREADS。polars の import 前に設定する必要があるため
+  batch/__init__ は PEP 562 の遅延 import）/ `--version` が追加されている
+- §3.2: 「gz も展開するフォールバックフラグ」は未実装（.csv.gz は polars が
+  直読みできるため不要のまま）。アーカイブ対象には `.tar` 単体も含む
+- §7: バッチ完了ごとの callback API は未提供（generator の `run_iter()` のみ）
+- §8-1: 事前検証はファイル存在のみ（列の存在は計算時エラー → 逐次フォールバック
+  で捕捉）
+- §6.2: バッチ分割は history 境界を無視した連続スライス（1バッチに複数 history が
+  混ざりうる。結合は `vertical_relaxed` で dtype 推論ブレを吸収）

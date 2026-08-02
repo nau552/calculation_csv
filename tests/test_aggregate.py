@@ -43,20 +43,6 @@ def test_simple_op_with_value_list_restricts_before_reducing() -> None:
     assert aggregate_score_part(lf, "value", order, aggregations) == pytest.approx(20.0)
 
 
-def test_legacy_spellings_normalized() -> None:
-    """旧綴り(values / *_subset op)が正規化されることを検証する。"""
-    # values は value の別名として受理。*_subset op は通常opへ自動変換
-    spec = AggregationSpec.model_validate({"op": "mean_subset", "values": [0, 1]})
-    assert spec.op == "mean"
-    assert spec.value == [0, 1]
-
-
-def test_both_value_and_values_rejected() -> None:
-    """同時指定(value と values)は拒否されることを検証する。"""
-    with pytest.raises(Exception, match="not both"):
-        AggregationSpec.model_validate({"op": "mean", "value": [0], "values": [1]})
-
-
 def test_filter_accepts_single_element_list() -> None:
     """要素1つのリスト filter がスカラーに畳まれることを検証する。"""
     spec = AggregationSpec(op="filter", value=["A2B"])
@@ -96,15 +82,6 @@ def test_filter_with_list_keeps_matching_rows_as_replicates() -> None:
     }
     # Measure 0,1 の行が残り、Key の sum で複製ごと畳まれる: (1+10)+(2+20)=33
     assert aggregate_score_part(lf, "value", order, aggregations) == pytest.approx(33.0)
-
-
-def test_group_reduce_removed_with_guidance() -> None:
-    """group_reduce op は派生グループ軸(groupDefs + order に定義名)へ置き換えられた。
-
-    旧 config は新しい書き方への案内つきで失敗すること。
-    """
-    with pytest.raises(Exception, match=r"removed.*groupDefs"):
-        AggregationSpec.model_validate({"op": "group_reduce", "group_def": "g", "inner_op": "min", "outer_op": "max"})
 
 
 def test_derived_group_axis_aggregates_like_a_real_axis() -> None:

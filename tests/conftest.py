@@ -24,7 +24,7 @@ def data_dir_mini() -> Path:
 def data_dir_mini_no_override_true(data_dir_mini: Path, tmp_path: Path) -> Path:
     """Read_Override が全行 False(基準側のみ)の mini データ複製。
 
-    実機報告(2026-08-01)のダミーデータの形: parameterLabel に評価側
+    実機報告(2026-07-31)のダミーデータの形: parameterLabel に評価側
     (Override=True)の測定が1つも無く、相対化パーツが計算不能になる。
 
     Returns:

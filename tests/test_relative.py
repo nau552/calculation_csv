@@ -54,23 +54,6 @@ def test_relative_without_pre_aggregation() -> None:
     assert out["value"][0] == pytest.approx(5.0)
 
 
-def test_enabled_true_is_silently_dropped() -> None:
-    """enabled: true は黙って無視されることを検証する。"""
-    cfg = RelativeConfig.model_validate(
-        {"enabled": True, "split_axis": "x", "numerator_when": True, "denominator_when": False}
-    )
-    assert cfg.split_axis == "x"
-    assert "enabled" not in cfg.model_dump()
-
-
-def test_enabled_false_is_rejected_loudly() -> None:
-    """enabled: false が明確に拒否されることを検証する。"""
-    with pytest.raises(Exception, match="enabled has been removed"):
-        RelativeConfig.model_validate(
-            {"enabled": False, "split_axis": "x", "numerator_when": True, "denominator_when": False}
-        )
-
-
 def test_unset_numerator_or_denominator_rejected() -> None:
     """分子/分母の未設定(None)は必ず0行マッチになる設定忘れ。
 

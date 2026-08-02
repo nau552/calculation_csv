@@ -1,4 +1,5 @@
 # Copyright (c) 2026
+import shutil
 from pathlib import Path
 
 import polars as pl
@@ -94,6 +95,21 @@ def test_measure_dropped_when_not_requested(data_dir_mini: Path) -> None:
     """要求されない Measure 列は残らないことを検証する。"""
     resolved = resolve_axes(data_dir_mini, "FBC", {"Board"}).collect()
     assert "Measure" not in resolved.columns
+
+
+def test_missing_dataname_file_gives_clear_error(tmp_path: Path, data_dir_mini: Path) -> None:
+    """dataName_* が無いのに DataName を要求すると軸名つきの ValueError になることを検証する。
+
+    以前は存在確認なしで scan していたため、ファイル欠落時は polars の
+    FileNotFoundError がパーツ名の名指しなしで漏れていた(compute_score_file の
+    全件収集 (ValueError/TypeError) にも捕まらない型)。parameterLabel 側と同じ
+    「解決できない軸」の扱いに揃える。
+    """
+    d = tmp_path / "run"
+    shutil.copytree(data_dir_mini, d)
+    (d / "dataName_FBC.csv").unlink()
+    with pytest.raises(ValueError, match="DataName"):
+        resolve_axes(d, "FBC", {"DataName", "Board"})
 
 
 def test_measure_with_label_axes(data_dir_mini: Path) -> None:

@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from . import jsonc
-from .models import DvtBudgetCoefFile, RunConfig, ScoreFile
+from .models import DvtBudgetCoefFile, RunConfig
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -20,26 +20,6 @@ def load_run_config(path: str | Path) -> RunConfig:
 
     """
     return RunConfig.model_validate(jsonc.load(path))
-
-
-def save_run_config(config: RunConfig, path: str | Path) -> None:
-    """RunConfig を jsonc ファイルへ書き出す。"""
-    jsonc.dump(config.model_dump(mode="json"), path)
-
-
-def load_score_file(path: str | Path) -> ScoreFile:
-    """ScoreFile を jsonc ファイルから読み込む。
-
-    Returns:
-        pydantic の検証を通った ScoreFile インスタンス。
-
-    """
-    return ScoreFile.model_validate(jsonc.load(path))
-
-
-def save_score_file(score_file: ScoreFile, path: str | Path) -> None:
-    """ScoreFile を jsonc ファイルへ書き出す。"""
-    jsonc.dump(score_file.model_dump(mode="json"), path)
 
 
 def load_dvtbudget_coef(path: str | Path) -> DvtBudgetCoefFile:

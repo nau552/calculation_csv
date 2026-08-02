@@ -15,11 +15,33 @@ from pathlib import Path
 import polars as pl
 
 from . import jsonc
-from .axis_resolve import JOIN_KEYS, OVERRIDE_SUFFIX, _map_file_for_axis, resolve_axes
+from .axis_resolve import JOIN_KEYS, OVERRIDE_SUFFIX, _map_file_for_axis, data_file, resolve_axes
 
 # 測定typeとは決してみなさない csv の語幹
 _RESERVED_STEMS = {"initial_temperature", "reference_param", "FBC_expanded"}
 _TYPE_FILE_PREFIXES = ("parameterLabel_", "dataName_", "map_")
+
+
+def _csv_stem(path: Path) -> str:
+    """`FBC.csv` と `FBC.csv.gz` のどちらからも語幹 `FBC` を取り出す。
+
+    Returns:
+        拡張子(.csv / .csv.gz)を除いたファイル名。
+
+    """
+    if path.name.endswith(".csv.gz"):
+        return path.name[: -len(".csv.gz")]
+    return path.stem
+
+
+def _csv_files(data_dir: Path) -> list[Path]:
+    """走査対象の測定 csv 一覧(gzip 単体圧縮も含む。エンジンの data_file と同じ扱い)。
+
+    Returns:
+        `*.csv` と `*.csv.gz` のパスのソート済みリスト。
+
+    """
+    return sorted({*data_dir.glob("*.csv"), *data_dir.glob("*.csv.gz")})
 
 
 def detect_types(data_dir: str | Path) -> list[str]:
@@ -27,6 +49,7 @@ def detect_types(data_dir: str | Path) -> list[str]:
 
     ファイル命名(parameterLabel_{t}.csv / dataName_{t}.csv)と、測定出力
     らしい素の {t}.csv(ファイル名と同名の値列を持つ)から検出する。
+    gzip 単体圧縮(.csv.gz)もエンジン(axis_resolve.data_file)と同様に対象。
 
     値列ルールは Measure 列の無い type(KLD / PROGLOOP など)も拾うために
     2026-07-29 に「Measure 列を持つ」から置き換えた: エンジン(resolve_axes)は
@@ -38,14 +61,15 @@ def detect_types(data_dir: str | Path) -> list[str]:
     """
     data_dir = Path(data_dir)
     types: set[str] = set()
-    for f in data_dir.glob("*.csv"):
-        stem = f.stem
+    files = _csv_files(data_dir)  # .csv.gz も対象(エンジンは読めるのに UI だけ空になる非対称の解消)
+    for f in files:
+        stem = _csv_stem(f)
         if stem.startswith("parameterLabel_"):
             types.add(stem[len("parameterLabel_") :])
         elif stem.startswith("dataName_"):
             types.add(stem[len("dataName_") :])
-    for f in data_dir.glob("*.csv"):
-        stem = f.stem
+    for f in files:
+        stem = _csv_stem(f)
         if stem in types or stem in _RESERVED_STEMS or stem.startswith(_TYPE_FILE_PREFIXES):
             continue
         try:
@@ -145,14 +169,14 @@ def axis_catalog(data_dir: str | Path, type_: str) -> dict[str, list | None]:
     source_type = "FBC" if type_ == "dVtBudget" else type_
 
     measured: list[str] = []
-    tcsv = data_dir / f"{source_type}.csv"
+    tcsv = data_file(data_dir, f"{source_type}.csv")
     if tcsv.exists():
         cols = pl.scan_csv(tcsv).collect_schema().names()
         # Measure もヘッダ位置のまま軸として出す(相対化・filter の識別子軸)
         measured = [c for c in cols if c != source_type]
 
     label_axes: list[str] = []
-    plabel = data_dir / f"parameterLabel_{source_type}.csv"
+    plabel = data_file(data_dir, f"parameterLabel_{source_type}.csv")
     if plabel.exists():
         pdf = pl.read_csv(plabel)
         # 全行が空欄の列は「この type に存在しない設定」(例: tPROG の
@@ -162,7 +186,7 @@ def axis_catalog(data_dir: str | Path, type_: str) -> dict[str, list | None]:
     catalog: dict[str, list | None] = {}
     for axis in measured + [a for a in label_axes if a not in measured]:
         catalog[axis] = _candidates(data_dir, source_type, axis, tcsv if axis in measured else None)
-    if (data_dir / f"dataName_{source_type}.csv").exists():
+    if data_file(data_dir, f"dataName_{source_type}.csv").exists():
         catalog["DataName"] = _candidates(data_dir, source_type, "DataName", None)
     return catalog
 
@@ -181,7 +205,7 @@ def measure_labels(data_dir: str | Path, type_: str) -> dict[int, str]:
     """
     data_dir = Path(data_dir)
     source_type = "FBC" if type_ == "dVtBudget" else type_
-    if not (data_dir / f"dataName_{source_type}.csv").exists():
+    if not data_file(data_dir, f"dataName_{source_type}.csv").exists():
         return {}
     try:
         df = (

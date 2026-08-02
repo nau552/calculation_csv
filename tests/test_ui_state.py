@@ -329,7 +329,7 @@ def test_expand_dummy_bundle_roundtrip(tmp_path: Path, data_dir_mini: Path) -> N
     pseudo = make_pseudo_dummy(data_dir_mini, tmp_path / "pseudo")
     expanded = state.expand_dummy_bundle(str(pseudo), [2, 3])
     ctx = state.build_context(expanded)
-    assert "FBC" in ctx["types"]
+    assert "FBC" in ctx["part_types"]
     assert ctx["catalogs"]["FBC"]["Board"] == [0, 1]
     assert ctx["measure_labels"]["FBC"][1] == "evaluation_param_read_level_1"
 
@@ -659,7 +659,6 @@ def test_validate_unknown_ref(sf: dict[str, Any], catalog: dict[str, list | None
 def test_build_context(data_dir_mini: Path) -> None:
     """build_context で type 一覧・カタログ・初期温度の有無が揃うことを検証する(mini データ)。"""
     ctx = state.build_context(str(data_dir_mini))
-    assert ctx["types"] == MINI_TYPES
     assert ctx["part_types"] == MINI_TYPES  # mini ディレクトリに係数jsoncは無い
     assert "Page" in ctx["catalogs"]["tR"]
     assert ctx["has_initial_temperature"] is True
@@ -739,7 +738,7 @@ def test_part_value_mismatches_flags_values_not_in_data(data_dir_mini: Path, sf:
 def test_config_problem_messages_unifies_all_kinds(data_dir_mini: Path, sf: dict[str, Any]) -> None:
     """「設定の誤り」に構造の誤り・データに無い値・データ無し type が一本化されることを検証する。
 
-    サイドバーの件数・展開表示とテスト実行前ガードの共通実体(2026-08-01
+    サイドバーの件数・展開表示とテスト実行前ガードの共通実体(2026-07-31
     ユーザー合意: ダミーは本番構造を模す前提なので、データに無い要素を使うのも
     設定の誤り)。パーツ単位のメッセージにはパーツ名が前置される。
     """
@@ -1102,7 +1101,7 @@ def test_bundle_zip_flat_layout(data_dir_mini: Path, fixtures_dir: Path, custom_
         found["geninfo_path"],
         found["custom_path"],
     )
-    assert ctx["types"] == MINI_TYPES
+    assert set(MINI_TYPES) <= set(ctx["part_types"])
     assert ctx["geninfo"]["numWLs"] == 6
     assert "custom" in ctx["part_types"]
 
@@ -1125,7 +1124,7 @@ def test_bundle_zip_nested_layout(data_dir_mini: Path, fixtures_dir: Path, custo
         found["geninfo_path"],
         found["custom_path"],
     )
-    assert ctx["types"] == MINI_TYPES
+    assert set(MINI_TYPES) <= set(ctx["part_types"])
     assert "custom" in ctx["part_types"]
 
 
@@ -1187,18 +1186,6 @@ def test_draft_roundtrip(tmp_path: Path, sf: dict[str, Any], catalog: dict[str, 
     assert draft["score_file"] == sf
     assert draft["context_inputs"]["data_dir"] == "somewhere"
     assert state.load_draft(tmp_path / "none.jsonc") is None
-
-
-def test_draft_legacy_format_accepted(tmp_path: Path, sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
-    """context_inputs 導入前の旧形式(素の ScoreFile dict)の下書きも読めること。"""
-    import json
-
-    sf["score_parts"].append(state.part_skeleton("p", "FBC", catalog))
-    path = tmp_path / "draft.jsonc"
-    path.write_text(json.dumps(sf), encoding="utf-8")
-    draft = cast("dict[str, Any]", state.load_draft(path))
-    assert draft["score_file"] == sf
-    assert draft["context_inputs"] == {}
 
 
 def test_export_and_import_roundtrip(sf: dict[str, Any], catalog: dict[str, list | None]) -> None:

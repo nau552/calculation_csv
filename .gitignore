@@ -9,9 +9,20 @@ __pycache__
 # 実データ・生成物はリポジトリに入れない（テストが必要とする最小データは
 # tests/data/ に登録済み。FBC_expanded.csv はテストが毎回生成する）
 # 先頭の / はリポジトリ直下限定の意味（tests/data/result_tmp_mini/ を巻き込まないため）
-/result_tmp*/
+# 末尾に / を付けない: result_tmp_dummy.zip のようなファイルも対象にする
+/result_tmp*
 reference_scripts/*.csv
 FBC_normal.csv
 reference_param.csv
 gomigomi
 dummy_bundle/
+
+# ユーザー私物（バグ再現用の実ファイルなど。コミット禁止 — 実データを含む）
+/config_*_test.jsonc
+
+# 対話メモ（個人用・リリース物ではない）
+/score_gui.md
+
+# flow_guide.html のオフライン描画用ライブラリ（3.5MB — リポジトリに入れない。
+# 図が描画されない場合は mermaid.min.js をここに置く）
+/docs/assets/

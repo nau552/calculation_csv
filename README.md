@@ -103,7 +103,7 @@ git config core.hooksPath scripts/hooks         # push前テストのフック�
     「この設定を読めるエンジンか」を版で見分けられるようにする。
     例: 0.5.0 = Measure 相対化・filter リスト・labels 注記の導入、
     0.6.0 = abs/log 変換op・vthSkip ダミー計算の導入、
-    0.7.0 = score.jsonc の WLgroup 旧形式キー化）
+    0.7.0 = score.jsonc 単体形式でも WLgroup 系キーを受けるように）
 - 目安: 互換性に影響する変更（パッケージ名・出力契約・configの意味変更）で
   真ん中の数字、それ以外の機能追加・修正は最後の数字を上げる
 - **上げ忘れ防止**: 機能実装の完了報告には「版数を上げたか・上げない理由」の判断を
@@ -556,7 +556,7 @@ CLI（stderr / `--version`）に表示される — SVN側エンジンとの版�
 }
 ```
 
-- 従来の `optimization.WLgroup` は「WL に対する WLgroup 定義」として互換読み込みされる
+- `optimization.WLgroup`（WLgroup 系キー）は「WL に対する WLgroup 定義」として読み込まれる
   （`groupDefs` に同名があればそちらが優先）。
 - **Logical / Physical 記法**: 範囲は既定では Logical 番号（csv の WL 列の値そのもの）。
   現行スクリプトの `WLgroupDefinLogical: "False"` 相当で **Physical 番号**で書きたい場合は、
@@ -571,8 +571,6 @@ CLI（stderr / `--version`）に表示される — SVN側エンジンとの版�
 - パーツが定義名を参照していると、そのパーツ内ではグループ列が最初から存在する扱いになる
   （relative の分母事前集計などでもグループをまたいで混ざらない。またぎたい場合は
   そのステップにグループ軸自体を追加する）。
-- 旧 `group_reduce` op は廃止（読み込み時に移行案内つきエラー）。inner/outer は
-  「対象軸の集計の直後にグループ軸を置く」ことで等価に書ける。
 - **範囲チェック**: どの範囲にも入らない値の行がデータにあると、値の一覧つきで
   計算エラーになる（名無しグループとして静かに混ざることはない）。逆に、データに
   該当値が無いグループは「存在しない軸の値」と同じ扱いで、単に現れないだけ。
@@ -611,12 +609,11 @@ def my_score(ctx):
 毎epochの測定には基準パラの測定と提案パラの測定が混在しており、それを見分けて比を取る。
 
 `relative` ブロックが**書いてあれば相対化する**。絶対値のまま使いたい場合は
-ブロックごと省略（またはコメントアウト）する。`enabled` フラグは無い
-（旧ファイルの `enabled: true` は無視され、`enabled: false` は明確なエラーになる）。
+ブロックごと省略（またはコメントアウト）する。
 
 | フィールド | 意味 |
 |---|---|
-| `split_axis` | 分子/分母を見分ける軸。**基本は `Measure`（測定番号）**。任意の軸を指定でき、旧仕様の `Read_Override` 等や、Measure 列の無い集計済み type での `Chip` 等も可（docs/spec_change_dataname_measure.md） |
+| `split_axis` | 分子/分母を見分ける軸。**基本は `Measure`（測定番号）**。任意の軸を指定でき、`Read_Override` や、Measure 列の無い集計済み type での `Chip` 等も可（docs/spec_change_dataname_measure.md） |
 | `numerator_when` | split_axisがこの値の行が分子（評価測定 = 提案パラ）。例: `1` |
 | `denominator_when` | split_axisがこの値の行が分母（基準測定）。例: `0` |
 | `labels` | 任意: 値 → 表示名（dataName 等）の注記。**実行には使われない**（UI 表示と将来の validate 照合用） |
@@ -745,7 +742,6 @@ Measure と並べて order に置く必要はない（UI の雛形にも入ら�
 個数・形が合わない場合は読み込み時に正しい書き方を提示するエラーで止まる
 （例: sumに `value` 単数のスカラーを書いた場合は1個のリストとして解釈、
 diffに1個しか書かなければ「2個必要」とエラー）。
-旧表記の `values` はエイリアスとして読み込み時に `value` へ自動変換される。
 
 | op | 意味 | valueに書くもの |
 |---|---|---|
@@ -882,12 +878,12 @@ Board/Stateを相対化より後に集計すること。
   `reference_scripts/FBC_expanded.csv` と**全行一致**することを確認。展開せず遅延joinする新方式が
   現行の展開方式と同じ結果を返すことの保証。
 - **各集計opの単体テスト** (`test_aggregate.py`): 手計算で答えの分かる小さなデータで
-  filter/mean/subset/expr/グループ派生軸を検証。orderが全軸を潰し切らない場合の
+  filter/mean/diff/expr/グループ派生軸を検証。orderが全軸を潰し切らない場合の
   エラーも確認。
 - **相対値** (`test_relative.py`): 分母の事前集計（WL→STRの順のmean）とoffsetが
   設計通りに効くことを手計算値と照合。
-- **Measure番号/DataName指定** (`test_measure_split.py`): 新仕様（Measure 番号での
-  相対化・filter）が旧仕様（Read_Label filter + Read_Override 分割）と厳密同値で
+- **Measure番号/DataName指定** (`test_measure_split.py`): Measure 番号での相対化・
+  filter が、Read_Label filter + Read_Override 分割による等価な書き方と厳密同値で
   あることを mini データで照合。is_in filter の前絞り最適化・キャッシュ安全性も確認。
 - **ダミー展開** (`test_dummy.py`): Board/Chip 複製展開が行の複製「だけ」を行うことを
   「mean 集計は複製に対して不変」という性質（展開前後で同値）で検証。
@@ -925,12 +921,12 @@ Board/Stateを相対化より後に集計すること。
   パーツ同士は共有されない（速度が落ちるだけで結果は常に正しい）。
 
 キャッシュの寿命は1回の計算実行内のみで、epoch間で持ち越さない。
-`compute_score_part` を単体で呼んだ場合（shared_ctx未指定）は従来通り毎回読み込む。
+`compute_score_part` を単体で呼んだ場合（shared_ctx未指定）は毎回読み込む。
 
 集計の最終収束は「識別軸（例: Epoch）を残して潰す」形に一般化されており
 （`aggregate.collapse`）、これを使った**複数epochバッチ計算**が
 `scorelib_param.batch` として実装済み（次節）。通常の単一epoch計算は
-識別軸なし＝1スカラーで従来と同じ動作。
+識別軸なし＝1スカラー。
 
 ## 過去実験データのバッチスコア計算（scorelib_param.batch）
 

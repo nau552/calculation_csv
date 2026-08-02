@@ -174,7 +174,7 @@ def test_state_diff_within_part_equals_two_parts_subtracted(data_dir_mini: Path,
         )
 
     combined = compute_score_part(
-        data_dir_mini, dvt_part("combined", {"op": "diff", "values": ["R2A", "B2A"]}), **kwargs
+        data_dir_mini, dvt_part("combined", {"op": "diff", "value": ["R2A", "B2A"]}), **kwargs
     )
     r2a = compute_score_part(data_dir_mini, dvt_part("r2a", {"op": "filter", "value": "R2A"}), **kwargs)
     b2a = compute_score_part(data_dir_mini, dvt_part("b2a", {"op": "filter", "value": "B2A"}), **kwargs)

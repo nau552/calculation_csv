@@ -26,6 +26,7 @@ from scorelib_param import axis_resolve, custom
 from scorelib_param.cli import (
     CUSTOM_TYPE,
     SharedComputeContext,
+    _load_custom_module_if_needed,
     _named_axes,
     _source_type,
     compute_dummy_part,
@@ -133,19 +134,6 @@ def _check_epoch_col_free(run_config: RunConfig) -> None:
         if part.type != CUSTOM_TYPE and EPOCH_COL in _named_axes(part):
             msg = f"score part '{part.name}' uses axis '{EPOCH_COL}', which is reserved as the batch identity axis"
             raise ValueError(msg)
-
-
-def _load_custom_module(run_config: RunConfig, custom_parts_path: str | Path | None) -> ModuleType | None:
-    # Path はモジュールトップでは型注釈用(TYPE_CHECKING)のみ。実行時に使うこの関数内で読み込む
-    from pathlib import Path  # ruff: ignore[PLC0415]
-
-    if not any(p.type == CUSTOM_TYPE for p in run_config.optimization.score_parts):
-        return None
-    path = Path(custom_parts_path) if custom_parts_path else custom.default_custom_parts_path()
-    if not path.is_file():
-        msg = f"score parts with type='{CUSTOM_TYPE}' need the custom parts file: {path}"
-        raise ValueError(msg)
-    return custom.load_custom_module(path)
 
 
 def _require_custom_module(part: ScorePart, custom_module: ModuleType | None) -> ModuleType:
@@ -481,7 +469,7 @@ def compute_score_batch(
     if not epochs:
         return BatchResult(_result_frame([], part_names), failed)
 
-    custom_module = _load_custom_module(run_config, custom_parts_path)
+    custom_module = _load_custom_module_if_needed(score_file.score_parts, custom_parts_path)
     inputs = _BatchInputs(run_config, dvtbudget_coef, custom_parts_path, generation_info_path)
     # vthSkip: type ファイルの無い epoch はダミー値で埋める(cli.compute_dummy_part)
     vth = run_config.optimization.vthSkip

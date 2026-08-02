@@ -85,13 +85,3 @@ def load(path: str | Path) -> object:
 def dump(obj: object, path: str | Path, indent: int = 4) -> None:
     """オブジェクトを JSON としてファイルへ書き出す(indent つき・非ASCIIはそのまま)。"""
     Path(path).write_text(json.dumps(obj, indent=indent, ensure_ascii=False), encoding="utf-8")
-
-
-def dumps(obj: object, indent: int = 4) -> str:
-    """オブジェクトを JSON 文字列にする(indent つき・非ASCIIはそのまま)。
-
-    Returns:
-        整形済みの JSON テキスト。
-
-    """
-    return json.dumps(obj, indent=indent, ensure_ascii=False)

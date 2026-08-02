@@ -14,12 +14,13 @@ from typing import TYPE_CHECKING, Any, cast
 import polars as pl
 
 from .expression import evaluate_expression
-from .models import TRANSFORM_OPS, UNARY_OPS, AggregationSpec
+from .models import MULTI_OPS, TRANSFORM_OPS, UNARY_OPS, AggregationSpec
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-_SIMPLE_OPS = {"mean", "sum", "min", "max"}
+# op の集合は models.MULTI_OPS が唯一の正(op 追加時の二重更新を避ける)
+_SIMPLE_OPS = frozenset(MULTI_OPS)
 
 
 def group_column_expr(axis: str, ranges: Mapping[str, tuple[int, int]]) -> pl.Expr:

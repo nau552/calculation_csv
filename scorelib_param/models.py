@@ -48,14 +48,6 @@ AggOp = Literal[
     "log",
 ]
 
-# `value` が通常opの修飾子になる前の旧表記(読み込み時に自動変換)
-_SUBSET_ALIASES = {
-    "mean_subset": "mean",
-    "sum_subset": "sum",
-    "min_subset": "min",
-    "max_subset": "max",
-}
-
 # 任意の選択リストを `value` に取れる集計op。UI(ui/widgets.py)と共有して
 # 両者が食い違わないようにする
 MULTI_OPS = ("mean", "sum", "min", "max")
@@ -99,8 +91,7 @@ class AggregationSpec(BaseModel):
       ({"op": "filter", "value": {"State": "A2B", "Read_Label": "..."}})
     - リスト = 常に選択の並び({"op": "diff", "value": ["R2A", "B2A"]})
     op ごとに違うのは必要な選択の個数だけ(filter: 1個以上(複数は is_in)、
-    diff: 2、mean/sum/min/max: 任意個または無し)。互換のため `values` も
-    `value` の別名として受ける。
+    diff: 2、mean/sum/min/max: 任意個または無し)。
     """
 
     op: AggOp
@@ -132,40 +123,6 @@ class AggregationSpec(BaseModel):
     labels: dict[str, str] | None = None
     # op="log" 専用(必須): log(max(|x|, floor)) の床。0 や負値で発散させない
     floor: float | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_legacy_spellings(cls, data: object) -> object:
-        """旧表記の吸収: *_subset は自動変換、values は value の別名。
-
-        廃止した group_reduce は移行案内つきでエラーにする。
-
-        Returns:
-            旧表記を現行表記へ書き換えた入力データ(dict 以外はそのまま)。
-
-        Raises:
-            ValueError: 廃止済みの op 'group_reduce' が指定されたとき、
-                または 'values' と 'value' が同時に与えられたとき。
-
-        """
-        if isinstance(data, dict):
-            if data.get("op") == "group_reduce":
-                msg = (
-                    "op 'group_reduce' has been removed; define the group in groupDefs and "
-                    "put its name (e.g. 'WLgroup') in `order` as a derived axis instead "
-                    "(inner op on the source axis, outer op on the group axis)"
-                )
-                raise ValueError(msg)
-            if data.get("op") in _SUBSET_ALIASES:
-                data = {**data, "op": _SUBSET_ALIASES[data["op"]]}
-            if data.get("values") is not None:
-                if data.get("value") is not None:
-                    msg = "give selections in 'value' ('values' is an alias) — not both"
-                    raise ValueError(msg)
-                values = data["values"]
-                data = {k: v for k, v in data.items() if k != "values"}
-                data["value"] = values
-        return data
 
     @model_validator(mode="after")
     def _check_value_shape(self) -> AggregationSpec:
@@ -423,7 +380,6 @@ class RelativeConfig(BaseModel):
     """相対化の設定。ScorePart に `relative` ブロックが**あれば相対化する**。
 
     絶対値のまま計算したければブロックごと省略(またはコメントアウト)する。
-    `enabled` フラグは存在しない。
     """
 
     split_axis: str
@@ -461,22 +417,6 @@ class RelativeConfig(BaseModel):
             )
             raise ValueError(msg)
         return self
-
-    @model_validator(mode="before")
-    @classmethod
-    def _reject_removed_enabled(cls, data: object) -> object:
-        if isinstance(data, dict) and "enabled" in data:
-            data = dict(data)
-            enabled = data.pop("enabled")
-            # 残骸の `enabled: true` は無害なので黙って捨てる。
-            # `enabled: false` を黙って「有効」にしてはならない: 大声で失敗する
-            if not enabled or str(enabled).strip().lower() == "false":
-                msg = (
-                    "relative.enabled has been removed; to compute without "
-                    "relative-ization, delete (or comment out) the whole relative block"
-                )
-                raise ValueError(msg)
-        return data
 
 
 class ScorePart(BaseModel):
@@ -715,20 +655,23 @@ class ScoreFile(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _absorb_legacy_wlgroup(cls, data: object) -> object:
-        """score.jsonc 単体形式でも旧形式の WLgroup 系キーを受ける(0.7.0)。
+    def _absorb_wlgroup_keys(cls, data: object) -> object:
+        """score.jsonc 単体形式でも WLgroup 系キーを受ける(0.7.0)。
 
-        対象キーは WLgroup / WLgroupDefinLogical / WLgroupWeight。
+        対象キーは WLgroup / WLgroupDefinLogical / WLgroupWeight —
+        実験スクリプトが読む config の正式な形式。groupDefs / weightSets は
+        任意の軸(STR 等)のグループ分割へ一般化した内部の入れ物で、WL の
+        定義もそこへ移し替えて同じ仕組みで処理する。
 
-        UI のエクスポートは WL 軸の "WLgroup" 定義を**旧形式キーだけ**に書く
-        (groupDefs と二重にしない): 合成後 config では実験スクリプトが読む
-        optimization.WLgroup がそのまま編集後の内容になり、手編集でも
+        UI のエクスポートは WL 軸の "WLgroup" 定義を **WLgroup 系キーだけ**に
+        書く(groupDefs と二重にしない): 合成後 config では実験スクリプトが
+        読む optimization.WLgroup がそのまま編集後の内容になり、手編集でも
         「どちらが使われるか」の迷いが生じない(定義の在り処は常に1つ)。
         groupDefs / weightSets に同名があればそちらが勝つ(RunConfig の
         group_defs() / weight_sets() と同じ優先順位)。
 
         Returns:
-            旧形式キーを groupDefs / weightSets へ移し替えた入力データ
+            WLgroup 系キーを groupDefs / weightSets へ移し替えた入力データ
             (対象キーが無ければそのまま)。
 
         Raises:
@@ -760,10 +703,9 @@ class ScoreFile(BaseModel):
 
 
 def _is_weight(w: object) -> bool:
-    def num(x: object) -> bool:
-        return isinstance(x, (int, float)) and not isinstance(x, bool)
-
-    return num(w) or (isinstance(w, dict) and bool(w) and all(num(x) for x in w.values()))
+    return _is_number(w) or (
+        isinstance(w, dict) and bool(w) and all(_is_number(x) for x in w.values())
+    )
 
 
 class VthSkipConfig(BaseModel):
@@ -868,7 +810,7 @@ class RunConfig(BaseModel):
         """設定の optimization ブロックの内容を ScoreFile として取り出す。
 
         Returns:
-            旧 WLgroup 系キーも統合済みの groupDefs / weightSets を同梱した
+            WLgroup 系キーも統合済みの groupDefs / weightSets を同梱した
             ScoreFile。
 
         """
@@ -877,7 +819,7 @@ class RunConfig(BaseModel):
             expression=self.optimization.expression,
             constraintThreshold=self.optimization.constraintThreshold,
             selectionSets=self.optimization.selectionSets,
-            # 旧 WLgroup も統合した全定義(weightSets と対称 — 0.7.0 で修正。
+            # WLgroup 系キーも統合した全定義(weightSets と対称 — 0.7.0 で修正。
             # エンジンの計算は resolve_group_defs → group_defs() を使うため
             # 挙動は不変で、UI が RunConfig を取り込む経路の取りこぼしを塞ぐ)
             groupDefs=self.group_defs(),
@@ -885,14 +827,15 @@ class RunConfig(BaseModel):
         )
 
     def group_defs(self) -> dict[str, GroupDef]:
-        """全グループ定義(旧来の optimization.WLgroup + groupDefs)。
+        """全グループ定義(optimization.WLgroup + groupDefs)。
 
-        旧来の optimization.WLgroup は暗黙に「WLに対する定義」として読む
-        (記法は WLgroupDefinLogical に従う)。名前が衝突したら groupDefs が勝つ。
+        optimization.WLgroup(実験スクリプト形式)は暗黙に「WLに対する定義」
+        として読む(記法は WLgroupDefinLogical に従う)。名前が衝突したら
+        groupDefs が勝つ。
 
         Returns:
-            {定義名: GroupDef}(旧来の WLgroup は "WLgroup" という名前で
-            含まれる)。
+            {定義名: GroupDef}(optimization.WLgroup は "WLgroup" という
+            名前で含まれる)。
 
         """
         defs: dict[str, GroupDef] = {}
@@ -906,14 +849,14 @@ class RunConfig(BaseModel):
         return defs
 
     def weight_sets(self) -> dict[str, Any]:
-        """全重みセット(旧来の optimization.WLgroupWeight + weightSets)。
+        """全重みセット(optimization.WLgroupWeight + weightSets)。
 
-        旧来の optimization.WLgroupWeight は "WLgroupWeight" という名前の
-        セットとして読む。衝突は weightSets が勝つ。
+        optimization.WLgroupWeight(実験スクリプト形式)は "WLgroupWeight"
+        という名前のセットとして読む。衝突は weightSets が勝つ。
 
         Returns:
-            {セット名: 重み(数値または {軸の値: 数値})}(旧来の
-            WLgroupWeight は "WLgroupWeight" という名前で含まれる)。
+            {セット名: 重み(数値または {軸の値: 数値})}(WLgroupWeight は
+            "WLgroupWeight" という名前で含まれる)。
 
         """
         sets: dict[str, Any] = {}

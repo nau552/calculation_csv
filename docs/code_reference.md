@@ -45,13 +45,13 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 |---|---|
 | `strip_jsonc_comments(text)` | `//` と `/* */` コメントを文字列リテラル内を壊さずに除去（1文字ずつ走査） |
 | `loads(text)` / `load(path)` | コメント・末尾カンマを除去してから `json.loads` |
-| `dumps(obj)` / `dump(obj, path)` | 整形付き書き出し（ensure_ascii=False） |
+| `dump(obj, path)` | 整形付き書き出し（ensure_ascii=False） |
 
 設計: 外部ライブラリを増やさないための最小実装。この形式（JSON+コメント+末尾カンマ）で十分なため。
 
 ### `scorelib_param/io_jsonc.py` — pydanticモデル⇔jsoncファイルの入出力
-`load_run_config` / `save_run_config` / `load_score_file` / `save_score_file` /
-`load_dvtbudget_coef` の5関数。すべて「jsonc.load → models の model_validate」の薄い糊。
+`load_run_config` / `load_dvtbudget_coef` の2関数。どちらも
+「jsonc.load → models の model_validate」の薄い糊。
 
 ### `scorelib_param/expression.py` — 自由記述式の評価
 | 関数 | 内容 |
@@ -66,14 +66,14 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 | `CUSTOM_TYPE = "custom"` | 自作関数パーツの type 値 |
 | `MULTI_OPS` | value で対象を絞れる集計op（mean/sum/min/max）。UIと共有 |
 | `TRANSFORM_OPS` / `UNARY_OPS` / `STEP_OPS` | 変換ステップの op。TRANSFORM = 定数演算（add/sub/mul/div）、UNARY = 定数を取らない単項関数（abs / log — 0.6.0 で追加）、STEP = 両方の和（UI のステップ op 候補） |
-| `AggregationSpec` | 1エントリの集計指示。op/value/ref/expr/by + 集計時重み `weight`/`weight_ref`（mean系専用: その軸を潰す直前に値へ乗算。正規化された加重平均ではない）+ `labels` 注記（値→表示名。実行には不使用 — Measure 番号に dataName を残す用）+ `floor`（op=log 専用・必須: log(max(\|x\|, floor))）。filter の value はスカラー（等値）またはリスト（is_in）。before検証で旧表記（`*_subset`、`values`、廃止済み `group_reduce`）を変換/エラー化、after検証で opごとの value/weight/floor 形状を検査 |
+| `AggregationSpec` | 1エントリの集計指示。op/value/ref/expr/by + 集計時重み `weight`/`weight_ref`（mean系専用: その軸を潰す直前に値へ乗算。正規化された加重平均ではない）+ `labels` 注記（値→表示名。実行には不使用 — Measure 番号に dataName を残す用）+ `floor`（op=log 専用・必須: log(max(\|x\|, floor))）。filter の value はスカラー（等値）またはリスト（is_in）。after検証で opごとの value/weight/floor 形状を検査 |
 | `AxisAggregation` | 上に axis 名が付いたもの（分母事前集計はリストなので軸名を自分で持つ） |
-| `RelativeConfig` | 相対化設定（split_axis / numerator_when / denominator_when / mode / denominator_offset / denominator_pre_aggregation + `labels` 注記）。廃止済み `enabled: false` は明示エラー。分子/分母の None（未設定）は「必ず0行マッチになる設定忘れ」として明示エラー（UIの未入力表示の実体） |
+| `RelativeConfig` | 相対化設定（split_axis / numerator_when / denominator_when / mode / denominator_offset / denominator_pre_aggregation + `labels` 注記）。分子/分母の None（未設定）は「必ず0行マッチになる設定忘れ」として明示エラー（UIの未入力表示の実体） |
 | `ScorePart` | 1スコアパーツ。name/type/relative/order/aggregations + custom用の function/params。custom と集計フィールドの混在を拒否。複合軸の辞書選択の形状検査。`resolve_selection_refs()` で ref を選択セットの中身に展開して再検証 |
 | `GroupDef` | グループ派生軸の定義（対象軸 + グループ名→[lo, hi]） |
-| `ScoreFile` | ユーザが作る内容一式（score_parts / expression / constraintThreshold / selectionSets / groupDefs / weightSets）。自己完結でエクスポートされる単位。**旧形式キー（WLgroup / WLgroupDefinLogical / WLgroupWeight）も before 検証で吸収**（0.7.0 — エクスポートが WL 軸の WLgroup をこのキーだけに書くため。groupDefs / weightSets の同名が優先） |
+| `ScoreFile` | ユーザが作る内容一式（score_parts / expression / constraintThreshold / selectionSets / groupDefs / weightSets）。自己完結でエクスポートされる単位。**WLgroup 系キー（WLgroup / WLgroupDefinLogical / WLgroupWeight — 実験スクリプト形式）も before 検証で吸収**（0.7.0 — エクスポートが WL 軸の WLgroup をこのキーだけに書くため。groupDefs / weightSets の同名が優先） |
 | `VthSkipConfig` / `VTHSKIP_TYPE_KEYS` | 実験 config の `optimization.vthSkip`（フロー側の既存項目）: epochs（エンジンは不使用）+ dummyKLDValue / dummyDVthValue。`dummy_values()` が type 名（KLD / dVthSGWLD — 対応表 VTHSKIP_TYPE_KEYS）→ ダミー値の辞書を返す（0.6.0） |
-| `OptimizationConfig` / `RunConfig` | 実行時 config（Generation + optimization{}）。`vthSkip`（上記）も持つ。`to_score_file()` で ScoreFile 部分を取り出し（0.7.0: groupDefs は `group_defs()` の統合結果 — weightSets と対称）、`group_defs()` で旧 WLgroup（WL への定義として互換読み）と groupDefs を統合（groupDefs 優先） |
+| `OptimizationConfig` / `RunConfig` | 実行時 config（Generation + optimization{}）。`vthSkip`（上記）も持つ。`to_score_file()` で ScoreFile 部分を取り出し（0.7.0: groupDefs は `group_defs()` の統合結果 — weightSets と対称）、`group_defs()` で optimization.WLgroup（WL への定義として読む）と groupDefs を統合（groupDefs 優先） |
 | `DvtBudgetCoefFile` | 係数表（世代→温度→State→{a, b}）のルートモデル |
 
 設計: **検証はすべてここに集約**し、UIも同じモデルで検証する（二重実装しない）。
@@ -82,7 +82,7 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 | 定義 | 内容 |
 |---|---|
 | `JOIN_KEYS` | `(InBatchEpoch, Board, Chip, Block, Measure)`。測定csvとラベルcsvの結合キー |
-| `resolve_axes(data_dir, type_, required_axes)` | `{type}.csv` に、要求された軸のぶんだけ `parameterLabel_` / `dataName_` / `map_*` を lazy join し、値列+軸列の LazyFrame を返す。Override列は Boolean 正規化。要求されない列（InBatchEpoch等）は最後に落とす。**Measure は結合キーだが、軸として要求されたら残す**（相対化・filter の識別子軸 — docs/spec_change_dataname_measure.md） |
+| `resolve_axes(data_dir, type_, required_axes)` | `{type}.csv` に、要求された軸のぶんだけ `parameterLabel_` / `dataName_` / `map_*` を lazy join し、値列+軸列の LazyFrame を返す。Override列は Boolean 正規化。要求されない列（InBatchEpoch等）は最後に落とす。**Measure は結合キーだが、軸として要求されたら残す**（相対化・filter の識別子軸 — docs/spec_change_dataname_measure.md）。付随ファイルが無い場合は parameterLabel_ / dataName_ とも「解決できない軸」の軸名つきエラー（dataName_ 側は存在確認なしの scan で polars の FileNotFoundError がパーツ名の名指しなしに漏れていた — 2026-07-31 修正） |
 | `_map_file_for_axis` | 軸名→対応する map ファイル名の規約（`*_Label`→map_Label.csv 等）。DataName は実出力の `map_DataName.csv` が正で旧 `map_dataName.csv` も互換で読む（Linux は大文字小文字を区別 — 2026-07-29 実環境で判明） |
 
 設計: 全展開（FBC_expanded.csv 相当）を作らず、パーツが言及した軸だけを結合する。
@@ -95,7 +95,7 @@ config.jsonc（スコア定義）      測定結果ディレクトリ（result_t
 | `apply_transform(lf, col, spec)` | 軸を潰さない行単位変換（`__offset__`/`__weight__` 等の仮想ステップ用）。定数演算（add/sub/mul/div）に加え単項関数 abs = \|x\|、log = ln(max(\|x\|, floor))（0.6.0。KLD の標準計算の形） |
 | `apply_axis_op(lf, col, axis, spec, group_keys)` | 1軸を1つの指示で潰す。filter（スカラー=等値 / リスト=is_in。どちらも軸列を落とし、is_in の残行は後段集計に複製として流れる）/ mean系（value で対象限定可、`weight` で集計直前に重み乗算）/ diff（a−b の自己結合）/ expr（グループごとに評価） |
 | `apply_aggregations(lf, col, order, aggregations)` | order を上から順に適用。**残っている全列をグループキー**にするのが要（グループ派生列が自然にキーとして生き残る仕組み） |
-| `collapse` / `collapse_to_scalar` | 潰し残しの列や、値列の null / NaN を検出してエラーにし、1スカラーを返す。null/NaN は専用例外 **`CollapseNullError`** — compute_score_part が捕まえてパイプラインを歩き直し、原因ステップ（filter 空振り / 相対化の片側不在 / 係数照会失敗など）を名指しした ValueError に変換する（2026-08-01。旧文言「a filter value probably matched no rows」の推測決め打ちを廃止）。min/max は NaN を黙って飛ばす polars 仕様のため、`_reduce` が「グループ内に NaN があれば結果も NaN」に毒化して伝播を保証する |
+| `collapse` / `collapse_to_scalar` | 潰し残しの列や、値列の null / NaN を検出してエラーにし、1スカラーを返す。null/NaN は専用例外 **`CollapseNullError`** — compute_score_part が捕まえてパイプラインを歩き直し、原因ステップ（filter 空振り / 相対化の片側不在 / 係数照会失敗など）を名指しした ValueError に変換する（2026-07-31。旧文言「a filter value probably matched no rows」の推測決め打ちを廃止）。min/max は NaN を黙って飛ばす polars 仕様のため、`_reduce` が「グループ内に NaN があれば結果も NaN」に毒化して伝播を保証する |
 | `aggregate_score_part` | 上2つをつないだ入口 |
 
 ### `scorelib_param/relative.py` — 相対化
@@ -112,12 +112,14 @@ ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算
 設計: 展開は**行の複製だけ**を行い数値を作らない（mean 集計が展開前後で不変 —
 tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一式から設計を始める」の実体
 （docs/spec_change_dataname_measure.md 9節・プラン4）。
+なお vthSkip のダミー**計算**は `cli.compute_dummy_part` であり本モジュールとは無関係
+（名前が似ているため注記 — 2026-07-31）。
 
 ### `scorelib_param/dvtbudget.py` — dVtBudget変換
 | 関数 | 内容 |
 |---|---|
 | `load_board_temperatures(path)` | initial_temperature.csv → {Board: 温度} |
-| `apply_dvtbudget(lf, col, generation, coef, temps)` | Board の実測温度に最も近い温度キーの係数 b を State ごとに引き、`-log10(値)/b*1000` を行単位で適用。Board/State 列が既に潰されていたらエラー。係数表に Generation が無ければ明示エラー、(Board, State) の照会に失敗した行は **NaN として伝播**させ最終 collapse で検出（2026-08-01 — 以前は null が後段の mean 等で黙って除外され「エラーなしで値がズレる」危険があった。相対化・diff の相手不在も同様に NaN 化） |
+| `apply_dvtbudget(lf, col, generation, coef, temps)` | Board の実測温度に最も近い温度キーの係数 b を State ごとに引き、`-log10(値)/b*1000` を行単位で適用。Board/State 列が既に潰されていたらエラー。係数表に Generation が無ければ明示エラー、(Board, State) の照会に失敗した行は **NaN として伝播**させ最終 collapse で検出（2026-07-31 — 以前は null が後段の mean 等で黙って除外され「エラーなしで値がズレる」危険があった。相対化・diff の相手不在も同様に NaN 化） |
 
 ### `scorelib_param/custom.py` — 自作Python関数パーツ
 | 定義 | 内容 |
@@ -137,9 +139,13 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `find_generation_info(dir, generation)` | これだけファイル名ベース（`{Generation}.json`） |
 | `axis_catalog(dir, type_)` | typeの軸一覧→値候補。dVtBudget は FBC のカタログ。**Measure 軸**（Measure 列を持つ type のみ・実在番号の昇順）と **DataName 軸**（dataName_{type}.csv がある場合）も出す。parameterLabel の**全行空欄の列は出さない**（0.5.3: tPROG の Read_Label のような「この type に無い設定」） |
 | `measure_labels(dir, type_)` | Measure 番号 → dataName の対応（UI の複合表示「dataName (Measure N)」と labels 注記用。dataName_* が無ければ空 = 番号のみ表示） |
-| `_candidates` | 値候補の導出。map系軸（**Override 含む**）は**実データに存在する値だけ**（map順、失敗時は全語彙にフォールバック）、数値軸は csv のユニーク値。Override の [False, True] ハードコードは 2026-08-01 に廃止 — 評価側の測定を含まないデータで True が候補に出てしまい、「候補には在るが行が無い」不一致を UI が検出できなかったため（実機報告） |
+| `_candidates` | 値候補の導出。map系軸（**Override 含む**）は**実データに存在する値だけ**（map順、失敗時は全語彙にフォールバック）、数値軸は csv のユニーク値。Override の [False, True] ハードコードは 2026-07-31 に廃止 — 評価側の測定を含まないデータで True が候補に出てしまい、「候補には在るが行が無い」不一致を UI が検出できなかったため（実機報告） |
 
 複数候補の扱い（黙って選ばずエラー）は呼び出し側（ui/state.py）の責務。
+
+2026-07-31 から `.csv.gz` も対象（`_csv_stem` / `_csv_files` と `axis_resolve.data_file` 経由）。
+以前は `.csv` だけを探していたため、gz だけのディレクトリで「エンジンは計算できるのに
+UI では type・値候補が出ない」非対称があった。
 
 ### `scorelib_param/cli.py` — 計算の入口（最適化側からはサブプロセスで呼ばれる）
 | 定義 | 内容 |
@@ -153,10 +159,10 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `_hoistable_prefilters(part, group_defs)` | order 内の位置・`__relative__` の明示/暗黙によらず、可換な filter の行絞り [(軸,値),...] をパイプライン先頭に前出しする判定（リスト値=is_in も対象。キャッシュキーでは tuple 化）。除外は split軸・分母事前集計の軸とその `by`（派生軸は元軸と双方向対応）・複合軸の構成軸。列は落とさず行だけ先に絞る純最適化（結果不変、tests/test_prefilter.py）。診断上の変化: 後段の検証（dVtBudget係数カバレッジ等）は filter 後に残る値だけが対象になる |
 | `SharedComputeContext` | 1回の compute_score_file 内でtype単位のcsv読み込みと `__relative__`/`__dvtbudget__` 直後の中間結果を共有するキャッシュ（結果は共有なしと同一。customパーツは対象外）。前絞りが異なるパーツは共有しない（キーに prefilters を含む） |
 | `_apply_axis_step` | 複合軸なら列を `&` で融合してから aggregate に渡す |
-| `compute_score_part(...)` | 1パーツの計算。type=custom は関数呼び出しへ分岐。実装は下請けヘルパー(`_compute_custom_part` / `_base_frame` / `_apply_prefilters` / `_prefix_cache_keys` / `_resume_from_cache` / `_apply_steps` / `_apply_pipeline_step`)へ分割済み(2026-07-31、結果不変)。**省略可能引数(group_defs 以降)はキーワード専用**(公開 API 共通 — 品質向上パスで位置渡しを廃止)。最終結果が null / NaN のとき(`CollapseNullError`)は **`_diagnose_pipeline` がエラー経路限定でパイプラインを歩き直し、原因ステップを名指し**した ValueError に変換(2026-08-01。成功時のコストはゼロ。診断が二次エラーで失敗したら元のエラーをそのまま出す) |
+| `compute_score_part(...)` | 1パーツの計算。type=custom は関数呼び出しへ分岐。実装は下請けヘルパー(`_compute_custom_part` / `_base_frame` / `_apply_prefilters` / `_prefix_cache_keys` / `_resume_from_cache` / `_apply_steps` / `_apply_pipeline_step`)へ分割済み(2026-07-31、結果不変)。**省略可能引数(group_defs 以降)はキーワード専用**(公開 API 共通 — 品質向上パスで位置渡しを廃止)。最終結果が null / NaN のとき(`CollapseNullError`)は **`_diagnose_pipeline` がエラー経路限定でパイプラインを歩き直し、原因ステップを名指し**した ValueError に変換(2026-07-31。成功時のコストはゼロ。診断が二次エラーで失敗したら元のエラーをそのまま出す) |
 | `_dummy_axis_values(dir, axis, spec)` / `compute_dummy_part(dir, part, dummy_value, ...)` | vthSkip のダミー計算（0.6.0）: type ファイルが無い epoch 用に、軸の全組み合わせ（要素は map → 他 csv の実在値 → 選択リスト → [0] の順で決定）へダミー値を敷き詰め、**変換ステップをスキップ**して集計だけ適用する（ダミー値=「変換後の値」の意味論 — 設計書12節）。relative / dVtBudget パーツは非対応（明示エラー） |
-| `compute_score_file(dir, run_config, ...)` | 全パーツ計算+expression 評価 → `{"Score": ..., パーツ名: ...}`。`optimization.vthSkip` があり type ファイルが無いパーツは compute_dummy_part で計算し stderr に note を出す。**省略可能引数(dvtbudget_coef 以降)はキーワード専用**(compute_dummy_part・apply_dvtbudget の epoch_col も同様)。パーツ計算のエラーは**全パーツ分を集めてから必ず例外で落ちる**(「1つ直すと次のエラー」の往復を解消 — 2026-08-01。1件なら従来と同じ形・同じ型、複数なら「N score parts failed:」+1行1パーツ。失敗が1件でもあれば値は返さない=部分結果で実験が続くことはない)。各メッセージは失敗パーツを名指し(「score part '名前': …」) |
-| `main()` | argparse。`--config --data-dir --dvtbudget-coef --initial-temperature --custom-parts --version`。stdout は結果JSONのみ（版は stderr） |
+| `compute_score_file(dir, run_config, ...)` | 全パーツ計算+expression 評価 → `{"Score": ..., パーツ名: ...}`。`optimization.vthSkip` があり type ファイルが無いパーツは compute_dummy_part で計算し stderr に note を出す。**省略可能引数(dvtbudget_coef 以降)はキーワード専用**(compute_dummy_part・apply_dvtbudget の epoch_col も同様)。パーツ計算のエラーは**全パーツ分を集めてから必ず例外で落ちる**(「1つ直すと次のエラー」の往復を解消 — 2026-07-31。1件なら従来と同じ形・同じ型、複数なら「N score parts failed:」+1行1パーツ。失敗が1件でもあれば値は返さない=部分結果で実験が続くことはない)。各メッセージは失敗パーツを名指し(「score part '名前': …」) |
+| `main()` | argparse。`--config --data-dir --dvtbudget-coef --initial-temperature --custom-parts --generation-info --version`。stdout は結果JSONのみ（版は stderr） |
 
 ---
 
@@ -196,8 +202,8 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 **グループ定義**
 | 関数 | 内容 |
 |---|---|
-| `import_config_group_defs(sf, wlgroup)` | 設定jsoncの WLgroup を編集可能な定義として取り込み（既存があれば触らない） |
-| `parts_referencing_group_def` / `add_group_def` / `delete_group_def` | 参照パーツ検出 / 名前衝突チェック付き作成（**"WLgroup" は WL 軸の予約名** — 旧形式キーで表現できないため。0.7.0）/ 参照中は削除ガード |
+| `import_config_group_defs(sf, wlgroup, *, defin_logical, wlgroup_weight)` | 設定jsoncの WLgroup を編集可能な定義として取り込み（既存があれば触らない）。`WLgroupDefinLogical` は definedInLogical へ、`WLgroupWeight` は `weightSets["WLgroupWeight"]` へ同時に取り込む |
+| `parts_referencing_group_def` / `add_group_def` / `delete_group_def` | 参照パーツ検出 / 名前衝突チェック付き作成（**"WLgroup" は WL 軸の予約名** — WLgroup 系キーは WL への定義しか表現できないため。0.7.0）/ 参照中は削除ガード |
 | `axis_counts(geninfo)` | 世代情報json → {WL: numWLs, STR: numStrings} |
 | `data_axis_counts(catalogs)` | カタログの数値軸から本数を導出（max+1。本数は世代で固定・フローは全数測定のため正確。Measure/InBatchEpoch は除外） |
 | `validation_axis_counts(ctx)` | 本数チェックに使う軸本数: **データ由来が正**、自動検出された世代情報json はデータに無い軸の補完のみ（観測 > 宣言） |
@@ -214,9 +220,9 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `validate_score_file(data)` | エンジンの model_validate + 名前重複 + expression の参照チェック + 宙に浮いた constraint キー + ref 解決の再検証。**pydantic の位置表記をパーツ名に変換**（`_format_pydantic_error`） |
 | `validate_part(part)` | 単一パーツ用の包み |
 | `part_types_without_data(sf, ctx)` | データに測定ファイルの無い type を使うパーツの検出（0.6.0）。別実験の config を読むと起きる正当な状態なのでパーツは残し、一覧の ⚠（「データ無し」）と編集画面の警告に使う。custom は対象外・設定のみ編集モードでは常に空 |
-| `source_data_type(part_type)` | パーツの type → 実際に読む測定データの type（dVtBudget → FBC。エンジン `cli._source_type` と同じ対応）。part_value_mismatches と app の `_catalog_for_part` が共用（2026-08-01 に一本化） |
-| `config_problem_messages(sf, ctx)` | **「設定の誤り」の全メッセージ**（構造の誤り=validate_score_file + データに無い値 + データ無し type。2026-08-01 の一本化 — ダミーは本番構造を模す前提なので、データに無い要素を使うのも設定の誤り）。パーツ単位はパーツ名前置・横断（名前重複・式の参照切れ等）はそのまま。サイドバーの件数と展開表示・テスト実行前ガードで共用 |
-| `part_value_mismatches(sf, ctx)` | filter/diff/選択リスト・相対化の分子/分母の値がデータの候補に無いパーツの検出（2026-08-01。設定として有効でも計算は必ず失敗する状態 — 読み込み直後から一覧の ⚠「データに無い値」・編集画面の警告・サイドバーの「設定の誤り」件数に使う）。カタログは `source_data_type` で引く。判定は候補が取れる軸の直接指定値のみ: グループ派生軸・候補不明の軸・選択セット参照(ref)・仮想ステップは対象外（Override 軸の候補が実データ由来になった 2026-08-01 以降、「評価側の測定が無いデータ」の相対化もここで検出できる）。サイドバーの「検証 OK/NG」（設定の構造検証）とは別勘定 |
+| `source_data_type(part_type)` | パーツの type → 実際に読む測定データの type（dVtBudget → FBC。エンジン `cli._source_type` と同じ対応）。part_value_mismatches と app の `_catalog_for_part` が共用（2026-07-31 に一本化） |
+| `config_problem_messages(sf, ctx)` | **「設定の誤り」の全メッセージ**（構造の誤り=validate_score_file + データに無い値 + データ無し type。2026-07-31 の一本化 — ダミーは本番構造を模す前提なので、データに無い要素を使うのも設定の誤り）。パーツ単位はパーツ名前置・横断（名前重複・式の参照切れ等）はそのまま。サイドバーの件数と展開表示・テスト実行前ガードで共用 |
+| `part_value_mismatches(sf, ctx)` | filter/diff/選択リスト・相対化の分子/分母の値がデータの候補に無いパーツの検出（2026-07-31。設定として有効でも計算は必ず失敗する状態 — 読み込み直後から一覧の ⚠「データに無い値」・編集画面の警告・サイドバーの「設定の誤り」件数に使う）。カタログは `source_data_type` で引く。判定は候補が取れる軸の直接指定値のみ: グループ派生軸・候補不明の軸・選択セット参照(ref)・仮想ステップは対象外（Override 軸の候補が実データ由来になった 2026-07-31 以降、「評価側の測定が無いデータ」の相対化もここで検出できる）。サイドバーの「検証 OK/NG」（設定の構造検証）とは別勘定 |
 
 **コンテキスト（画面1）**
 | 関数 | 内容 |
@@ -224,7 +230,7 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `_resolve_optional_file(explicit, discover, label)` | 「明示指定優先・無ければ自動検出・**候補複数はエラー**」の共通ルール |
 | `build_context(data_dir, config, coef, geninfo, custom)` | 画面1の読み込み本体(同梱ファイルごとの解決・読み込みは `_resolve_*`/`_config_context_entries`/`_parse_geninfo` へ分割済み — 2026-07-31、エラー文言不変)。空パス拒否、type/カタログ導出（Measure→dataName 対応の `measure_labels` 含む）、同梱ファイル解決、custom関数一覧化。ctx dict を返す。世代情報json の UI 入力欄は廃止 — UI は geninfo に None を渡し、`{Generation}.json` がディレクトリ内にあれば自動検出して診断にだけ使う |
 | `parse_chip_counts(text, n_boards)` | 「Board ごとの Chip 数」入力のパース（数1つ=全Board共通、カンマ区切り=Board別） |
-| `load_config_only(text)` / `config_only_context(sf)` / `is_run_config_text(text)` | **設定だけ編集モード**: 設定 jsonc（score.jsonc / RunConfig 形式）だけから (score_file, context) を作る。カタログは設定が言及する軸名（値候補無し=自由入力）、measure_labels は labels 注記から回収（`_config_measure_labels`）。RunConfig なら旧 WLgroup も定義として取り込む。テスト計算以外の全機能がデータ無しで動く。is_run_config_text は①の設定を build_context の config として渡せる形式かの判定 |
+| `score_file_from_config_text(text)` / `load_config_only(text)` / `config_only_context(sf, generation)` / `is_run_config_text(text)` | **設定だけ編集モード**: 設定 jsonc（score.jsonc / RunConfig 形式）だけから (score_file, context) を作る。`score_file_from_config_text` が解釈部分（RunConfig なら WLgroup 系キーも定義として取り込む）で、データありの読み込み経路は context を作らずこれだけを使う（2026-08-03 分離）。RunConfig の Generation は config_only_context へ渡り画面5の既定値になる。カタログは設定が言及する軸名（値候補無し=自由入力）、measure_labels は labels 注記から回収（`_config_measure_labels`）。テスト計算以外の全機能がデータ無しで動く。is_run_config_text は①の設定を build_context の config として渡せる形式かの判定 |
 | `expand_dummy_bundle(dir, chip_counts)` | ダミー一式を一時ディレクトリへ Board/Chip 展開（scorelib_param.dummy を呼ぶ。展開先は通常の build_context がそのまま読む） |
 | `extract_bundle_zip(bytes)` | 一式zipを一時ディレクトリへ展開（zip-slip対策、単一トップフォルダ降下）。ダミー一式の zip アップロードにも使う |
 | `save_upload(filename, data)` | アップロード1ファイルを一時ディレクトリへ保存してパスを返す（パス欄への自動反映用。ファイル名のパス成分は捨てる） |
@@ -240,9 +246,9 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 **下書き・エクスポート・テスト計算**
 | 関数 | 内容 |
 |---|---|
-| `save_draft` / `load_draft` / `draft_path_for(user)` | 下書きは**ユーザ名ごと**に `DRAFTS_DIR`（`~/.scorelib_drafts/<名前>.jsonc`。名前はファイル名安全に正規化 — 共用サーバで混ざらないための分離）。score_file+画面1の入力（context_inputs）を保存。旧形式も読める |
+| `save_draft` / `load_draft` / `draft_path_for(user)` | 下書きは**ユーザ名ごと**に `DRAFTS_DIR`（`~/.scorelib_drafts/<名前>.jsonc`。名前はファイル名安全に正規化 — 共用サーバで混ざらないための分離）。score_file+画面1の入力（context_inputs）を保存。パスは常に `draft_path_for` で解決して渡す |
 | `export_part(sf, i)` | パーツ単体を自己完結jsoncに（参照する選択セット・グループ定義を同梱） |
-| `score_file_to_jsonc` / `import_score_file` | 全体のエクスポート/インポート（RunConfig形式も受理。エラーはパーツ名付き）。**エクスポートは WL 軸の "WLgroup" 定義と WLgroupWeight を旧形式キーだけに書き出す**（0.7.0 — 合成後 config で実験スクリプトが読む場所がそのまま編集後になり、定義の在り処が常に1つ。読み戻しは ScoreFile 側の吸収と対称） |
+| `score_file_to_jsonc` / `import_score_file` | 全体のエクスポート/インポート（RunConfig形式も受理。エラーはパーツ名付き）。**エクスポートは WL 軸の "WLgroup" 定義と WLgroupWeight を WLgroup 系キーだけに書き出す**（0.7.0 — 合成後 config で実験スクリプトが読む場所がそのまま編集後になり、定義の在り処が常に1つ。読み戻しは ScoreFile 側の吸収と対称） |
 | `run_test_compute(sf, dir, inputs=None)` | ScoreFile dict → RunConfig を組み立てて `compute_score_file` を直接呼ぶ。任意入力5つ(generation / wlgroup / coef_path / custom_path / geninfo_path)は frozen dataclass **`TestComputeInputs`** に束ねた(2026-07-31) |
 
 ### `ui/widgets.py` — 再利用ウィジェット
@@ -252,27 +258,26 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 | `_SORTABLE_STYLE` | D&D項目のCSS（半透明グレー・左揃え。デフォルトの赤・中央揃えの上書き） |
 | `parse_scalar(text)` | 自由入力 → bool/int/float/str |
 | `measure_format(mlabels)` / `_axis_format` | Measure 値の複合表示「dataName (Measure N)」（名無しは「Measure N」）。選択・保存は常に番号 |
-| `value_widget` / `dict_selection_row` / `selection_widget` / `selection_list_widget` | 値1個 / 複合軸1行 / どちらか自動 / 可変行リスト（単一軸+候補ありは multiselect）。Measure 軸は複合表示。**原則「描画は設定を変えない」**（2026-08-01・設計書追記参照）: 候補に無い既存値は multiselect では警告付きで（`_options_with_missing`）、プルダウンでは「(データに無し)」等の**印つき選択肢**として残す — 描画だけで index=0 の値へ書き換わる事故（実機で相対化の分子が化けた）の再発防止。セット/重みセット参照・by 軸・事前集計の軸も同じ定石 |
-| `per_value_dict_editor` | 「値ごとの数値」辞書（集計時重み spec.weight / 変換の by 別定数 spec.value / グループ定義の {name}Weight）の共通編集欄（2026-08-01 に一本化）。既存辞書は候補外キーも印つきで保持、触っていない新規キー（中立値のまま）は足さない。辞書がまだ無いとき（モード選択直後）だけ全候補を中立値で初期化（エンジンは全値カバーを要求するため） |
-| `agg_editor(entry, spec, ctx, key)` | 集計指示エディタ(画面側の文脈 — カタログ・セット名・by 候補・重みセット名・Measure ラベル — は frozen dataclass **`EditorContext`** で受ける。2026-07-31 に束ね直し、op 別の入力欄は `_unary_editor` / `_filter_editor` / `_diff_editor` / `_multi_op_editor` へ分割)。**opに応じた入力欄だけを出す**（value/values の混同がUI上起きない）。filter は候補のある単一軸で multiselect（複数=is_in、Measure 選択時は labels 注記も付与）。op変更時は古いフィールドを掃除。mean系の単一軸エントリには集計時重み欄（`_agg_weight_editor`: なし/重みセット/値ごと/定数。値ラベルは by_value_labels 優先=グループ派生軸対応）。仮想ステップの op は STEP_OPS: 定数演算は `_transform_editor`、単項op（abs/log — 0.6.0）は定数欄なし・log のみ floor 入力 |
-| `relative_editor(part, ctx, key)` | 相対化ブロックのエディタ(`EditorContext` 受け。ON/OFF・split行・mode行・分母事前集計をヘルパー分割 — 2026-07-31)。split軸は**任意の軸**から選択（旧 Override 限定は廃止）、分子/分母は候補プルダウン or 自由入力、Measure 分割時は labels 注記を自動付与。ON/OFF/split変更は state.py の整合関数を呼ぶ。分母事前集計は agg_editor をフル再利用 |
+| `value_widget` / `dict_selection_row` / `selection_widget` / `selection_list_widget` | 値1個 / 複合軸1行 / どちらか自動 / 可変行リスト（単一軸+候補ありは multiselect）。Measure 軸は複合表示。**原則「描画は設定を変えない」**（2026-07-31・設計書追記参照）: 候補に無い既存値は multiselect では警告付きで（`_options_with_missing`）、プルダウンでは「(データに無し)」等の**印つき選択肢**として残す — 描画だけで index=0 の値へ書き換わる事故（実機で相対化の分子が化けた）の再発防止。セット/重みセット参照・by 軸・事前集計の軸も同じ定石 |
+| `per_value_dict_editor` | 「値ごとの数値」辞書（集計時重み spec.weight / 変換の by 別定数 spec.value / グループ定義の {name}Weight）の共通編集欄（2026-07-31 に一本化）。既存辞書は候補外キーも印つきで保持、触っていない新規キー（中立値のまま）は足さない。辞書がまだ無いとき（モード選択直後）だけ全候補を中立値で初期化（エンジンは全値カバーを要求するため） |
+| `agg_editor(entry, spec, ctx, key)` | 集計指示エディタ(画面側の文脈 — カタログ・セット名・by 候補・重みセット名・Measure ラベル — は frozen dataclass **`EditorContext`** で受ける。2026-07-31 に束ね直し、op 別の入力欄は `_unary_editor` / `_filter_editor` / `_diff_editor` / `_multi_op_editor` へ分割)。**opに応じた入力欄だけを出す**（value/values の混同がUI上起きない）。filter は候補のある単一軸で multiselect（複数=is_in、Measure 選択時は labels 注記も付与）。op変更時は古いフィールドを掃除。mean系の単一軸エントリには集計時重み欄（`_agg_weight_editor`: なし/重みセット/値ごと/定数。値ラベルは by_value_labels 優先=グループ派生軸対応）。仮想ステップの op は STEP_OPS: 定数演算は `_transform_editor`、単項op（abs/log — 0.6.0）は定数欄なし・log のみ floor 入力。op=expr は式の text_input |
+| `relative_editor(part, ctx, key)` | 相対化ブロックのエディタ(`EditorContext` 受け。ON/OFF・split行・mode行・分母事前集計をヘルパー分割 — 2026-07-31)。split軸は**任意の軸**から選択（旧 Override 限定は廃止）、分子/分母は候補プルダウン or 自由入力、Measure 分割時は labels 注記を自動付与。ON/OFF/split変更は state.py の整合関数を呼ぶ。分母事前集計は agg_editor をフル再利用。「+ 事前集計を追加」はカタログが空のパーツ（設定のみ編集で軸を持たない等）では無効化（押すと min() が空列で落ちた — 2026-07-31） |
 
 ### `ui/app.py` — 5画面本体（ウィジェット配置と session_state だけ）
 | 区分 | 内容 |
 |---|---|
 | `_init` | アプリデータの session_state キー初期化 |
-| `_wk(name)` | **undo 世代つきウィジェットキー**（2026-08-01）。設定から表示を作る全ウィジェットが使う。「元に戻す」のたびに世代が上がりキーが変わって部品ごと作り直される — キー固定だとブラウザ側が古い表示を持ち続け、復元した設定と食い違うため。世代0では従来表記（テスト互換） |
-| `_track_history` / `_undo` | undo 履歴（1操作=1エントリ、スナップショット+**編集していた画面と選択パーツ**）。`_undo` は score_file を復元し、世代を上げて全エディタを再マウントし、記録した場所へ跳ぶ（screen は radio 描画済みのため screen_pending で次run冒頭に反映）。旧方式の「状態の一括削除」は廃止（2026-08-01 — 設計書その4） |
-| `_snapshot` / `_track_history` / `_undo` | JSON文字列スナップショットによる undo（20件）。undo 時はウィジェット状態も破棄 |
-| `_offer_draft_restore` / `_autosave` / `_sidebar_user` / `_header_user` | 下書きの復元提案と自動保存を**ユーザ名ごと**に行う（draft_path_for）。ユーザ名は認証ヘッダ（既定 X-Remote-User、SCORELIB_UI_USER_HEADER で変更）があればそれ、無ければサイドバーの名前入力。未入力の間は保存・復元とも停止 |
+| `_wk(name)` | **undo 世代つきウィジェットキー**（2026-07-31）。設定から表示を作る全ウィジェットが使う。「元に戻す」のたびに世代が上がりキーが変わって部品ごと作り直される — キー固定だとブラウザ側が古い表示を持ち続け、復元した設定と食い違うため。世代0では従来表記（テスト互換） |
+| `_track_history` / `_undo` | undo 履歴（1操作=1エントリ、スナップショット+**編集していた画面と選択パーツ**）。`_undo` は score_file を復元し、世代を上げて全エディタを再マウントし、記録した場所へ跳ぶ（screen は radio 描画済みのため screen_pending で次run冒頭に反映）。旧方式の「状態の一括削除」は廃止（2026-07-31 — 設計書その4） |
+| `_offer_draft_restore` / `_autosave` / `_sidebar_user` / `_header_user` | 下書きの復元提案と自動保存を**ユーザ名ごと**に行う（draft_path_for）。ユーザ名は認証ヘッダ（既定 X-Remote-User、SCORELIB_UI_USER_HEADER で変更）があればそれ、無ければサイドバーの名前入力。未入力の間は保存・復元とも停止。自動保存の対象は score_parts / selectionSets / groupDefs / weightSets / constraintThreshold / expression のいずれか非空（2026-07-31 に groupDefs 等を追加 — 画面3・4だけの編集が下書きに残らなかった） |
 | `_merged_catalog` / `_catalog_for_part` / `_with_group_axes` | カタログの合成（パーツtype用+グループ派生軸の追加） |
-| `screen_data` / `_handle_load` / `_DEV_MODE` | 画面1。**「① スコア設定（設定jsoncアップロード = 編集の出発点。両形式対応・編集状態を置き換え）+ ② データ（実測一式zip / ダミー一式+Board・Chip数 / なし の radio）」の2段 + 読み込みボタン1つ**。係数・custom の追加は「係数・自作関数を追加する」expander（パスモードではパス欄 — 実測・ダミー共通の2欄）。**一般ユーザの画面はアップロードのみ**で、パス指定は開発者モード（`-- --dev` / `SCORELIB_UI_DEV=1`）のトグルでのみ現れ、オン時は各アップローダがパス欄に置き換わる（併記しない）。優先順位: 個別アップロード > ①の設定（RunConfig 形式なら config_path としても使用 — `is_run_config_text`）> zip 内・パス指定。②なし+①あり = `load_config_only`（設定のみ編集）。認識結果（データ由来の軸本数と世代情報json の食い違い診断警告を含む）は共通で下部に表示 |
+| `screen_data` / `_handle_load` / `_DEV_MODE` | 画面1。**「① スコア設定（設定jsoncアップロード = 編集の出発点。両形式対応・編集状態を置き換え）+ ② データ（実測一式zip / ダミー一式+Board・Chip数 / なし の radio）」の2段 + 読み込みボタン1つ**。係数・custom の追加は「係数・自作関数を追加する」expander（パスモードではパス欄 — 実測・ダミー共通の2欄）。**一般ユーザの画面はアップロードのみ**で、パス指定は開発者モード（`-- --dev` / `SCORELIB_UI_DEV=1`）のトグルでのみ現れ、オン時は各アップローダがパス欄に置き換わる（併記しない）。優先順位: 個別アップロード > ①の設定（RunConfig 形式なら config_path としても使用 — `is_run_config_text`）> zip 内・パス指定。②なし+①あり = `load_config_only`（設定のみ編集）。認識結果（データ由来の軸本数と世代情報json の食い違い診断警告を含む）は共通で下部に表示（設定のみ編集では簡略表示 — パーツ数と type の caption のみ） |
 | `_order_entry_label` / `_order_editor` | orderの1行ラベル / 常時ドラッグ可能リスト+「編集するエントリ」プルダウン+常時表示エディタ（削除ボタン内蔵）。フォールバックは ✎/↑↓/✕ 行 |
 | `_add_entry_controls` | 軸追加・複合軸束ね・`__offset__`・仮想ステップ配置 |
 | `_custom_part_editor` | customパーツ用（関数プルダウン+params行エディタ） |
-| `screen_parts` | 画面2。**パーツ選択は _uid を ss["part_sel"]（アプリ管理の状態）で保持**。プルダウン本体はラベルの hash 入りキー（`part_sel_<hash>`）で、**ラベルが変わるとキーごと再マウント**（改名しても欄が古い名前のまま、という streamlit#11268 の回避 — sortable_list と同方式。2026-08-01）。選び直しは selectbox 直後の st.rerun() で反映するためマーカーは遅れない。追加/複製は part_sel_pending で次runに予約。検証NGは ⚠ |
+| `screen_parts` | 画面2。**パーツ選択は _uid を ss["part_sel"]（アプリ管理の状態）で保持**。プルダウン本体はラベルの hash 入りキー（`part_sel_<hash>`）で、**ラベルが変わるとキーごと再マウント**（改名しても欄が古い名前のまま、という streamlit#11268 の回避 — sortable_list と同方式。2026-07-31）。選び直しは selectbox 直後の st.rerun() で反映するためマーカーは遅れない。追加/複製は part_sel_pending で次runに予約。検証NGは ⚠。「雛形を再生成」はカタログ（custom は関数一覧）の無い type では無効化 — 他 type のカタログで代替すると誤った雛形が黙ってできるため（押すと KeyError だった — 2026-07-31） |
 | `screen_sets` / `_selection_sets_section` / `_group_defs_section` | 画面3。選択セットとグループ定義の管理 |
-| `screen_compose` | 画面4。expression（パーツ名クリック挿入）+ constraintThreshold 行エディタ |
+| `screen_compose` | 画面4。expression（パーツ名クリック挿入）+ constraintThreshold 行エディタ。末尾で validate_score_file の結果を表示（0件なら「問題なし」） |
 | `screen_test_export` | 画面5。テスト計算（ダミー展開中は「数値は無意味」警告、設定のみ編集中はディレクトリ入力の案内・未入力は明確なエラー）/ score.jsonc・パーツ単体エクスポート / インポート |
 | `main` | サイドバー（undo・検証件数・エンジン版）→ 復元プロンプト → 画面 → **変更検知したら即 rerun**（全画面共通。画面ごとの実装忘れを構造的に防ぐ）→ 履歴・自動保存 |
 

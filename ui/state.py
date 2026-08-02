@@ -25,9 +25,8 @@ if TYPE_CHECKING:
 from scorelib_param import custom as scorelib_custom
 from scorelib_param import introspect, io_jsonc, jsonc
 from scorelib_param.expression import evaluate_expression
-from scorelib_param.models import COMBINED_SEP, TRANSFORM_OPS, ScoreFile
+from scorelib_param.models import COMBINED_SEP, TRANSFORM_OPS, RunConfig, ScoreFile
 
-DRAFT_PATH = Path.home() / ".scorelib_draft.jsonc"  # 旧: 単一ユーザ時代の下書き(定数は互換のため残す)
 DRAFTS_DIR = Path.home() / ".scorelib_drafts"  # ユーザ名ごとの下書き置き場(共用サーバ対応)
 
 
@@ -583,7 +582,7 @@ def add_group_def(score_file: dict[str, Any], name: str, axis: str, axis_names: 
         msg = f"'{name}' は軸名と衝突しています(別の名前にしてください)"
         raise ValueError(msg)
     if name == "WLgroup" and axis != "WL":
-        # "WLgroup" は設定 jsonc の旧形式キー(optimization.WLgroup = WL への
+        # "WLgroup" は実験スクリプト形式のキー(optimization.WLgroup = WL への
         # 定義)として書き出されるため、WL 以外の軸には使えない
         msg = "'WLgroup' は WL 軸の定義の予約名です(別の名前にしてください)"
         raise ValueError(msg)
@@ -798,7 +797,7 @@ def config_problem_messages(score_file: dict[str, Any], ctx: dict[str, Any] | No
 
     サイドバーの件数と展開表示・テスト実行前のガードで共用する。ダミー一式は
     本番データの構造を模す前提なので、データに無い値・無い type を使うのも
-    設定の誤りとして一本化して数える(2026-08-01 ユーザー合意 — 種類の
+    設定の誤りとして一本化して数える(2026-07-31 ユーザー合意 — 種類の
     書き分けはパーツ一覧の ⚠ ラベルと各メッセージが担う)。
 
     Returns:
@@ -873,7 +872,7 @@ def part_value_mismatches(score_file: dict[str, Any], ctx: dict[str, Any] | None
                 continue
             value = spec.get("value")
             values = value if isinstance(value, list) else [value]
-            axes = entry.split("&")
+            axes = entry.split(COMBINED_SEP)
             for v in values:
                 # 複合軸の行は {軸: 値} 辞書、単一軸はスカラー
                 pairs = v.items() if isinstance(v, dict) else [(axes[0], v)]
@@ -1105,7 +1104,7 @@ def build_context(
     ValueError を送出する(メッセージは従来どおり)。
 
     Returns:
-        data_dir / types / part_types / catalogs / measure_labels、各同梱
+        data_dir / part_types / catalogs / measure_labels、各同梱
         ファイルのパスと入手経路、WLgroup 系、existing_score_file、
         custom_functions 等を持つ context dict。
 
@@ -1123,7 +1122,6 @@ def build_context(
 
     ctx: dict[str, Any] = {
         "data_dir": str(d),
-        "types": types,
         "part_types": part_types,
         "catalogs": {t: introspect.axis_catalog(d, t) for t in part_types},
         # Measure 番号 → dataName(UI の複合表示「dataName (Measure N)」と labels 注記用)
@@ -1578,16 +1576,16 @@ def score_file_to_jsonc(score_file: dict[str, Any]) -> str:
     """ScoreFile dict を検証してエクスポート用の jsonc テキストにする。
 
     Returns:
-        WLgroup 系を旧形式キーへ移した、インデント2・末尾改行つきの
-        jsonc テキスト。
+        WLgroup 系を実験スクリプト形式のキーへ移した、インデント2・
+        末尾改行つきの jsonc テキスト。
 
     """
     cleaned = ScoreFile.model_validate(score_file).model_dump(exclude_none=True)
-    # WL 軸の "WLgroup" 定義と "WLgroupWeight" は**旧形式キーだけ**に書き出す
-    # (0.7.0 — 定義の在り処を1つにする): 合成後 config では実験スクリプトが
-    # 読む optimization.WLgroup / WLgroupWeight がそのまま編集後の内容になり、
-    # 手編集時も「groupDefs とどちらが使われるか」の迷いが生じない。
-    # 読み戻しは ScoreFile._absorb_legacy_wlgroup が対称に行う
+    # WL 軸の "WLgroup" 定義と "WLgroupWeight" は **WLgroup 系キーだけ**に
+    # 書き出す(0.7.0 — 定義の在り処を1つにする): 合成後 config では実験
+    # スクリプトが読む optimization.WLgroup / WLgroupWeight がそのまま編集後の
+    # 内容になり、手編集時も「groupDefs とどちらが使われるか」の迷いが生じない。
+    # 読み戻しは ScoreFile._absorb_wlgroup_keys が対称に行う
     gd = (cleaned.get("groupDefs") or {}).get("WLgroup")
     if gd and gd.get("axis") == "WL":
         cleaned["groupDefs"].pop("WLgroup")
@@ -1606,32 +1604,28 @@ def score_file_to_jsonc(score_file: dict[str, Any]) -> str:
 
 def save_draft(
     score_file: dict[str, Any],
-    context_inputs: dict[str, str | None] | None = None,
-    path: Path | None = None,
+    context_inputs: dict[str, str | None] | None,
+    path: Path,
 ) -> None:
-    """下書きを保存する。
+    """下書きを保存する(path は draft_path_for(ユーザ名) で解決して渡す)。
 
     下書きには score file と一緒に画面1の入力(data_dir / config_path /
     coef_path / ...)も保存する。復元時にデータ読み込みまで再現でき、
     ユーザを画面1からやり直させずに済む。
     """
-    path = path or DRAFT_PATH  # テストが DRAFT_PATH を差し替えられるよう呼び出し時に解決
     payload = {"score_file": score_file, "context_inputs": context_inputs or {}}
     path.parent.mkdir(parents=True, exist_ok=True)  # DRAFTS_DIR は初回保存時に作られる
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def load_draft(path: Path | None = None) -> dict[str, Any] | None:
+def load_draft(path: Path) -> dict[str, Any] | None:
     """{"score_file": ..., "context_inputs": {...}} か None を返す。
-
-    context_inputs 導入前の旧形式(素の ScoreFile dict)も受け付ける。
 
     Returns:
         {"score_file": ..., "context_inputs": {...}} の dict。下書きが
         存在しない・読めない・形式が不正な場合は None。
 
     """
-    path = path or DRAFT_PATH
     if not path.exists():
         return None
     try:
@@ -1642,8 +1636,6 @@ def load_draft(path: Path | None = None) -> dict[str, Any] | None:
         return None
     if isinstance(data.get("score_file"), dict) and "score_parts" in data["score_file"]:
         return {"score_file": data["score_file"], "context_inputs": data.get("context_inputs") or {}}
-    if "score_parts" in data:  # 旧形式
-        return {"score_file": data, "context_inputs": {}}
     return None
 
 
@@ -1848,7 +1840,6 @@ def config_only_context(score_file: dict[str, Any], generation: str | None = Non
     return {
         "config_only": True,
         "data_dir": None,
-        "types": part_types,
         "part_types": part_types,
         "catalogs": catalogs,
         "measure_labels": mlabels,
@@ -1871,20 +1862,17 @@ def config_only_context(score_file: dict[str, Any], generation: str | None = Non
     }
 
 
-def load_config_only(text: str) -> tuple:
-    """設定 jsonc(score.jsonc または RunConfig 形式)だけから編集を開始する。
+def score_file_from_config_text(text: str) -> tuple[dict[str, Any], str | None]:
+    """設定 jsonc(score.jsonc または RunConfig 形式)を編集用 score_file にする。
 
-    (score_file, config_only_context) を返す。RunConfig 形式なら旧来の
-    optimization.WLgroup も編集可能なグループ定義として取り込む
-    (データ読み込み経路の import_config_group_defs と同じ扱い)。
+    RunConfig 形式なら optimization.WLgroup(WLgroup 系キー)も編集可能な
+    グループ定義として取り込む(データ読み込み経路の
+    import_config_group_defs と同じ扱い)。
 
     Returns:
-        (編集用の score_file dict, config_only_context の context dict)
-        のタプル。
+        (編集用の score_file dict, 世代名 または None) のタプル。
 
     """
-    from scorelib_param.models import RunConfig
-
     sf = import_score_file(text)
     generation = None
     raw = jsonc.loads(text)
@@ -1897,6 +1885,18 @@ def load_config_only(text: str) -> tuple:
             defin_logical=rc.optimization.WLgroupDefinLogical,
             wlgroup_weight=rc.optimization.WLgroupWeight,
         )
+    return sf, generation
+
+
+def load_config_only(text: str) -> tuple:
+    """設定 jsonc(score.jsonc または RunConfig 形式)だけから編集を開始する。
+
+    Returns:
+        (編集用の score_file dict, config_only_context の context dict)
+        のタプル。
+
+    """
+    sf, generation = score_file_from_config_text(text)
     return sf, config_only_context(sf, generation)
 
 

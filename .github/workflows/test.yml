@@ -24,7 +24,7 @@ jobs:
         # ままにしておくため(docs/dev_workflow.md「ruff.toml」参照)
         # 素の(--preview 無し)実行も検査する: 抑止コメントがルール名表記
         # (# ruff: ignore[rule-name])で書かれると preview では効くが素の実行で
-        # 外れるため、「両モードで警告ゼロ」を機械的に保つ(2026-08-01)
+        # 外れるため、「両モードで警告ゼロ」を機械的に保つ(2026-07-31)
         run: |
           python -m ruff check . --preview
           python -m ruff check .

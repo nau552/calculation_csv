@@ -113,7 +113,7 @@ def _wk(name: str) -> str:
 
     「元に戻す」のたびに世代番号が上がってキーが変わり、部品ごと作り直される —
     キーが同じままだとブラウザ側が古い表示を持ち続け、復元した設定と画面が
-    食い違うため(streamlit の仕様。設計書 2026-08-01 その4)。表示は常に
+    食い違うため(streamlit の仕様。設計書 2026-07-31 その4)。表示は常に
     score_file から再生成されるので、見た目と計算・エクスポートは一致する。
     世代0では従来表記のまま(キーを直指定する既存テストを壊さない)。
 
@@ -125,7 +125,7 @@ def _wk(name: str) -> str:
     return name if epoch == 0 else f"{name}@{epoch}"
 
 
-def _track_history() -> None:
+def _track_history(snap: str) -> None:
     """Undo 履歴を記録する(ユーザ操作1回につき1エントリ)。
 
     落ち着いた(途中で
@@ -133,9 +133,9 @@ def _track_history() -> None:
     rerun された実行はここに到達しないため、中間状態は積まれない。
     エントリには「どの画面で・どのパーツを編集していたか」も記録する —
     元に戻したとき、その場所へ跳んで取り消しが目の前で見えるように。
+    `snap` は main が変更検知に使った実行末尾のスナップショットの再利用。
     """
     ss = st.session_state
-    snap = _snapshot(ss.score_file)
     if ss.last_snapshot is None:
         ss.last_snapshot = snap
     elif snap != ss.last_snapshot:
@@ -229,7 +229,10 @@ def _autosave(user: str | None) -> None:
         return  # 名前未入力(共用サーバで誰の下書きか分からないため保存しない)
     ss = st.session_state
     sf = ss.score_file
-    if sf["score_parts"] or sf["selectionSets"] or sf["expression"]:
+    # グループ定義・重みセット・制約だけを編集したセッションも保存対象にする
+    # (score_parts 等だけの判定では画面3・4の編集が下書きに残らなかった)
+    saved_keys = ("score_parts", "selectionSets", "groupDefs", "weightSets", "constraintThreshold", "expression")
+    if any(sf.get(k) for k in saved_keys):
         ctx = ss.context or {}
         context_inputs = {
             "data_dir": ctx.get("data_dir"),
@@ -449,9 +452,11 @@ def _finish_data_load(
         found, dummy_source = _resolve_dummy_data(inputs)
 
     # ① の設定が RunConfig 形式なら config としても使う(zip 内の設定より優先)
+    # (この経路の context は直後の build_context が作るため、設定テキストの
+    # 解釈だけを行う)
     sf_new = None
     if start_text is not None:
-        sf_new, _ = state.load_config_only(start_text)
+        sf_new, _ = state.score_file_from_config_text(start_text)
         if state.is_run_config_text(start_text):
             found["config_path"] = start_path
     # 係数・自作関数の追加アップロードは zip 内・パス指定より優先
@@ -730,9 +735,10 @@ def _existing_score_offer(ss: SessionStateProxy, ctx: dict[str, Any]) -> None:
     if ctx["existing_score_file"] and not ss.score_file["score_parts"]:
         st.divider()
         if st.button("設定jsonc内の既存スコア設定を読み込んで編集を始める"):
+            # existing_score_file は to_score_file() で WLgroup 系キーを
+            # groupDefs / weightSets に統合済み — ここで取り込み直す必要はない
             ss.score_file = ctx["existing_score_file"]
             state.ensure_uids(ss.score_file)
-            state.import_config_group_defs(ss.score_file, ctx["wlgroup"])
             st.rerun()
 
 
@@ -1043,12 +1049,14 @@ def _sync_part_selection(ss: SessionStateProxy, sf: dict) -> list[str]:
     return uids
 
 
-def _part_list_overview(sf: dict, ctx: dict[str, Any], sel_uid: str | None) -> set:
+def _part_list_overview(sf: dict, ctx: dict[str, Any], sel_uid: str | None) -> tuple[set, dict[str, list[str]]]:
     """パーツ一覧(D&D 並べ替えリスト or 表)と状態マーカーを描画する。
 
     Returns:
-        ⚠ 表示対象(設定エラー・データ無し type・データに無い値)のパーツ
-        _uid の集合。
+        (⚠ 表示対象(設定エラー・データ無し type・データに無い値)のパーツ
+        _uid の集合, part_value_mismatches の {_uid: メッセージ} マップ)。
+        マップは選択中パーツの警告表示(_part_body_editor)でそのまま使い、
+        同じ全パーツ照合を1 rerun 中に繰り返さない。
 
     """
     rows = state.part_summary_rows(sf)
@@ -1085,7 +1093,7 @@ def _part_list_overview(sf: dict, ctx: dict[str, Any], sel_uid: str | None) -> s
                 st.rerun()
     if rows and not parts_dnd:
         st.dataframe(rows, use_container_width=True, hide_index=True)
-    return invalid
+    return invalid, mismatch
 
 
 def _import_parts(sf: dict, text: str) -> None:
@@ -1169,8 +1177,17 @@ def _part_header_editor(sf: dict, ctx: dict[str, Any], idx: int) -> None:
             st.toast(notice)
         if new_type != "custom":
             st.warning("type を変更しました。軸構成が異なる type の場合は雛形の再生成を推奨します")
+    # データに無い type(別実験の config 由来)はカタログが無く雛形を作れない。
+    # 他 type のカタログで作ると軸構成の違う誤った雛形が黙ってできるため、
+    # 代替せずボタンごと無効化する(custom も関数一覧が無ければ同様)
+    can_regen = (
+        bool(ctx.get("custom_functions")) if part["type"] == "custom" else part.get("type") in ctx.get("catalogs", {})
+    )
     if tregen.button(
-        "雛形を再生成", key=f"{uid}_regen", help="現在の type に合わせてパーツを作り直します(編集内容は失われます)"
+        "雛形を再生成",
+        key=f"{uid}_regen",
+        disabled=not can_regen,
+        help="現在の type に合わせてパーツを作り直します(編集内容は失われます)",
     ):
         if part["type"] == "custom":
             fresh = state.custom_part_skeleton(part["name"], ctx["custom_functions"])
@@ -1181,7 +1198,7 @@ def _part_header_editor(sf: dict, ctx: dict[str, Any], idx: int) -> None:
         st.rerun()
 
 
-def _part_body_editor(part: dict, ctx: dict[str, Any], sf: dict, uid: str) -> None:
+def _part_body_editor(part: dict, ctx: dict[str, Any], sf: dict, uid: str, mismatches: list[str]) -> None:
     """選択中パーツの本体エディタ(custom or 集計エディタ群)と問題の表示を描画する。"""
     no_data = part.get("type") != "custom" and part.get("type") not in ctx.get("catalogs", {})
     if no_data:
@@ -1189,7 +1206,6 @@ def _part_body_editor(part: dict, ctx: dict[str, Any], sf: dict, uid: str) -> No
             f"type '{part.get('type')}' の測定データがありません — このパーツは"
             "テスト計算できません(編集・保存は可能。不要なら削除してください)"
         )
-    mismatches = state.part_value_mismatches({"score_parts": [part]}, ctx).get(uid, [])
     for w in mismatches:
         st.warning(w)
     if part.get("type") == "custom":
@@ -1227,7 +1243,7 @@ def screen_parts() -> None:
     state.ensure_uids(sf)
 
     uids = _sync_part_selection(ss, sf)
-    invalid = _part_list_overview(sf, ctx, ss.get("part_sel"))
+    invalid, mismatch = _part_list_overview(sf, ctx, ss.get("part_sel"))
     _part_add_controls(ss, sf, ctx)
 
     if not sf["score_parts"]:
@@ -1259,7 +1275,7 @@ def screen_parts() -> None:
     _part_row_actions(ss, sf, idx)
     _part_header_editor(sf, ctx, idx)
     st.divider()
-    _part_body_editor(part, ctx, sf, uid)
+    _part_body_editor(part, ctx, sf, uid, mismatch.get(uid, []))
 
 
 # ---------------------------------------- 画面3: 選択セット・グループ定義
@@ -1813,10 +1829,11 @@ def main() -> None:
         screen_compose()
     else:
         screen_test_export()
-    if _snapshot(st.session_state.score_file) != before:
+    after = _snapshot(st.session_state.score_file)
+    if after != before:
         st.rerun()
 
-    _track_history()
+    _track_history(after)
     _autosave(user)
 
 

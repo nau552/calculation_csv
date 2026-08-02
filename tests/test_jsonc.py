@@ -29,16 +29,3 @@ def test_load_sample_run_config(fixtures_dir: Path) -> None:
     assert part.type == "FBC"
     assert part.relative is not None
     assert part.relative.split_axis == "Read_Override"
-
-
-def test_score_file_roundtrip(fixtures_dir: Path, tmp_path: Path) -> None:
-    """スコアファイルの保存・再読み込みの往復を検証する。"""
-    from scorelib_param.io_jsonc import load_score_file, save_score_file
-
-    config = load_run_config(fixtures_dir / "config.jsonc")
-    score_file = config.to_score_file()
-
-    out = tmp_path / "score.jsonc"
-    save_score_file(score_file, out)
-    reloaded = load_score_file(out)
-    assert reloaded == score_file
