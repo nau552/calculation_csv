@@ -703,9 +703,7 @@ class ScoreFile(BaseModel):
 
 
 def _is_weight(w: object) -> bool:
-    return _is_number(w) or (
-        isinstance(w, dict) and bool(w) and all(_is_number(x) for x in w.values())
-    )
+    return _is_number(w) or (isinstance(w, dict) and bool(w) and all(_is_number(x) for x in w.values()))
 
 
 class VthSkipConfig(BaseModel):
