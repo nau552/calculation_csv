@@ -12,6 +12,21 @@
 開発の時系列記録は `docs/score_gui_progress.md`、設計判断は各設計書。
 リリース手順（README）の一部としてここに追記する。
 
+## ver.0.7.3 — 2026-08-03
+
+- **ダミー一式の展開が実機形式の initial_temperature.csv を壊す不具合を修正**
+  （2026-08-03。ユーザー報告: ダミー一式のテスト計算が「could not convert
+  string to float: 'Board'」で失敗）。展開（`dummy.expand_boards_chips`）が
+  ヘッダなし旧参照データ形式を決め打ちで読んでいたため、実機形式
+  （ヘッダあり `InBatchEpoch,Board,Temp`）の一式では温度列にヘッダ文字列
+  'Board' が混入していた。原因は 0.5.1 でダミー展開を新設した際、直前の
+  0.4.x で読む側（`load_board_temperatures`）だけに入れたヘッダ対応を
+  見落として同梱テストデータ（ヘッダなし）を手本にしたこと。修正として
+  形式判定を `dvtbudget.parse_initial_temperature` に一本化し、展開・
+  疑似ダミー化（`make_pseudo_dummy`）とも**元の形式を保ったまま** Board
+  セルだけ書き換えて複製する形に変更（温度ファイルが複数 Board を含む
+  ダミー一式は csv 群と同様にエラー）。config(jsonc) の語彙は不変
+
 ## ver.0.7.2 — 2026-08-03
 
 リリース前の品質整理。エンジンの数値結果・config(jsonc)の語彙の実質は 0.7.1

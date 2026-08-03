@@ -5,6 +5,7 @@ docs/spec_change_dataname_measure.md 9節・プラン4。
 """
 
 import math
+import shutil
 from pathlib import Path
 
 import polars as pl
@@ -12,6 +13,7 @@ import pytest
 
 from scorelib_param.cli import compute_score_part
 from scorelib_param.dummy import expand_boards_chips, make_pseudo_dummy
+from scorelib_param.dvtbudget import load_board_temperatures
 from scorelib_param.introspect import axis_catalog, detect_types
 from scorelib_param.models import ScorePart
 
@@ -25,6 +27,18 @@ def pseudo_dir(tmp_path: Path, data_dir_mini: Path) -> Path:
 
     """
     return make_pseudo_dummy(data_dir_mini, tmp_path / "pseudo")
+
+
+@pytest.fixture
+def pseudo_dir_headered(pseudo_dir: Path) -> Path:
+    """initial_temperature を実機形式(ヘッダあり InBatchEpoch,Board,Temp)に差し替えた疑似ダミー。
+
+    Returns:
+        差し替え後の pseudo_dir(同じパス)。
+
+    """
+    (pseudo_dir / "initial_temperature.csv").write_text("InBatchEpoch,Board,Temp\n0,0,25\n", encoding="utf-8")
+    return pseudo_dir
 
 
 def _relative_measure_part() -> ScorePart:
@@ -64,6 +78,19 @@ class TestMakePseudoDummy:
         temps = pl.read_csv(pseudo_dir / "initial_temperature.csv", has_header=False)
         assert temps.height == 1
 
+    @staticmethod
+    def test_initial_temperature_headered_format_preserved(data_dir_mini: Path, tmp_path: Path) -> None:
+        """実機形式(ヘッダあり)の温度ファイルがヘッダ・列構成を保ったまま削られることを検証する。"""
+        src = tmp_path / "src"
+        shutil.copytree(data_dir_mini, src)
+        (src / "initial_temperature.csv").write_text(
+            "InBatchEpoch,Board,Temp\n0,0,25\n0,1,30.8333\n", encoding="utf-8"
+        )
+        out = make_pseudo_dummy(src, tmp_path / "pseudo")
+        text = (out / "initial_temperature.csv").read_text(encoding="utf-8")
+        assert text == "InBatchEpoch,Board,Temp\n0,0,25\n"
+        assert load_board_temperatures(out / "initial_temperature.csv") == {0: 25.0}
+
 
 class TestExpandBoardsChips:
     """expand_boards_chips(ダミー一式の Board/Chip 複製展開)のテスト。"""
@@ -91,6 +118,26 @@ class TestExpandBoardsChips:
         temps = pl.read_csv(out / "initial_temperature.csv", has_header=False, new_columns=["Board", "Temperature"])
         assert temps["Board"].to_list() == [0, 1, 2]
         assert temps["Temperature"].n_unique() == 1
+
+    @staticmethod
+    def test_initial_temperature_headered_expanded_and_readable(pseudo_dir_headered: Path, tmp_path: Path) -> None:
+        """実機形式(ヘッダあり)の温度ファイルが形式を保って展開され、読み戻せることを検証する。
+
+        再現ケース(2026-08-03): 展開がヘッダなし旧形式を決め打ちで読んだ結果、
+        温度列にヘッダ文字列 'Board' が混入し、テスト計算が
+        「could not convert string to float: 'Board'」で落ちていた。
+        """
+        out = expand_boards_chips(pseudo_dir_headered, tmp_path / "out", [2, 2, 2])
+        text = (out / "initial_temperature.csv").read_text(encoding="utf-8")
+        assert text == "InBatchEpoch,Board,Temp\n0,0,25\n0,1,25\n0,2,25\n"
+        assert load_board_temperatures(out / "initial_temperature.csv") == {0: 25.0, 1: 25.0, 2: 25.0}
+
+    @staticmethod
+    def test_initial_temperature_multi_board_source_rejected(pseudo_dir: Path, tmp_path: Path) -> None:
+        """複数 Board を含む温度ファイルが csv 群と同様に拒否されることを検証する。"""
+        (pseudo_dir / "initial_temperature.csv").write_text("0,25\n1,30\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="single Board"):
+            expand_boards_chips(pseudo_dir, tmp_path / "out", [2, 2])
 
     @staticmethod
     def test_map_files_copied_verbatim(pseudo_dir: Path, tmp_path: Path) -> None:

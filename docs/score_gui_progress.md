@@ -640,3 +640,29 @@ v0.4.0 の機能群（集計時重み・変換ステップ拡張・Physical 記�
   検証の多重実行の統合はサイドバーと画面の境界をまたぐ分(config_problem_messages
   と画面2の validate ループの共有)は構造変更のリスクが利得を上回ると判断し
   見送り。_autosave の毎 run 書き込みも保存漏れリスクを避けて現状維持。
+
+## 2026-08-03: ダミー一式のテスト計算エラー(実機形式 initial_temperature)の修正
+
+- ユーザー報告「ダミーを読ませてテスト計算すると could not convert string to
+  float: 'Board'」。合成の実機形式ファイル(ヘッダあり InBatchEpoch,Board,Temp)
+  で機械的に再現し確定: 展開(dummy.expand_boards_chips)がヘッダなし旧形式を
+  決め打ちで読むため、温度列に実際は Board 列が割り当たりヘッダ文字列 'Board'
+  が温度として書き出されていた。
+- 見落としの経緯も調査(ユーザー要求): ヘッダ対応(e8ea457, 2026-07-21)は当時
+  唯一の読み手だった dvtbudget.load_board_temperatures だけに入り、1週間後の
+  ダミー展開新設(17337fd, 0.5.1)はヘッダなしの同梱テストデータ result_tmp_mini
+  を手本に書かれた。テストも make_pseudo_dummy(旧形式由来)経由のみで、
+  「実機形式 → 展開 → 読み戻し」の経路がどのテストにもなかった —
+  形式知識の2箇所重複+テストデータが旧形式、が構造要因。
+- 修正(ユーザー合意。「元がヘッダありならヘッダありで書き出すべき」の指摘で
+  ヘッダなしへの正規化案から変更): 形式判定を dvtbudget.parse_initial_temperature
+  に一本化し、expand_boards_chips / make_pseudo_dummy とも**元の形式を保った
+  まま** Board セルだけ書き換えて複製/削減。複数行は全行複製、温度ファイル
+  単独の複数 Board も csv 群と同じ single Board エラーに。UI 側は同関数を
+  呼ぶだけなので Board/Chip 数変更→再読み込みの経路もこの修正で直る
+  (読み込みごとに一時ディレクトリへ全ファイル再展開する設計は確認済み)。
+- テスト3本追加(展開後の全文一致+load 読み戻しの回帰・pseudo 側の形式保存・
+  複数 Board 温度ファイルの拒否)、計339件パス。ruff 2種+format+pyright クリーン
+  (pyright はローカルでは --pythonpath .venv/Scripts/python.exe 指定が必要)。
+- 版数判断: エンジンの不具合修正・config 語彙不変 → 最後の数字。同日
+  ユーザー指示でリリース確定(0.7.2 → 0.7.3、CHANGELOG 節も確定)。

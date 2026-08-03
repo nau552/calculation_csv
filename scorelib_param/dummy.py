@@ -10,7 +10,10 @@ docs/spec_change_dataname_measure.md 9節: 測定フローは Board/Chip を知�
 ファイルごとの扱い:
 - ヘッダに Board 列を持つ csv({type}.csv / parameterLabel_* / dataName_*):
   行を Board(* Chip 列があれば Chip)で複製
-- initial_temperature.csv(ヘッダ無しの Board,温度): Board ごとに1行へ複製
+- initial_temperature.csv: 実機形式(ヘッダあり InBatchEpoch,Board,Temp)・
+  旧参照データ形式(ヘッダなし Board,温度)の両方を受け付け(形式判定は
+  dvtbudget.parse_initial_temperature に一本化)、**元の形式のまま** Board
+  セルだけ書き換えて Board ごとに行を複製する
 - map_*.csv(ヘッダ無しの対応表)・その他のファイル(json 等): そのままコピー
 
 逆方向の make_pseudo_dummy は開発・検証用: 実データから Board/Chip を1つに
@@ -25,6 +28,8 @@ from typing import TYPE_CHECKING
 
 import polars as pl
 
+from .dvtbudget import parse_initial_temperature
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -37,8 +42,7 @@ def _read_header(path: Path) -> list[str]:
         return []
 
 
-def _check_single(df: pl.DataFrame, col: str, filename: str) -> None:
-    n = df[col].n_unique()
+def _check_single(n: int, col: str, filename: str) -> None:
     if n > 1:
         msg = (
             f"{filename}: expected a dummy bundle with a single {col} "
@@ -76,11 +80,17 @@ def expand_boards_chips(src_dir: str | Path, dest_dir: str | Path, chip_counts: 
 
     for f in sorted(p for p in src.iterdir() if p.is_file()):
         if f.name == "initial_temperature.csv":
-            temps = pl.read_csv(f, has_header=False, new_columns=["Board", "Temperature"])
-            # ダミーの温度1行を全 Board に配る(値はダミーのまま)
-            temp = temps["Temperature"][0]
-            out = pl.DataFrame({"Board": list(range(len(chip_counts))), "Temperature": [temp] * len(chip_counts)})
-            out.write_csv(dest / f.name, include_header=False)
+            header, rows, board_i, _ = parse_initial_temperature(f)
+            _check_single(len({r[board_i] for r in rows}), "Board", f.name)
+            # 元の形式(ヘッダ・列構成・値の表記)を保ったまま、Board セルだけ
+            # 書き換えて Board ごとに複製する(温度はダミーのまま)
+            replicated = [
+                [str(b) if i == board_i else cell for i, cell in enumerate(r)]
+                for b in range(len(chip_counts))
+                for r in rows
+            ]
+            lines = ([",".join(header)] if header is not None else []) + [",".join(r) for r in replicated]
+            (dest / f.name).write_text("\n".join(lines) + "\n", encoding="utf-8")
             continue
         if f.name.startswith("map_") or f.suffix != ".csv":
             shutil.copy(f, dest / f.name)
@@ -90,10 +100,10 @@ def expand_boards_chips(src_dir: str | Path, dest_dir: str | Path, chip_counts: 
             shutil.copy(f, dest / f.name)
             continue
         df = pl.read_csv(f)
-        _check_single(df, "Board", f.name)
+        _check_single(df["Board"].n_unique(), "Board", f.name)
         has_chip = "Chip" in cols
         if has_chip:
-            _check_single(df, "Chip", f.name)
+            _check_single(df["Chip"].n_unique(), "Chip", f.name)
         parts = []
         for b, n_chips in enumerate(chip_counts):
             board_lit = pl.lit(b).cast(df.schema["Board"]).alias("Board")
@@ -128,10 +138,16 @@ def make_pseudo_dummy(src_dir: str | Path, dest_dir: str | Path) -> Path:
 
     for f in sorted(p for p in src.iterdir() if p.is_file()):
         if f.name == "initial_temperature.csv":
-            temps = pl.read_csv(f, has_header=False, new_columns=["Board", "Temperature"])
-            pl.DataFrame({"Board": [0], "Temperature": [temps["Temperature"][0]]}).write_csv(
-                dest / f.name, include_header=False
-            )
+            header, rows, board_i, _ = parse_initial_temperature(f)
+            # 元の形式のまま、最小 Board の行だけ残して Board セルを 0 に書き換える
+            min_board = min(int(r[board_i]) for r in rows)
+            kept = [
+                ["0" if i == board_i else cell for i, cell in enumerate(r)]
+                for r in rows
+                if int(r[board_i]) == min_board
+            ]
+            lines = ([",".join(header)] if header is not None else []) + [",".join(r) for r in kept]
+            (dest / f.name).write_text("\n".join(lines) + "\n", encoding="utf-8")
             continue
         if f.name.startswith("map_") or f.suffix != ".csv":
             shutil.copy(f, dest / f.name)

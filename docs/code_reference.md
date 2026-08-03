@@ -106,8 +106,8 @@ ratio（`(分子+o)/(分母+o)`）または diff（`分子−分母`）を計算
 ### `scorelib_param/dummy.py` — ダミー一式の Board/Chip 展開（測定前設計）
 | 関数 | 内容 |
 |---|---|
-| `expand_boards_chips(src, dest, chip_counts)` | Board/Chip 1つのダミー一式を複製展開（`chip_counts[b]` = Board b の Chip 数。Board別可）。Board列を持つ csv は行複製、initial_temperature.csv（ヘッダ無し）は Board ごとに1行、map_*/json はコピー。元が複数 Board/Chip ならエラー |
-| `make_pseudo_dummy(src, dest)` | 逆方向: 正データを Board/Chip 1つ（0 に正規化）へ削る。ダミー納品前の開発・検証用（scripts/make_pseudo_dummy.py から呼ばれる） |
+| `expand_boards_chips(src, dest, chip_counts)` | Board/Chip 1つのダミー一式を複製展開（`chip_counts[b]` = Board b の Chip 数。Board別可）。Board列を持つ csv は行複製、initial_temperature.csv は**元の形式（実機のヘッダあり / 旧参照データのヘッダなし — 判定は dvtbudget.parse_initial_temperature）を保ったまま** Board セルだけ書き換えて Board ごとに行複製（2026-08-03 — 以前はヘッダなしを決め打ちで読み、ヘッダあり一式で温度列にヘッダ文字列が混入していた）、map_*/json はコピー。元が複数 Board/Chip ならエラー（温度ファイルも同様） |
+| `make_pseudo_dummy(src, dest)` | 逆方向: 正データを Board/Chip 1つ（0 に正規化）へ削る。initial_temperature.csv も元の形式のまま最小 Board の行だけ残す。ダミー納品前の開発・検証用（scripts/make_pseudo_dummy.py から呼ばれる） |
 
 設計: 展開は**行の複製だけ**を行い数値を作らない（mean 集計が展開前後で不変 —
 tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一式から設計を始める」の実体
@@ -118,7 +118,8 @@ tests/test_dummy.py がこの性質で検証）。UI 画面1の「ダミー一�
 ### `scorelib_param/dvtbudget.py` — dVtBudget変換
 | 関数 | 内容 |
 |---|---|
-| `load_board_temperatures(path)` | initial_temperature.csv → {Board: 温度} |
+| `parse_initial_temperature(path)` | initial_temperature.csv を形式判定つきで文字列の行列に読む → (ヘッダ行 or None, データ行, Board列番号, 温度列番号)。実機のヘッダあり（InBatchEpoch,Board,Temp — 列は名前で特定）と旧参照データのヘッダなし2列の両形式対応（1行目先頭セルが数値ならヘッダなし）。**形式判定の一本化点**: 値を読む load_board_temperatures と形式を保って複製する dummy.py の両方がここを通る（2026-08-03） |
+| `load_board_temperatures(path)` | initial_temperature.csv → {Board: 温度}（読みは parse_initial_temperature 経由。同一 Board に矛盾する温度があればエラー） |
 | `apply_dvtbudget(lf, col, generation, coef, temps)` | Board の実測温度に最も近い温度キーの係数 b を State ごとに引き、`-log10(値)/b*1000` を行単位で適用。Board/State 列が既に潰されていたらエラー。係数表に Generation が無ければ明示エラー、(Board, State) の照会に失敗した行は **NaN として伝播**させ最終 collapse で検出（2026-07-31 — 以前は null が後段の mean 等で黙って除外され「エラーなしで値がズレる」危険があった。相対化・diff の相手不在も同様に NaN 化） |
 
 ### `scorelib_param/custom.py` — 自作Python関数パーツ

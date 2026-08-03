@@ -25,57 +25,78 @@ if TYPE_CHECKING:
     from .models import DvtBudgetCoefFile
 
 
-def load_board_temperatures(initial_temperature_path: str | Path) -> dict[int, float]:
-    """initial_temperature.csv → {Board: 温度}。
+def parse_initial_temperature(path: str | Path) -> tuple[list[str] | None, list[list[str]], int, int]:
+    """initial_temperature.csv を形式判定つきで文字列の行列に読む。
 
     実機の形式はヘッダあり(InBatchEpoch, Board, Temp)。列は名前で拾うので
     列順や余分な列(InBatchEpoch等)は問わない。温度列名は Temp / Temperature
     のどちらでもよい。ヘッダなし2列(Board, 温度)の旧参照データ形式も
     受け付ける(1行目の先頭セルが数値ならヘッダなしと判定)。
+    形式の判定はこの関数に一本化してある — 値を読む load_board_temperatures と、
+    元の形式を保ったまま行を複製する dummy.py の両方が使う。
+
+    Returns:
+        (ヘッダ行(ヘッダなし形式では None), Board セルが空でないデータ行,
+        Board の列番号, 温度の列番号)。セルは前後空白を落とした文字列。
+
+    Raises:
+        ValueError: ファイルが空の時、ヘッダに Board / Temp(Temperature)列が
+            見つからない時、または温度の行が1行も無い時。
+
+    """
+    df = pl.read_csv(path, has_header=False, infer_schema=False)
+    rows = [[("" if v is None else str(v).strip()) for v in r] for r in df.rows()]
+    if not rows:
+        msg = f"{path}: empty file"
+        raise ValueError(msg)
+
+    header: list[str] | None = None
+    try:
+        float(rows[0][0])
+        board_i, temp_i = 0, 1  # ヘッダなし旧形式
+    except ValueError:
+        header = rows[0]
+        lowered = [h.lower() for h in header]
+        rows = rows[1:]
+
+        def find(*names: str) -> int:
+            for n in names:
+                if n in lowered:
+                    return lowered.index(n)
+            msg = f"{path}: column {'/'.join(names)} not found in header {lowered}"
+            raise ValueError(msg)
+
+        board_i, temp_i = find("board"), find("temp", "temperature")
+
+    rows = [r for r in rows if r[board_i]]
+    if not rows:
+        msg = f"{path}: no temperature rows"
+        raise ValueError(msg)
+    return header, rows, board_i, temp_i
+
+
+def load_board_temperatures(initial_temperature_path: str | Path) -> dict[int, float]:
+    """initial_temperature.csv → {Board: 温度}。
+
+    受け付ける形式(実機のヘッダあり / 旧参照データのヘッダなし)は
+    parse_initial_temperature 参照。
 
     Returns:
         Board 番号 → 実測温度(float)の辞書。
 
     Raises:
-        ValueError: ファイルが空の時、ヘッダに Board / Temp(Temperature)列が
-            見つからない時、同じ Board に矛盾する温度が並んでいる時、
-            または温度の行が1行も無い時。
+        ValueError: parse_initial_temperature が形式を読めない時、または
+            同じ Board に矛盾する温度が並んでいる時。
 
     """
-    df = pl.read_csv(initial_temperature_path, has_header=False, infer_schema=False)
-    rows = [[("" if v is None else str(v).strip()) for v in r] for r in df.rows()]
-    if not rows:
-        msg = f"{initial_temperature_path}: empty file"
-        raise ValueError(msg)
-
-    try:
-        float(rows[0][0])
-        board_i, temp_i = 0, 1  # ヘッダなし旧形式
-    except ValueError:
-        header = [h.lower() for h in rows[0]]
-        rows = rows[1:]
-
-        def find(*names: str) -> int:
-            for n in names:
-                if n in header:
-                    return header.index(n)
-            msg = f"{initial_temperature_path}: column {'/'.join(names)} not found in header {header}"
-            raise ValueError(msg)
-
-        board_i, temp_i = find("board"), find("temp", "temperature")
-
+    _, rows, board_i, temp_i = parse_initial_temperature(initial_temperature_path)
     temps: dict[int, float] = {}
     for r in rows:
-        if not r[board_i]:
-            continue
         board, temp = int(r[board_i]), float(r[temp_i])
         if board in temps and temps[board] != temp:
             msg = f"{initial_temperature_path}: Board {board} has conflicting temperatures {temps[board]} and {temp}"
             raise ValueError(msg)
         temps[board] = temp
-    if not temps:
-        msg = f"{initial_temperature_path}: no temperature rows"
-        raise ValueError(msg)
     return temps
 
 
