@@ -75,7 +75,7 @@ def detect_types(data_dir: str | Path) -> list[str]:
         try:
             cols = pl.scan_csv(f).collect_schema().names()
         # ヘッダの読めない csv は測定 type 候補から静かに外し、残りの走査を続ける設計
-        except Exception:  # ruff: ignore[S112, BLE001]
+        except Exception:  # ruff: ignore[try-except-continue, blind-except]
             continue
         if stem in cols:
             types.add(stem)
@@ -94,14 +94,14 @@ def find_dvtbudget_coefs(data_dir: str | Path) -> list[Path]:
 
     """
     # io_jsonc は pydantic モデル(models)を引き込む。係数表の判別を使うときだけ読み込み、import を軽く保つ
-    from .io_jsonc import load_dvtbudget_coef  # ruff: ignore[PLC0415]
+    from .io_jsonc import load_dvtbudget_coef  # ruff: ignore[import-outside-top-level]
 
     found = []
     for f in sorted(Path(data_dir).glob("*.jsonc")):
         try:
             coef = load_dvtbudget_coef(f)
         # 係数表の形で読めない jsonc は候補から静かに外し、残りの走査を続ける設計
-        except Exception:  # ruff: ignore[S112, BLE001]
+        except Exception:  # ruff: ignore[try-except-continue, blind-except]
             continue
         if coef.root and all(temps and all(states for states in temps.values()) for temps in coef.root.values()):
             # {a, b} のリーフ形が少なくとも1件マッチしていることまで要求する
@@ -141,7 +141,7 @@ def find_run_configs(data_dir: str | Path) -> list[Path]:
         try:
             content = jsonc.load(f)
         # jsonc として読めないファイルは候補から静かに外し、残りの走査を続ける設計
-        except Exception:  # ruff: ignore[S112, BLE001]
+        except Exception:  # ruff: ignore[try-except-continue, blind-except]
             continue
         if isinstance(content, dict) and "optimization" in content:
             found.append(f)
@@ -216,7 +216,7 @@ def measure_labels(data_dir: str | Path, type_: str) -> dict[int, str]:
             .collect()
         )
     # 対応表が読めない場合は空 dict = 番号のみ表示に落とす仕様(docstring 参照)
-    except Exception:  # ruff: ignore[BLE001]
+    except Exception:  # ruff: ignore[blind-except]
         return {}
     return {
         int(m): str(d)
@@ -241,7 +241,7 @@ def _candidates(data_dir: Path, source_type: str, axis: str, tcsv: Path | None) 
         try:
             present = set(resolve_axes(data_dir, source_type, {axis}).select(axis).unique().collect()[axis].to_list())
         # 実在値の照会に失敗したら map の全語彙へフォールバックする設計(上のコメント参照)
-        except Exception:  # ruff: ignore[BLE001]
+        except Exception:  # ruff: ignore[blind-except]
             return full
         narrowed = [v for v in full if v in present]
         return narrowed or full

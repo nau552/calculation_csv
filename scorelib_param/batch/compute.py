@@ -247,7 +247,7 @@ def _per_epoch_fallback(
                 generation_info_path=inputs.generation_info_path,
             )
             rows.append({**_epoch_row(se), **values})
-        except Exception as err:  # ruff: ignore[BLE001] — epoch単位で理由ごと報告する
+        except Exception as err:  # ruff: ignore[blind-except] — epoch単位で理由ごと報告する
             failed[se.ref.epoch_id] = str(err)
     return BatchResult(_result_frame(rows, part_names), failed)
 
@@ -270,7 +270,7 @@ def _load_epoch_temperatures(
                 axis_resolve.data_file(se.data_dir, "initial_temperature.csv")
             )
             ok_epochs.append(se)
-        except Exception as err:  # ruff: ignore[BLE001]
+        except Exception as err:  # ruff: ignore[blind-except]
             failed[se.ref.epoch_id] = f"initial_temperature.csv unreadable: {err}"
     return ok_epochs, per_epoch_temps
 
@@ -299,7 +299,7 @@ def _custom_part_values(state: _BatchState, part: ScorePart) -> dict[str, float]
                     params=part.params or {},
                 ),
             )
-        except Exception as err:  # ruff: ignore[BLE001]
+        except Exception as err:  # ruff: ignore[blind-except]
             state.failed[se.ref.epoch_id] = f"custom part '{part.name}': {err}"
     return values
 
@@ -423,7 +423,7 @@ def _assemble_rows(state: _BatchState, part_values: dict[str, dict[str, float]])
         if state.score_file.expression:
             try:
                 score = evaluate_expression(state.score_file.expression, values)
-            except Exception as err:  # ruff: ignore[BLE001]
+            except Exception as err:  # ruff: ignore[blind-except]
                 state.failed[epoch_id] = f"expression evaluation failed: {err}"
                 continue
         rows.append({**_epoch_row(se), "Score": score, **values})
@@ -489,7 +489,7 @@ def compute_score_batch(
     # パーツごとに {epoch_id: 値} を集める
     try:
         part_values = _collect_part_values(state)
-    except Exception as err:  # ruff: ignore[BLE001] — バッチ全体エラー → epoch 逐次で切り分け
+    except Exception as err:  # ruff: ignore[blind-except] — バッチ全体エラー → epoch 逐次で切り分け
         fb = _per_epoch_fallback(epochs, inputs, err)
         fb.failed.update(failed)
         return fb

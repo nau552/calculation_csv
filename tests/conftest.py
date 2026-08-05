@@ -1,4 +1,5 @@
 # Copyright (c) 2026
+# ruff: file-ignore[suspicious-subprocess-import, subprocess-without-shell-equals-true] 起動するのは自リポジトリの CLI で引数も固定
 import shutil
 import subprocess
 import sys

@@ -1,4 +1,5 @@
 # Copyright (c) 2026
+# ruff: file-ignore[unused-function-argument] ユーザが書く custom_parts.py の見本。パーツ関数は使わなくても ctx を受け取る約束
 """テストが使う自作スコアパーツ関数の例。
 
 ユーザがリポジトリ直下の custom_parts.py として SVN に登録するのと同じ形。

@@ -57,7 +57,7 @@ def derive_label(history_path: str | Path) -> str:
     names = [n for n in (exp.name, step.name, loop.name) if n]
     if not (loop.name.startswith("Loop") and step.name.startswith("Step")):
         # stacklevel の追加は警告の表示位置(報告される呼び出し元)が変わるため今回は見送り
-        warnings.warn(  # ruff: ignore[B028]
+        warnings.warn(  # ruff: ignore[no-explicit-stacklevel]
             f"result_history path does not follow the <exp>/Step*/Loop*/ layout: {p} "
             f"(using label '{'/'.join(names)}'; pass an explicit label to silence this)"
         )
@@ -112,7 +112,7 @@ def enumerate_epochs(
                 ignored.append(entry.name)
         if ignored:
             # stacklevel の追加は警告の表示位置(報告される呼び出し元)が変わるため今回は見送り
-            warnings.warn(  # ruff: ignore[B028]
+            warnings.warn(  # ruff: ignore[no-explicit-stacklevel]
                 f"ignoring non-epoch entries in {path}: {ignored[:_MAX_IGNORED_LISTED]}"
                 + (" ..." if len(ignored) > _MAX_IGNORED_LISTED else "")
             )

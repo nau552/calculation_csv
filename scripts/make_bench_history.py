@@ -1,4 +1,5 @@
 # Copyright (c) 2026
+# ruff: file-ignore[implicit-namespace-package] 単体実行スクリプト置き場でパッケージではない(__init__.py を持たない)
 """1 epoch 分のデータディレクトリから、ベンチマーク用の result_history を組み立てる。
 
 同じ epoch ディレクトリを result.0001 .. result.NNNN として複製する。複製は

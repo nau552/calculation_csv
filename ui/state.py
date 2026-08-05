@@ -1,4 +1,6 @@
 # Copyright (c) 2026
+# ruff: file-ignore[blind-except] 入力・環境起因のどんな例外でも画面を落とさずエラー表示に変える UI の意図
+# ruff: file-ignore[import-outside-top-level] 無くても動く任意依存を関数内 import で受ける設計(docs/score_gui_design.md 8-3節)
 """スコア設計UIの編集ロジック(純関数層)。
 
 ここにあるものはすべて streamlit 非依存で pytest 可能
@@ -1159,7 +1161,7 @@ def build_context(
         ctx["custom_functions"] = custom_functions
         # `catalogs` を作った後に足す: custom 擬似typeには軸カタログが無い。
         # += でなく新リストを作る(元のリストを共有している参照を書き換えないため)
-        ctx["part_types"] = ctx["part_types"] + ["custom"]
+        ctx["part_types"] = [*ctx["part_types"], "custom"]
     return ctx
 
 

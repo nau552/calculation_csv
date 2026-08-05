@@ -219,7 +219,7 @@ class TestPrefilterWithMeasure:
         ctx = SharedComputeContext(data_dir_mini, [p])
         with_ctx = compute_score_part(data_dir_mini, p, shared_ctx=ctx)
         alone = compute_score_part(data_dir_mini, p)
-        monkeypatch.setattr(cli, "_hoistable_prefilters", lambda *a, **k: [])
+        monkeypatch.setattr(cli, "_hoistable_prefilters", lambda *_a, **_k: [])
         without = compute_score_part(data_dir_mini, p)
         assert math.isclose(with_ctx, alone, rel_tol=1e-12)
         assert math.isclose(alone, without, rel_tol=1e-12)

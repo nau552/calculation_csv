@@ -599,7 +599,7 @@ class GroupDef(BaseModel):
     axis: str
     groups: dict[str, tuple[int, int]] = Field(default_factory=dict)
     # mixedCase は設定 jsonc のキー名そのもの(pydantic がこの名前で読み書きし、改名すると既存の設定が読めなくなる)
-    definedInLogical: bool = True  # ruff: ignore[N815]
+    definedInLogical: bool = True  # ruff: ignore[mixed-case-variable-in-class-scope]
 
     def resolved_groups(self, axis_count: int | None = None) -> dict[str, tuple[int, int]]:
         """Logical 番号での範囲。Physical 定義は [lo, hi] → [N-1-hi, N-1-lo]。
@@ -644,14 +644,14 @@ class ScoreFile(BaseModel):
     score_parts: list[ScorePart] = Field(default_factory=list)
     expression: str = ""
     # mixedCase は設定 jsonc のキー名そのもの(pydantic がこの名前で読み書きし、改名すると既存の設定が読めなくなる)
-    constraintThreshold: dict[str, ConstraintThresholdEntry] = Field(default_factory=dict)  # ruff: ignore[N815]
+    constraintThreshold: dict[str, ConstraintThresholdEntry] = Field(default_factory=dict)  # ruff: ignore[mixed-case-variable-in-class-scope]
     # パーツが `ref` やグループ派生軸を使っていてもエクスポートが自己完結する
     # よう、選択セット・グループ定義・重みセットを同梱する
-    selectionSets: dict[str, list[Any]] = Field(default_factory=dict)  # ruff: ignore[N815]
-    groupDefs: dict[str, GroupDef] = Field(default_factory=dict)  # ruff: ignore[N815]
+    selectionSets: dict[str, list[Any]] = Field(default_factory=dict)  # ruff: ignore[mixed-case-variable-in-class-scope]
+    groupDefs: dict[str, GroupDef] = Field(default_factory=dict)  # ruff: ignore[mixed-case-variable-in-class-scope]
     # 変換op(TRANSFORM_OPS)の ref が参照する名前付き重み: 値は数値
     # (全行同一の定数)か {軸の値: 数値}(by 軸の値ごとの定数)
-    weightSets: dict[str, Any] = Field(default_factory=dict)  # ruff: ignore[N815]
+    weightSets: dict[str, Any] = Field(default_factory=dict)  # ruff: ignore[mixed-case-variable-in-class-scope]
 
     @model_validator(mode="before")
     @classmethod
@@ -718,8 +718,8 @@ class VthSkipConfig(BaseModel):
 
     epochs: int | None = None
     # mixedCase は実験 config のキー名そのもの(pydantic がこの名前で読み書きし、改名すると既存の設定が読めなくなる)
-    dummyKLDValue: float | None = None  # ruff: ignore[N815]
-    dummyDVthValue: float | None = None  # ruff: ignore[N815]
+    dummyKLDValue: float | None = None  # ruff: ignore[mixed-case-variable-in-class-scope]
+    dummyDVthValue: float | None = None  # ruff: ignore[mixed-case-variable-in-class-scope]
 
     def dummy_values(self) -> dict[str, float]:
         """Type 名 → ダミー値(設定されているものだけ)。
@@ -748,8 +748,8 @@ class OptimizationConfig(BaseModel):
     score_function: str | None = None
     # mixedCase は実験 config のキー名そのもの(pydantic がこの名前で読み書きし、改名すると既存の設定が読めなくなる)
     # 測定フロー側の vthSkip 設定(あれば): ファイル不在時のダミー値の出所
-    vthSkip: VthSkipConfig | None = None  # ruff: ignore[N815]
-    constraintThreshold: dict[str, ConstraintThresholdEntry] = Field(default_factory=dict)  # ruff: ignore[N815]
+    vthSkip: VthSkipConfig | None = None  # ruff: ignore[mixed-case-variable-in-class-scope]
+    constraintThreshold: dict[str, ConstraintThresholdEntry] = Field(default_factory=dict)  # ruff: ignore[mixed-case-variable-in-class-scope]
     WLgroup: dict[str, tuple[int, int]] = Field(default_factory=dict)
     # WLgroup の範囲の記法: True(既定)= Logical 番号、False = Physical 番号
     # (データの Logical 番号を N-1-p で読み替える。N は {Generation}.json の
@@ -758,9 +758,9 @@ class OptimizationConfig(BaseModel):
     # WLgroup 各グループの重み({グループ名: 数値})または全グループ共通の
     # 数値1つ。名前 "WLgroupWeight" の重みセットとして ref から参照できる
     WLgroupWeight: Any | None = None
-    weightSets: dict[str, Any] = Field(default_factory=dict)  # ruff: ignore[N815]
-    selectionSets: dict[str, list[Any]] = Field(default_factory=dict)  # ruff: ignore[N815]
-    groupDefs: dict[str, GroupDef] = Field(default_factory=dict)  # ruff: ignore[N815]
+    weightSets: dict[str, Any] = Field(default_factory=dict)  # ruff: ignore[mixed-case-variable-in-class-scope]
+    selectionSets: dict[str, list[Any]] = Field(default_factory=dict)  # ruff: ignore[mixed-case-variable-in-class-scope]
+    groupDefs: dict[str, GroupDef] = Field(default_factory=dict)  # ruff: ignore[mixed-case-variable-in-class-scope]
     score_parts: list[ScorePart] = Field(default_factory=list)
     expression: str = ""
 

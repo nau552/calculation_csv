@@ -1,4 +1,5 @@
 # Copyright (c) 2026
+# ruff: file-ignore[import-outside-top-level] そのテストだけが使う依存は関数内で import する
 """変換ステップの拡張(add/sub/mul/div・複数回・グループ別重み)と Physical 記法グループ定義のテスト。
 
 Physical 記法グループ定義は definedInLogical / WLgroupDefinLogical を扱う。
@@ -276,7 +277,7 @@ def _logical_physical_configs(data_dir_mini: Path) -> tuple[RunConfig, RunConfig
             }
         )
 
-    return rc(logical, True), rc(physical, False), n
+    return rc(logical, defin_logical=True), rc(physical, defin_logical=False), n
 
 
 def test_physical_group_def_matches_logical(data_dir_mini: Path, tmp_path: Path) -> None:

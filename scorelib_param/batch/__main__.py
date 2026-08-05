@@ -134,7 +134,7 @@ def main(argv: list[str] | None = None) -> None:
         # 固定するため、計算モジュールの import より前に設定する
         os.environ["POLARS_MAX_THREADS"] = str(args.max_threads)
     # POLARS_MAX_THREADS の設定(上)を polars の初回 import より前に済ませるため、ここで読み込む
-    from .runner import BatchRunner, StrictBatchError  # ruff: ignore[PLC0415]
+    from .runner import BatchRunner, StrictBatchError  # ruff: ignore[import-outside-top-level]
 
     run_config = io_jsonc.load_run_config(args.config)
     coef = io_jsonc.load_dvtbudget_coef(args.dvtbudget_coef) if args.dvtbudget_coef else None

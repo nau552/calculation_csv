@@ -1,4 +1,6 @@
 # Copyright (c) 2026
+# ruff: file-ignore[implicit-namespace-package] 単体実行スクリプト置き場でパッケージではない(__init__.py を持たない)
+# ruff: file-ignore[suspicious-non-cryptographic-random-usage] 乱数はテストデータ生成用で暗号強度は不要
 import itertools
 import random
 

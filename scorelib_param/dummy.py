@@ -38,7 +38,7 @@ def _read_header(path: Path) -> list[str]:
     try:
         return pl.scan_csv(path).collect_schema().names()
     # ヘッダの読めないファイルは [] = Board 列なしとして扱い、複製せずそのままコピーする側に回す
-    except Exception:  # ruff: ignore[BLE001]
+    except Exception:  # ruff: ignore[blind-except]
         return []
 
 

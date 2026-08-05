@@ -1,4 +1,7 @@
 # Copyright (c) 2026
+# ruff: file-ignore[import-outside-top-level] そのテストだけが使う依存は関数内で import する
+# ruff: file-ignore[magic-value-comparison] テストの期待値は生の数値で書く(定数名に隠すと期待値が読めない)
+# ruff: file-ignore[suspicious-subprocess-import, subprocess-without-shell-equals-true] 起動するのは自リポジトリの CLI で引数も固定
 """バッチスコア計算(scorelib_param.batch — docs/batch_design.md)のテスト。
 
 最重要は**等価性**: 複数 epoch をバッチ一括計算した結果が、epoch ごとに
@@ -476,7 +479,6 @@ def test_cli_default_batch_size_matches_runner() -> None:
 
 def test_cli_max_threads_sets_env(
     history_tree: tuple[Path, Path, Path],
-    config_and_coef: tuple[RunConfig, DvtBudgetCoefFile],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -514,7 +516,6 @@ def test_cli_max_threads_sets_env(
 
 def test_benchmark_script(
     history_tree: tuple[Path, Path, Path],
-    config_and_coef: tuple[RunConfig, DvtBudgetCoefFile],
     tmp_path: Path,
 ) -> None:
     """scripts/benchmark_batch.py が実測表を出力する(子プロセス経由)。"""
@@ -643,7 +644,6 @@ def test_get_score_bridge_example(
 
 def test_batch_cli(
     history_tree: tuple[Path, Path, Path],
-    config_and_coef: tuple[RunConfig, DvtBudgetCoefFile],
     tmp_path: Path,
 ) -> None:
     """バッチ CLI が複数 history のスコア CSV を出力することを検証する。"""

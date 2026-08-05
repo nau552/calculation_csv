@@ -666,3 +666,34 @@ v0.4.0 の機能群（集計時重み・変換ステップ拡張・Physical 記�
   (pyright はローカルでは --pythonpath .venv/Scripts/python.exe 指定が必要)。
 - 版数判断: エンジンの不具合修正・config 語彙不変 → 最後の数字。同日
   ユーザー指示でリリース確定(0.7.2 → 0.7.3、CHANGELOG 節も確定)。
+
+## 2026-08-05: ruff 設定の再構成(チームコンテナの実配線に合わせる)
+
+- 発端: チーム共通の ruff.toml を書き換えたくない、修正+各行 ignore 方式の
+  規模を知りたい。調査の過程でチーム運用の実像が確定: エディタ(preview 有効・
+  settings.json の ruff.configuration がコンテナ内 toml を直指定)も /check
+  (--config .devcontainer/ruff.toml --preview)も**チーム設定だけ**を読み、
+  リポジトリ側の toml は読まない(実例: batch/__init__ の RUF067 免除が
+  コンテナのエディタで効かず警告表示されていた)。
+- 帰結: toml に置く免除はチーム内では無力。ファイルに同居する抑止コメント
+  だけが全環境で同じに効く → 「ファイル自己完結」方式で合意・実施。
+- 実測が方針を決めた4点: ①per-file-ignores のパターンは定義ファイルの
+  ディレクトリ基準(extend 経由で tests/* が効かない → 直下 toml に再掲)、
+  ②セレクタの名前表記は素の ruff が設定ごと読めない致命エラー(コード表記
+  + RUF201 自己参照免除で両立)、③ファイル単位の抑止 `# ruff:
+  file-ignore[ルール名]` が preview で有効(エラーメッセージが正式書式を案内)、
+  ④/check は preview 付き → 素モードはチーム内に存在せず CI からも削除。
+- 実施: .devcontainer/ruff.toml にチーム原本を無改変配置、直下 ruff.toml は
+  extend + 技術的補正2点のみに縮小(208行 → 約40行)。旧コード表記の抑止
+  73 件を --fix でルール名表記へ一括変換。免除 146 件分をファイル内へ移設
+  (file-ignore ヘッダ 27 ファイル + 行単位 3 箇所)。実害なく直せる 20 件は
+  修正(未使用 fixture 引数 ARG001 ×9・スタブのラムダ引数 ARG005 ×4・
+  FBT003 ×4・B909 ×2・PLR6104 ×1)。CI は ruff check --preview + format のみに。
+- 教訓: test_batch の引数削除で replace_all が意図の3箇所以外の8関数(同じ
+  引数並びで fixture を実際に使う)にも当たりテスト8件が落ちた → 復元して
+  全パス。同一パターンの一括置換は当たり件数の事前確認が必須。
+- 検証: pytest 339 件・ruff check --preview・format --check・pyright すべて
+  ゼロ。チーム内と同じ呼び出し(--config .devcontainer/ruff.toml 直指定)でも
+  ゼロを確認。
+- 版数判断: エンジン変更はコメント1行のみ・config 語彙不変 → 版上げなし
+  (CHANGELOG 未リリース節に開発基盤変更として記録)。

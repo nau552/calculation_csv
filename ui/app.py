@@ -1,4 +1,5 @@
 # Copyright (c) 2026
+# ruff: file-ignore[blind-except] 入力・環境起因のどんな例外でも画面を落とさずエラー表示に変える UI の意図
 """スコア設計UI (score_gui Phase1).
 
 起動: .venv/bin/streamlit run ui/app.py(Windows は .venv/Scripts/)

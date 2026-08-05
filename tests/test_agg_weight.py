@@ -1,4 +1,6 @@
 # Copyright (c) 2026
+# ruff: file-ignore[magic-value-comparison] テストの期待値は生の数値で書く(定数名に隠すと期待値が読めない)
+# ruff: file-ignore[float-equality-comparison] 期待値は2進浮動小数で正確に表せる値で、厳密一致そのものを検査する
 """集計時重み(AggregationSpec.weight / weight_ref)のテスト。
 
 意味は「その軸を潰す直前に、軸の値ごとの重みを値列に乗じてから集計」

@@ -1,4 +1,6 @@
 # Copyright (c) 2026
+# ruff: file-ignore[blind-except] 入力・環境起因のどんな例外でも画面を落とさずエラー表示に変える UI の意図
+# ruff: file-ignore[import-outside-top-level] 無くても動く任意依存を関数内 import で受ける設計(docs/score_gui_design.md 8-3節)
 """スコア設計UIの再利用ウィジェット。
 
 各エディタは渡された dict(session の score_file の一部)をその場で書き換える。
@@ -271,7 +273,8 @@ def selection_list_widget(
         )
 
     out = []
-    for i, v in enumerate(values):
+    # 複製を反復する: ✕ボタンの pop が反復対象を書き換えないようにするため
+    for i, v in enumerate(list(values)):
         row_cols = st.columns([10, 1])
         with row_cols[0]:
             out.append(selection_widget(axes, catalog, v, f"{key}_r{i}", measure_labels))
@@ -809,7 +812,7 @@ def _relative_mode_row(rel: dict[str, Any], key: str) -> None:
         offset = c5.number_input(
             "offset(分子分母の両方に加算)", value=float(rel.get("denominator_offset", 0)), key=f"{key}_off"
         )
-        if "denominator_offset" in rel or offset != 0.0:
+        if "denominator_offset" in rel or offset != 0.0:  # ruff: ignore[float-equality-comparison] 未変更なら既定値と厳密一致する番兵比較
             rel["denominator_offset"] = offset
 
 
@@ -827,7 +830,8 @@ def _denominator_pre_agg_editor(rel: dict[str, Any], ctx: EditorContext, key: st
         # だけで設定が変わる」不変条件が崩れる)
         steps = rel.get("denominator_pre_aggregation") or []
         known_axes = sorted(ctx.catalog)
-        for i, step in enumerate(steps):
+        # 複製を反復する: ✕ボタンの pop が反復対象を書き換えないようにするため
+        for i, step in enumerate(list(steps)):
             c_axis, c_del = st.columns([8, 1])
             axis_opts: list = list(known_axes)
             cur_axis = step.get("axis")

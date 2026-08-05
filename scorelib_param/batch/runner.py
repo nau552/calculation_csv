@@ -50,7 +50,7 @@ Fetcher = Callable[[EpochRef, Path], Path]
 
 
 # staging_root は差し替え可能な fetch 実装の共通シグネチャ(上の Fetcher 契約)。pass-through では使わない
-def passthrough_fetcher(ref: EpochRef, staging_root: Path) -> Path:  # ruff: ignore[ARG001]
+def passthrough_fetcher(ref: EpochRef, staging_root: Path) -> Path:  # ruff: ignore[unused-function-argument]
     """ローカル/共有マウント済みデータをそのまま使う(コピーも削除もしない)。
 
     Returns:
@@ -81,10 +81,10 @@ def available_memory_bytes() -> int | None:
                 return int(line.split()[1]) * 1024
     try:
         # psutil は任意依存(無ければ except に落ちて advisory をスキップする)。あるときだけ読み込む
-        import psutil  # ruff: ignore[PLC0415]
+        import psutil  # ruff: ignore[import-outside-top-level]
 
         return int(psutil.virtual_memory().available)
-    except Exception:  # ruff: ignore[BLE001] — advisory なので静かに諦める
+    except Exception:  # ruff: ignore[blind-except] — advisory なので静かに諦める
         return None
 
 
@@ -104,8 +104,8 @@ def estimate_epoch_bytes(sample: StagedEpoch, run_config: RunConfig) -> int | No
         ctx = BatchComputeContext([sample], parts, run_config.group_defs())
         # 同一パッケージ内部での意図的な利用(compute の実測サイズ見積もりを advisory に使う)。
         # estimated_size() の型は int | float だがバイト数なので int に包んでも値は不変
-        return int(sum(ctx.resolved(st).estimated_size() for st in ctx._union_axes))  # ruff: ignore[SLF001]
-    except Exception:  # ruff: ignore[BLE001] — 見積もり失敗は advisory を諦めるだけ
+        return int(sum(ctx.resolved(st).estimated_size() for st in ctx._union_axes))  # ruff: ignore[private-member-access]
+    except Exception:  # ruff: ignore[blind-except] — 見積もり失敗は advisory を諦めるだけ
         return None
 
 
@@ -172,7 +172,7 @@ class BatchRunner:
             ...
     """
 
-    def __init__(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略可能キーワード引数は設計(束ねない方針 — docs/dev_workflow.md)
+    def __init__(  # ruff: ignore[too-many-arguments] — 公開 API: 多数の省略可能キーワード引数は設計(束ねない方針 — docs/dev_workflow.md)
         self,
         histories: Sequence[str | Path] | Mapping[str, str | Path],
         run_config: RunConfig,
@@ -204,7 +204,7 @@ class BatchRunner:
         self.staging_root.mkdir(parents=True, exist_ok=True)
 
         # cli 側の補助関数はこの初期化経路でのみ使うため、使うときだけ読み込む
-        from scorelib_param.cli import _source_type  # ruff: ignore[PLC0415]
+        from scorelib_param.cli import _source_type  # ruff: ignore[import-outside-top-level]
 
         parts = run_config.optimization.score_parts
         # vthSkip でダミー値が設定された type はファイルが無くても計算できる
@@ -228,7 +228,7 @@ class BatchRunner:
         fetched_dir: Path | None = None
         try:
             local = Path(self.fetcher(ref, self.staging_root))
-        except Exception as err:  # ruff: ignore[BLE001] — epoch 単位で理由ごと報告
+        except Exception as err:  # ruff: ignore[blind-except] — epoch 単位で理由ごと報告
             return StagedEpoch(ref, ref.source_dir, error=f"fetch failed: {err}"), None
         if local != ref.source_dir:
             ref = replace(ref, source_dir=local)

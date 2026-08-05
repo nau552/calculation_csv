@@ -1,4 +1,6 @@
 # Copyright (c) 2026
+# ruff: file-ignore[magic-value-comparison] テストの期待値は生の数値で書く(定数名に隠すと期待値が読めない)
+# ruff: file-ignore[float-equality-comparison] 期待値は2進浮動小数で正確に表せる値で、厳密一致そのものを検査する
 """vthSkip(ファイル不在 epoch のダミー計算)のテスト。
 
 - ダミー値は「変換後の値」: 変換ステップはスキップ・集計だけ適用

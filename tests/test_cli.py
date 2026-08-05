@@ -1,4 +1,8 @@
 # Copyright (c) 2026
+# ruff: file-ignore[import-outside-top-level] そのテストだけが使う依存は関数内で import する
+# ruff: file-ignore[magic-value-comparison] テストの期待値は生の数値で書く(定数名に隠すと期待値が読めない)
+# ruff: file-ignore[float-equality-comparison] 期待値は2進浮動小数で正確に表せる値で、厳密一致そのものを検査する
+# ruff: file-ignore[suspicious-subprocess-import, subprocess-without-shell-equals-true] 起動するのは自リポジトリの CLI で引数も固定
 from __future__ import annotations
 
 import json
@@ -179,7 +183,7 @@ def test_group_values_outside_ranges_rejected(data_dir_mini: Path) -> None:
         compute_score_part(data_dir_mini, part, group_defs=defs)
 
 
-def test_group_def_name_clashing_with_source_axis_rejected(data_dir_mini: Path, run_config: RunConfig) -> None:
+def test_group_def_name_clashing_with_source_axis_rejected(data_dir_mini: Path) -> None:
     """元軸と同名のグループ定義が拒否されることを検証する。"""
     from scorelib_param.models import GroupDef, ScorePart
 

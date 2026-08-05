@@ -351,12 +351,12 @@ def _dummy_axis_values(data_dir: str | Path, axis: str, spec: AggregationSpec | 
     """
     data_dir = Path(data_dir)
     # 同一パッケージ内部での意図的な利用(map ファイル探索の実装は axis_resolve に1つだけ持つ)
-    map_path = axis_resolve._map_file_for_axis(data_dir, axis)  # ruff: ignore[SLF001]
+    map_path = axis_resolve._map_file_for_axis(data_dir, axis)  # ruff: ignore[private-member-access]
     if map_path is not None:
         m = pl.read_csv(map_path, has_header=False, new_columns=["code", "text"])
         return m["text"].to_list()
     # introspect は UI 向けメタデータ導出モジュール。vthSkip のダミー計算経路でのみ使うため、使うときだけ読み込む
-    from .introspect import detect_types  # ruff: ignore[PLC0415]
+    from .introspect import detect_types  # ruff: ignore[import-outside-top-level]
 
     for type_ in detect_types(data_dir):
         f = axis_resolve.data_file(data_dir, f"{type_}.csv")
@@ -367,14 +367,14 @@ def _dummy_axis_values(data_dir: str | Path, axis: str, spec: AggregationSpec | 
             if axis in lf.collect_schema().names():
                 return lf.select(pl.col(axis).unique().sort()).collect()[axis].to_list()
         # 読めない・軸列の無い csv はダミー軸値の情報源から静かに外し、次の type の走査を続ける
-        except Exception:  # ruff: ignore[S112, BLE001]
+        except Exception:  # ruff: ignore[try-except-continue, blind-except]
             continue
     if spec is not None and isinstance(spec.value, list) and spec.value:
         return list(spec.value)
     return [0]
 
 
-def compute_dummy_part(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略可能キーワード引数は設計(束ねない方針 — docs/dev_workflow.md)
+def compute_dummy_part(  # ruff: ignore[too-many-arguments] — 公開 API: 多数の省略可能キーワード引数は設計(束ねない方針 — docs/dev_workflow.md)
     data_dir: str | Path,
     score_part: ScorePart,
     dummy_value: float,
@@ -443,7 +443,7 @@ def derive_axis_counts(data_dir: str | Path, axes: set[str]) -> dict[str, int]:
 
     """
     # introspect は UI 向けメタデータ導出モジュール。Physical 記法の読み替え経路でのみ使うため、使うときだけ読み込む
-    from .introspect import detect_types  # ruff: ignore[PLC0415]
+    from .introspect import detect_types  # ruff: ignore[import-outside-top-level]
 
     data_dir = Path(data_dir)
     counts: dict[str, int] = {}
@@ -453,7 +453,7 @@ def derive_axis_counts(data_dir: str | Path, axes: set[str]) -> dict[str, int]:
             lf = pl.scan_csv(f)
             cols = lf.collect_schema().names()
         # 読めない csv は軸本数の情報源から静かに外し、次の type の走査を続ける
-        except Exception:  # ruff: ignore[S112, BLE001]
+        except Exception:  # ruff: ignore[try-except-continue, blind-except]
             continue
         take = [a for a in axes if a in cols]
         if not take:
@@ -907,7 +907,7 @@ def _diagnose_pipeline(lf: pl.LazyFrame, steps: list[str], ctx: _StepContext) ->
     try:
         return _diagnose_walk(lf, steps, ctx)
     # 診断はおまけ: 二次エラーで元のエラーを隠さない
-    except Exception:  # ruff: ignore[BLE001]
+    except Exception:  # ruff: ignore[blind-except]
         return None
 
 
@@ -1016,7 +1016,7 @@ def compute_score_part(
 ) -> pl.DataFrame: ...
 
 
-def compute_score_part(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略可能キーワード引数は設計(束ねない方針 — docs/dev_workflow.md)
+def compute_score_part(  # ruff: ignore[too-many-arguments] — 公開 API: 多数の省略可能キーワード引数は設計(束ねない方針 — docs/dev_workflow.md)
     data_dir: str | Path,
     score_part: ScorePart,
     *,
@@ -1149,7 +1149,7 @@ def _warn_unmatched_constraints(score_file: ScoreFile) -> None:
             )
 
 
-def compute_score_file(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略可能キーワード引数は設計(束ねない方針 — docs/dev_workflow.md)
+def compute_score_file(  # ruff: ignore[too-many-arguments] — 公開 API: 多数の省略可能キーワード引数は設計(束ねない方針 — docs/dev_workflow.md)
     data_dir: str | Path,
     run_config: RunConfig,
     *,

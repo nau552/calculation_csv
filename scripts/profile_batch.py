@@ -1,4 +1,5 @@
 # Copyright (c) 2026
+# ruff: file-ignore[implicit-namespace-package] 単体実行スクリプト置き場でパッケージではない(__init__.py を持たない)
 """バッチスコア計算の時間内訳をプロファイルする(どこを最適化すべきかの判断用)。
 
 benchmark_batch.py が「全体の所要時間・ピークメモリ」を測るのに対し、こちらは
@@ -37,13 +38,13 @@ if TYPE_CHECKING:
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-import polars as pl  # ruff: ignore[E402]
+import polars as pl  # ruff: ignore[module-import-not-at-top-of-file]
 
-from scorelib_param import axis_resolve, io_jsonc  # ruff: ignore[E402]
-from scorelib_param.batch import compute  # ruff: ignore[E402]
-from scorelib_param.batch.history import enumerate_epochs  # ruff: ignore[E402]
-from scorelib_param.batch.staging import StagedEpoch  # ruff: ignore[E402]
-from scorelib_param.cli import resolve_group_defs  # ruff: ignore[E402]
+from scorelib_param import axis_resolve, io_jsonc  # ruff: ignore[module-import-not-at-top-of-file]
+from scorelib_param.batch import compute  # ruff: ignore[module-import-not-at-top-of-file]
+from scorelib_param.batch.history import enumerate_epochs  # ruff: ignore[module-import-not-at-top-of-file]
+from scorelib_param.batch.staging import StagedEpoch  # ruff: ignore[module-import-not-at-top-of-file]
+from scorelib_param.cli import resolve_group_defs  # ruff: ignore[module-import-not-at-top-of-file]
 
 
 def _timeit[T](fn: Callable[[], T]) -> tuple[float, T]:
@@ -138,7 +139,7 @@ def main(argv: list[str] | None = None) -> None:
     group_defs = resolve_group_defs(run_config, epochs[0].data_dir, None)
 
     ctx = compute.BatchComputeContext(epochs, score_file.score_parts, group_defs)
-    source_types = sorted(ctx._union_axes)  # ruff: ignore[SLF001] — プロファイル対象(同リポジトリ)の内部を意図的に参照
+    source_types = sorted(ctx._union_axes)  # ruff: ignore[private-member-access] — プロファイル対象(同リポジトリ)の内部を意図的に参照
 
     t_parse = _measure_parse(epochs, source_types)
     t_resolved, ctx = _measure_resolved(epochs, score_file, group_defs, source_types)

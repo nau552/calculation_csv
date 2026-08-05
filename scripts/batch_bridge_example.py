@@ -1,4 +1,6 @@
 # Copyright (c) 2026
+# ruff: file-ignore[implicit-namespace-package] 単体実行スクリプト置き場でパッケージではない(__init__.py を持たない)
+# ruff: file-ignore[suspicious-subprocess-import, subprocess-without-shell-equals-true] 起動するのは自リポジトリの CLI で引数も固定
 """現行最適化スクリプト(Python 3.7)からバッチ計算エンジンを subprocess で呼ぶブリッジの実装例。
 
 エンジン本体は Python 3.10+ で動くため、最適化スクリプト自身の python では
@@ -59,7 +61,7 @@ def _json_key(k: object) -> object:
     return k
 
 
-def _jsonable(obj: object) -> object:  # ruff: ignore[PLR0911] — isinstance 早期 return の連鎖が最も読みやすい形のため容認
+def _jsonable(obj: object) -> object:  # ruff: ignore[too-many-return-statements] — isinstance 早期 return の連鎖が最も読みやすい形のため容認
     """読み込み済み config dict を json.dump できる形へ再帰変換する。
 
     get_score_bridge_example.py と同じもの — 各ファイル単体で貼れるよう重複させている。
@@ -200,7 +202,7 @@ def _read_failed(out_csv: str) -> dict[str, str]:
     return failed
 
 
-def compute_batch_scores(  # ruff: ignore[PLR0913] — 見本の公開関数: 多数の省略可能キーワード引数は設計(束ねない方針)
+def compute_batch_scores(  # ruff: ignore[too-many-arguments] — 見本の公開関数: 多数の省略可能キーワード引数は設計(束ねない方針)
     engine_python: str,  # scorelib_param が入っている python 実行ファイルのパス
     config: str | dict,  # config.jsonc の**パス**(推奨)または読み込み済みの config dict。
     # 現行ローダは読み込み時に dict を加工するため、元ファイルの

@@ -1,4 +1,7 @@
 # Copyright (c) 2026
+# ruff: file-ignore[import-outside-top-level] そのテストだけが使う依存は関数内で import する
+# ruff: file-ignore[magic-value-comparison] テストの期待値は生の数値で書く(定数名に隠すと期待値が読めない)
+# ruff: file-ignore[float-equality-comparison] 期待値は2進浮動小数で正確に表せる値で、厳密一致そのものを検査する
 """WLgroup 定義の在り処の一本化(0.7.0)のテスト。
 
 WLgroup / WLgroupDefinLogical / WLgroupWeight は実験スクリプトが読む config の

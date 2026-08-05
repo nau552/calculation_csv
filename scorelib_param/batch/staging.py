@@ -81,7 +81,7 @@ def _extract_archive(archive: Path, dest: Path) -> None:
                 _check_member_name(name, archive)
             # 展開対象は自分たちの実験履歴アーカイブ(信頼できる入力)で、全エントリ名を上で検査済み。
             # tarfile 側の filter="data" 相当の強化は将来の検討余地(今回は挙動を変えないため見送り)
-            zf.extractall(dest)  # ruff: ignore[S202]
+            zf.extractall(dest)  # ruff: ignore[tarfile-unsafe-members]
 
 
 def _flatten_single_dir(view: Path) -> None:
@@ -158,7 +158,7 @@ def stage_epoch(ref: EpochRef, staging_root: Path) -> StagedEpoch:
     """
     try:
         return _stage_epoch_unsafe(ref, staging_root)
-    except Exception as err:  # ruff: ignore[BLE001] — 理由ごと報告してスキップさせる
+    except Exception as err:  # ruff: ignore[blind-except] — 理由ごと報告してスキップさせる
         return StagedEpoch(ref, ref.source_dir, error=f"staging failed: {err}")
 
 

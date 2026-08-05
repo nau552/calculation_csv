@@ -104,7 +104,7 @@ def _nearest_temp_key(available_keys: list[str], target_temp: float) -> str:
     return min(available_keys, key=lambda k: abs(float(k) - target_temp))
 
 
-def apply_dvtbudget(  # ruff: ignore[PLR0913] — 公開 API: 多数の省略可能キーワード引数は設計(束ねない方針 — docs/dev_workflow.md)
+def apply_dvtbudget(  # ruff: ignore[too-many-arguments] — 公開 API: 多数の省略可能キーワード引数は設計(束ねない方針 — docs/dev_workflow.md)
     lf: pl.LazyFrame,
     value_col: str,
     generation: str,

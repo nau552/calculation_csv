@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from .runner import DEFAULT_BATCH_SIZE, BatchRunner, Fetcher, StrictBatchError, passthrough_fetcher
     from .staging import StagedEpoch, cleanup_epoch, stage_epoch, validate_epoch
 
-_EXPORTS = {
+_EXPORTS = {  # ruff: ignore[non-empty-init-module] PEP 562 の遅延 import を意図的に持つ(docstring 参照)
     "EPOCH_COL": "compute",
     "BatchComputeContext": "compute",
     "BatchResult": "compute",

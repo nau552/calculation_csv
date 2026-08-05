@@ -1,4 +1,6 @@
 # Copyright (c) 2026
+# ruff: file-ignore[import-outside-top-level] そのテストだけが使う依存は関数内で import する
+# ruff: file-ignore[magic-value-comparison] テストの期待値は生の数値で書く(定数名に隠すと期待値が読めない)
 """Streamlit AppTest によるE2Eテスト。
 
 アプリをブラウザなしで起動し、データ読み込み → 雛形からパーツ作成 →
@@ -677,9 +679,7 @@ def test_undo_restores_relative_selectbox_display(at: AppTest, data_dir_mini_no_
     assert any("データにありません" in w.value for w in at.warning)  # 警告と表示が矛盾しない
 
 
-def test_draft_autosaved_and_restored(
-    at: AppTest, data_dir_mini: Path, dvtbudget_coef_path: Path, tmp_path: Path
-) -> None:
+def test_draft_autosaved_and_restored(at: AppTest, data_dir_mini: Path, dvtbudget_coef_path: Path) -> None:
     """下書きは**名前ごと**に保存・復元される(共用サーバで他人と混ざらない)。
 
     名前未入力の間は自動保存されない。

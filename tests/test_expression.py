@@ -1,4 +1,5 @@
 # Copyright (c) 2026
+# ruff: file-ignore[magic-value-comparison] テストの期待値は生の数値で書く(定数名に隠すと期待値が読めない)
 import pytest
 
 from scorelib_param.expression import evaluate_expression

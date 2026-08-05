@@ -1,4 +1,5 @@
 # Copyright (c) 2026
+# ruff: file-ignore[implicit-namespace-package] 単体実行スクリプト置き場でパッケージではない(__init__.py を持たない)
 """実験 config ファイルと、ローダ加工後の dict の「エンジン語彙」突き合わせ診断。
 
 スコア計算エンジンは**元の config ファイル**を読む(ローダがメモリ上で行う
@@ -70,7 +71,7 @@ def load_config_file(path: str | Path) -> dict:
     return json.loads(_strip_jsonc(Path(path).read_text(encoding="utf-8")))
 
 
-def _plain(obj: object) -> object:  # ruff: ignore[PLR0911] — isinstance 早期 return の連鎖が最も読みやすい形のため容認
+def _plain(obj: object) -> object:  # ruff: ignore[too-many-return-statements] — isinstance 早期 return の連鎖が最も読みやすい形のため容認
     """比較用の正規化: Series/ndarray/numpy スカラー等を素の Python 型へ変換する。
 
     ブリッジ見本の _jsonable と同じ振る舞い判定。

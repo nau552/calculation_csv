@@ -19,15 +19,13 @@ jobs:
       - name: Install
         run: python -m pip install -e ".[dev]"
       - name: Lint (ruff)
-        # --preview はコンテナの VS Code(ruff 拡張)と検査基準を揃えるため。
-        # ruff.toml に書かずフラグにしているのは、設定本体をチーム原本の転記の
-        # ままにしておくため(docs/dev_workflow.md「ruff.toml」参照)
-        # 素の(--preview 無し)実行も検査する: 抑止コメントがルール名表記
-        # (# ruff: ignore[rule-name])で書かれると preview では効くが素の実行で
-        # 外れるため、「両モードで警告ゼロ」を機械的に保つ(2026-07-31)
+        # --preview 一本で検査する(2026-08-05): チームの運用はエディタ(preview
+        # 有効)も /check(--preview 付き)も preview で統一されていると確認できた
+        # ため。抑止コメントはルール名表記(preview の RUF106 が求める形)で書いて
+        # おり、素の(--preview 無し)実行では解釈されないので検査しない
+        # (経緯は docs/dev_workflow.md「ruff.toml」参照)
         run: |
           python -m ruff check . --preview
-          python -m ruff check .
           python -m ruff format --check .
       - name: Type check (pyright)
         # Pylance(コンテナのエディタ)と同じ型チェッカー。チームの水準

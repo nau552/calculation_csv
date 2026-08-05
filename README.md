@@ -118,9 +118,11 @@ git config core.hooksPath scripts/hooks         # push前テストのフック�
   数日がかりの機能（途中状態が main に乗ると困るもの）は `feature/<名前>` ブランチで
   作業し、テスト全パスを確認してから main へマージする。小さな修正・ドキュメントは
   main 直コミットでよい
-- **コード規約（ruff）**: 社内チーム共通コンテナの設定に合わせる（リポジトリ直下の
-  `ruff.toml` に転記済み。独自規約は作らない — 解説は docs/dev_workflow.md）。
-  push 前に `.venv/bin/ruff check . --preview` と `.venv/bin/ruff format .` を流す
+- **コード規約（ruff）**: チーム共通コンテナの設定に合わせる（原本を
+  `.devcontainer/ruff.toml` に転記し、直下の `ruff.toml` が extend で継承。
+  免除は各ファイル内の抑止コメントが持つ。独自規約は作らない — 解説は
+  docs/dev_workflow.md）。push 前に `.venv/bin/ruff check . --preview` と
+  `.venv/bin/ruff format .` を流す
   （`--preview` はコンテナのエディタと検査基準を揃えるため — 同 docs 参照）
 - **型チェック（pyright）**: チームの水準「Pylance の警告が出ないコードを書く」に
   合わせて警告ゼロを保つ（`.venv/bin/pyright scorelib_param ui tests scripts

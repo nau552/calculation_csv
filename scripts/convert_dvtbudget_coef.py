@@ -1,4 +1,5 @@
 # Copyright (c) 2026
+# ruff: file-ignore[implicit-namespace-package] 単体実行スクリプト置き場でパッケージではない(__init__.py を持たない)
 """dVtBudget 係数の Python ファイルを jsonc へ変換する。
 
 入力は sample.py 形式: 世代 → 温度(int) → State → {"a":..., "b":...} の

@@ -1,4 +1,7 @@
 # Copyright (c) 2026
+# ruff: file-ignore[import-outside-top-level] そのテストだけが使う依存は関数内で import する
+# ruff: file-ignore[magic-value-comparison] テストの期待値は生の数値で書く(定数名に隠すと期待値が読めない)
+# ruff: file-ignore[float-equality-comparison] 期待値は2進浮動小数で正確に表せる値で、厳密一致そのものを検査する
 """ui.state のテスト: Streamlit UI の背後にある純粋な編集ロジック。"""
 
 import shutil
@@ -560,9 +563,7 @@ def test_export_part_bundles_weight_sets(sf: dict[str, Any], catalog: dict[str, 
     assert "WLgroup" in back["groupDefs"]
 
 
-def test_run_test_compute_with_weight_step(
-    sf: dict[str, Any], catalog: dict[str, list | None], data_dir_mini: Path
-) -> None:
+def test_run_test_compute_with_weight_step(catalog: dict[str, list | None], data_dir_mini: Path) -> None:
     """UI経由の一気通貫: WLgroup 別重みステップつきパーツが実データで計算でき、重み全1なら重みなしと一致する。"""
 
     def make(with_weight: bool) -> dict[str, Any]:
@@ -583,8 +584,8 @@ def test_run_test_compute_with_weight_step(
         f["expression"] = "p"
         return f
 
-    weighted = state.run_test_compute(make(True), str(data_dir_mini))
-    plain = state.run_test_compute(make(False), str(data_dir_mini))
+    weighted = state.run_test_compute(make(with_weight=True), str(data_dir_mini))
+    plain = state.run_test_compute(make(with_weight=False), str(data_dir_mini))
     assert weighted["p"] == pytest.approx(plain["p"])
 
 
@@ -1053,7 +1054,7 @@ def test_custom_part_skeleton_and_compute(sf: dict[str, Any], data_dir_mini: Pat
     assert isinstance(result["p"], float)
 
 
-def test_switch_part_type_strips_mismatched_fields(sf: dict[str, Any], catalog: dict[str, list | None]) -> None:
+def test_switch_part_type_strips_mismatched_fields(catalog: dict[str, list | None]) -> None:
     """パーツ type を custom と通常の間で切り替えると、合わない側のフィールドが除去されることを検証する。"""
     part = state.part_skeleton("p", "FBC", catalog)
     state.switch_part_type(part, "custom")
@@ -1128,9 +1129,7 @@ def test_bundle_zip_nested_layout(data_dir_mini: Path, fixtures_dir: Path, custo
     assert "custom" in ctx["part_types"]
 
 
-def test_bundle_zip_ambiguous_data_dirs_rejected(
-    data_dir_mini: Path, fixtures_dir: Path, custom_parts_path: Path
-) -> None:
+def test_bundle_zip_ambiguous_data_dirs_rejected(data_dir_mini: Path) -> None:
     """測定結果ディレクトリの候補が zip 内に複数あると ValueError で拒否されることを検証する。"""
     import io
     import zipfile

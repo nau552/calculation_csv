@@ -1,4 +1,5 @@
 # Copyright (c) 2026
+# ruff: file-ignore[implicit-namespace-package] 単体実行スクリプト置き場でパッケージではない(__init__.py を持たない)
 """正データから疑似ダミー一式を作る(Board/Chip を1つに削る)。
 
 担当者のダミー一式が納品される前に、ダミー展開フロー

@@ -1,4 +1,5 @@
 # Copyright (c) 2026
+# ruff: file-ignore[implicit-namespace-package] 単体実行スクリプト置き場でパッケージではない(__init__.py を持たない)
 import csv
 from pathlib import Path
 
@@ -51,7 +52,7 @@ def load_parameter_label(path: Path) -> dict[tuple[str, str, str, str, str], dic
 
 # dataName は実験データのファイル名・列名の語彙そのもの(dataName_FBC.csv, DataName 列)。
 # 綴りを揃えることを優先し snake_case 化しない(以降の noqa: N802/N806 も同じ理由)
-def load_dataName(path: Path) -> dict[tuple[str, str, str, str, str], str]:  # ruff: ignore[N802]
+def load_dataName(path: Path) -> dict[tuple[str, str, str, str, str], str]:  # ruff: ignore[invalid-function-name]
     """dataName_FBC.csv を (InBatchEpoch,Board,Chip,Block,Measure) → DataName の辞書として読む。
 
     Returns:
@@ -130,13 +131,13 @@ def _param_texts(
 
 def main() -> None:
     """FBC.csv を map/ラベル各 csv で読み替え、FBC_expanded.csv を書き出す。"""
-    map_dataName = read_map(BASE / "map_DataName.csv")  # ruff: ignore[N806]
+    map_dataName = read_map(BASE / "map_DataName.csv")  # ruff: ignore[non-lowercase-variable-in-function]
     map_label = read_map(BASE / "map_Label.csv")
     map_state = read_map(BASE / "map_State.csv")
     map_override = read_map(BASE / "map_Override.csv")
 
     param_map = load_parameter_label(BASE / "parameterLabel_FBC.csv")
-    dataName_map = load_dataName(BASE / "dataName_FBC.csv")  # ruff: ignore[N806]
+    dataName_map = load_dataName(BASE / "dataName_FBC.csv")  # ruff: ignore[non-lowercase-variable-in-function]
 
     out_path = BASE / "FBC_expanded.csv"
 

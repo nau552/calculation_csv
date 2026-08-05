@@ -151,7 +151,7 @@ class TestEquivalence:
         **kwargs: Unpack[DvtKwargs],
     ) -> tuple[float, float]:
         with_prefilter = compute_score_part(data_dir, part, **kwargs)
-        monkeypatch.setattr(cli, "_hoistable_prefilters", lambda *a, **k: [])
+        monkeypatch.setattr(cli, "_hoistable_prefilters", lambda *_a, **_k: [])
         without = compute_score_part(data_dir, part, **kwargs)
         return with_prefilter, without
 
