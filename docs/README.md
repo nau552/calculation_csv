@@ -13,6 +13,7 @@
 | [`score_gui_ui_design.md`](score_gui_ui_design.md) | 開発者 | UIの設計書: 画面構成・状態管理・配置/デプロイ方針の意思決定記録 |
 | [`batch_design.md`](batch_design.md) | 開発者 | バッチスコア計算（scorelib_param/batch）の設計書 |
 | [`spec_change_dataname_measure.md`](spec_change_dataname_measure.md) | 開発者 | 相対化の Measure 番号基準化・ダミー一式方式の仕様変更ノート（担当者合意の記録。実装完了後に score_gui_design.md へ統合予定） |
+| [`uv_groups_migration_plan.md`](uv_groups_migration_plan.md) | 社内リポジトリの作業者 | dev 依存の dependency-groups 移行の作業指示書（本リポジトリでは適用済み。社内側の実施後に削除予定） |
 | [`flow_guide.html`](flow_guide.html) | 全員（コードの中身を知りたいとき） | 処理フロー図解: 13ケースの呼び出しチェーンを関数名+行番号つきの図で追う（ブラウザで開く。図の描画にはネット接続が必要 — 冒頭の注記参照） |
 | [`score_gui.md`](score_gui.md) | 参考（歴史資料） | プロジェクト初期の要件整理・検討の記録 |
 | [`score_gui_progress.md`](score_gui_progress.md) | 開発引き継ぎ用 | 開発セッションの時系列記録（AI開発の途中経過。別タスクからの再開用） |
