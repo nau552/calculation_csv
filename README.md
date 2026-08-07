@@ -62,8 +62,9 @@ tests/
   test_introspect.py        # type検出・軸カタログ・値候補の導出
   test_ui_state.py          # UI編集ロジック（雛形が編集なしで計算可能なこと等）
   test_ui_app.py            # Streamlit AppTestによる画面のスモークテスト
-pyproject.toml              # パッケージ定義（pip install -e . 用）
-.venv/                      # ローカルvenv（Python 3.13 + polars/pydantic/simpleeval/pytest 等）
+pyproject.toml              # パッケージ定義（依存の宣言はここ。dev は dependency-groups）
+uv.lock                     # 依存の厳密な版の台帳（uv sync が読む。コミット対象）
+.venv/                      # ローカルvenv（uv sync が作る。Python 3.13 + polars/pydantic/simpleeval/pytest 等）
 ```
 
 ## セットアップ（開発環境）
@@ -73,11 +74,21 @@ pyproject.toml              # パッケージ定義（pip install -e . 用）
 
 ```bash
 git clone <社内GitLabのURL> scorelib && cd scorelib
-python3.13 -m venv .venv                        # 3.13 が無ければ miniforge: conda create -n dev python=3.13
-.venv/bin/python -m pip install -e ".[dev]"
-.venv/bin/python -m pytest                      # 264件パスすること
+uv sync                                         # .venv 作成 + uv.lock どおりに依存導入（dev 込み）
+.venv/bin/python -m pytest                      # 339件パスすること
 git config core.hooksPath scripts/hooks         # push前テストのフック有効化（clone ごとに1回）
 ```
+
+環境構築は uv（2026-08-07 に pip から移行。チームコンテナの postCreate と同じ）。
+uv は Python 3.13 が無ければ自動取得するので venv の手作りも不要。
+`.venv/` に作られるのは普通の venv なので、以降の `.venv/bin/python -m ...`
+表記はそのまま使える。
+
+- チームコンテナでは `uv sync` は postCreate が自動実行する（手で打つのは
+  コンテナ外・素の環境で作業するときだけ。uv 自体の導入: https://docs.astral.sh/uv/）
+- uv が使えない環境の代替: `python3.13 -m venv .venv` →
+  `.venv/bin/python -m pip install --upgrade pip`（dependency-groups 対応の
+  25.1+ に）→ `.venv/bin/python -m pip install -e . --group dev`
 
 ※ 開発環境も本番エンジン環境（miniforge）も Python 3.13（2026-07-28 に開発機を
 3.11 → 3.13 へ移行済み。CI も本番と同じ 3.13 で検証する）。
@@ -169,7 +180,7 @@ git config core.hooksPath scripts/hooks         # push前テストのフック�
 
 | 設置先 | 置くもの | インストールするもの |
 |---|---|---|
-| **開発環境（社内 Ubuntu サーバ）**（コードの正） | リポジトリ全体（社内 GitLab から git clone） | `pip install -e ".[dev]"`（venv） |
+| **開発環境（社内 Ubuntu サーバ）**（コードの正） | リポジトリ全体（社内 GitLab から git clone） | `uv sync`（チームコンテナは postCreate が自動実行。pip 代替は「セットアップ」参照） |
 | **UI 実行サーバ（Ubuntu）** | **必要4点のみ**: `scorelib_param/` + `ui/` + `custom_parts.py` + `pyproject.toml`（docs/ tests/ 等は置かない — 取り出し方は下記「UI 実行サーバの立て方」） | `pip install -e ".[ui]"` → `streamlit run ui/app.py`（常駐化も下記） |
 | **最適化サーバ（SVN kicOpt）** | `scorelib_param/`（パッケージ丸ごと）→ **kicOpt/scorelib_param/**、`custom_parts.py` → **kicOpt/custom_parts.py**、ブリッジ関数 → **kicOpt/optlib/turbo.py** に貼る | エンジン用 python 環境に `polars` `pydantic` `simpleeval` の3つだけ（下記）。**scorelib_param 自体は pip install しない**（ブリッジが PYTHONPATH で解決） |
 

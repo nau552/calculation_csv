@@ -17,6 +17,13 @@ dependencies = [
 # streamlit-sortables is a soft dependency: without it the app falls back
 # from drag&drop reordering to up/down buttons.
 ui = ["streamlit>=1.50", "streamlit-sortables>=0.3"]
+
+[dependency-groups]
+# 開発ツール一式は extras(optional-dependencies)ではなく dependency-groups
+# (PEP 735)に置く: 配布物のメタデータに載らないチーム内の道具箱であり、
+# uv sync が既定で含めるため、チームコンテナの postCreate(uv sync --frozen)
+# だけで pytest/streamlit が揃い、コンテナ rebuild で消えない。
+# pip での導入は `pip install -e . --group dev`(pip 25.1 以降)
 # ruff はチーム共通コンテナの設定(ruff.toml に転記済み)で lint/format するため
 # 固定版で入れる(版が動くと有効ルールが変わり、警告ゼロの状態が崩れるため)
 # pyright は Pylance(コンテナのエディタ)と同じ型チェッカーの CLI 版。チームの
@@ -47,3 +54,7 @@ include = ["scorelib_param*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# ui/ はインストールされないリポジトリローカルのパッケージのため、テストが
+# import できるようルートを明示的に sys.path へ足す（python -m の副作用に
+# 依存させない: pytest 直接起動や uv run pytest でも動くように）
+pythonpath = ["."]

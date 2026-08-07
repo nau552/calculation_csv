@@ -3,7 +3,7 @@
 # 確認手順の解説は docs/dev_workflow.md「社内 GitLab での CI」）。
 #
 # 内容は GitHub 用の .github/workflows/test.yml と同じ
-# 「クリーンな環境で pip install → 全テスト」。両ファイルは共存できる
+# 「クリーンな環境で uv sync → 全テスト」。両ファイルは共存できる
 # （GitLab はこのファイルだけを、GitHub は .github/ だけを読む）。
 
 # TODO(社内確認1): docker executor の Runner がいるか（Settings > CI/CD > Runners）。
@@ -13,10 +13,15 @@
 #   ミラーパスへ変える（例: registry.社内.example/dockerhub/python:3.13）
 image: python:3.13
 
-# TODO(社内確認3): pip が PyPI に届かない場合は社内 PyPI ミラーを指定する
-#   （URL は社内のミラー管理者に確認。コメントを外して使う）
-# variables:
-#   PIP_INDEX_URL: "https://pypi.社内.example/simple"
+variables:
+  # lock を黙って更新せず、pyproject.toml とズレていたらエラーにする
+  # （lock の更新忘れの検出。チームコンテナの postCreate は --frozen =
+  # 検査なしで lock どおり、CI は --locked 相当 = 検査つき）
+  UV_LOCKED: "1"
+# TODO(社内確認3): pip / uv が PyPI に届かない場合は社内ミラーを指定する
+#   （URL は社内のミラー管理者に確認。コメントを外して variables: に足す）
+#   PIP_INDEX_URL: "https://pypi.社内.example/simple"     # pip install uv 用
+#   UV_DEFAULT_INDEX: "https://pypi.社内.example/simple"  # uv sync 用
 
 test:
   # TODO(社内確認4): Runner がタグ運用（特定タグ付きジョブのみ実行）の場合は指定が必要
@@ -24,14 +29,20 @@ test:
   #   - docker
   script:
     - python --version
-    - python -m pip install -e ".[dev]"
+    # uv.lock どおりに .venv を構築（dev グループは uv sync が既定で含める）
+    - python -m pip install uv
+    - uv sync
+    # TODO(社内確認6): uv がどうしても使えない場合の代替（上2行と uv run を置き換える）:
+    #   python -m pip install --upgrade pip        # dependency-groups 対応の 25.1+ に
+    #   python -m pip install -e . --group dev
+    #   以降は uv run を python -m に読み替える（例: python -m pytest -q）
     # --preview の理由・素の実行も併せて検査する理由は
     # .github/workflows/test.yml の同項コメント参照
-    - python -m ruff check . --preview
-    - python -m ruff check .
-    - python -m ruff format --check .
+    - uv run ruff check . --preview
+    - uv run ruff check .
+    - uv run ruff format --check .
     # TODO(社内確認5): pyright は node 実行環境を使う(pyright[nodejs] が PyPI から
     #   同梱 node を入れる)。閉域網ミラーに nodejs-wheel-binaries が無い場合は
     #   この行を外すか、ミラーへの追加を依頼する
-    - python -m pyright scorelib_param ui tests scripts reference_scripts
-    - python -m pytest -q
+    - uv run pyright scorelib_param ui tests scripts reference_scripts
+    - uv run pytest -q

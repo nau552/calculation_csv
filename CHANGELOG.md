@@ -14,6 +14,21 @@
 
 ## 未リリース
 
+- **開発基盤: 依存管理を uv 前提に整備**（2026-08-07。エンジンの挙動・
+  config(jsonc) の語彙は不変、版上げなし）。dev 依存を extras
+  （optional-dependencies）から dependency-groups（PEP 735）へ移行 —
+  チームコンテナの postCreate（`uv sync --frozen`）だけで pytest/streamlit が
+  揃い、コンテナ rebuild で消える問題（sync は extras を含めず既存分も削除する）
+  を根治。`ui` extra は UI 実行サーバ向けの公開機能として存置。`uv.lock` を
+  生成しコミット（依存の厳密な版の台帳）。CI（GitHub/GitLab）は
+  `uv sync` + `uv run` に変更し UV_LOCKED=1 で lock の更新忘れも検出、
+  README セットアップも uv 主経路に更新（uv が使えない環境の pip 代替:
+  `pip install -e . --group dev`、pip 25.1+。テスト 339 件全パス）
+- **開発基盤: pytest をどの起動形でも動くように**（2026-08-07。エンジンの
+  挙動・config(jsonc) の語彙は不変、版上げなし）。`ui/` の import が
+  `python -m` のカレント追加副作用に依存していたのを、pyproject.toml の
+  `pythonpath = ["."]` で明示化。`pytest` 直接起動・`uv run pytest`
+  （コンテナ実行で使用）でも 339 件全パスすることを確認
 - **開発基盤: ruff の設定をチームコンテナの実配線に合わせて再構成**
   （2026-08-05。エンジンの数値結果・config(jsonc) の語彙は不変 — エンジン側の
   変更はコメント1行のみ）。チーム原本を `.devcontainer/ruff.toml` に無改変で

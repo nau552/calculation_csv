@@ -20,7 +20,7 @@ done
 # 期間があり、ここが唯一の自動テスト実行になりうるため、黙ってスキップしない
 if [ -z "$PY" ]; then
   echo "pre-push: テストを実行できる python（pytest 入り）が見つからないため push を中止しました" >&2
-  echo "  - README のセットアップ（pip install -e \".[dev]\"）で環境を作ってください" >&2
+  echo "  - README のセットアップ（uv sync）で環境を作ってください" >&2
   echo "  - 環境を作れないマシンから意図的に push する場合: git push --no-verify" >&2
   exit 1
 fi

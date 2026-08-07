@@ -191,8 +191,9 @@ ruff.toml の固有節と行単位 noqa は「直すこと自体が目的に反�
 `.github/workflows/` に置いた yaml が設定ファイル。
 
 - push または Pull Request のたびに、GitHub のサーバが Ubuntu 上で
-  **本番エンジン環境と同じ Python 3.13** で `pip install → ruff（lint・整形
-  検査）→ pytest` を実行する（ruff は 2026-07-31 に追加）
+  **本番エンジン環境と同じ Python 3.13** で `uv sync（uv.lock どおりに環境構築。
+  2026-08-07 に pip install から変更 — lock の版で検証するため）→ ruff（lint・
+  整形検査）→ pytest` を実行する（ruff は 2026-07-31 に追加）
   （2026-07-28 に開発機も 3.13 へ移行したため単一バージョン。旧環境の
   サポートが必要になったら matrix にバージョンを足す）
 - 結果は GitHub リポジトリページの **Actions タブ**で見る（✓ green / ✗ red）。

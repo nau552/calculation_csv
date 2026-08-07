@@ -60,6 +60,11 @@ def test_filter_then_mean():
 .venv\Scripts\python -m pytest -k "custom" -q  # 名前に custom を含むものだけ
 ```
 
+`pytest` 直接起動（`uv run pytest` 含む）でも動く: `ui/` の import に必要な
+ルートの sys.path 追加は pyproject.toml の `pythonpath = ["."]` が明示する
+（2026-08-07。それ以前は `python -m` がカレントを sys.path に足す副作用に
+依存していたため、直接起動では ui 系テスト4ファイルが import エラーになった）。
+
 ## 4. このリポジトリのテスト方針（経験から得た教訓を含む）
 
 1. **正解は独立に計算する** — エンジンの検証は「エンジン自身の別経路」ではなく、

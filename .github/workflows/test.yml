@@ -2,11 +2,20 @@
 # 開発機・本番エンジン環境（miniforge）とも Python 3.13 のため 3.13 のみで検証
 # （2026-07-28 に開発機を 3.11 から移行。旧環境のサポートが必要になったら
 # matrix にバージョンを足すだけ）。
+# 環境構築は uv（2026-08-07 に pip install から変更）: uv.lock どおりの版で
+# 検証するため。uv が使えない環境での代替は pip install -e . --group dev
+# （dev は dependency-groups。pip 25.1 以降が対応）
 name: test
 
 on:
   push:
   pull_request:
+
+env:
+  # lock を黙って更新せず、pyproject.toml とズレていたらエラーにする
+  # （lock の更新忘れをここで検出する。チームコンテナの postCreate は
+  # --frozen = 検査なしで lock どおり、CI は --locked 相当 = 検査つき）
+  UV_LOCKED: "1"
 
 jobs:
   test:
@@ -17,7 +26,10 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install
-        run: python -m pip install -e ".[dev]"
+        # uv.lock どおりに .venv を構築（dev グループは uv sync が既定で含める）
+        run: |
+          python -m pip install uv
+          uv sync
       - name: Lint (ruff)
         # --preview 一本で検査する(2026-08-05): チームの運用はエディタ(preview
         # 有効)も /check(--preview 付き)も preview で統一されていると確認できた
@@ -25,11 +37,11 @@ jobs:
         # おり、素の(--preview 無し)実行では解釈されないので検査しない
         # (経緯は docs/dev_workflow.md「ruff.toml」参照)
         run: |
-          python -m ruff check . --preview
-          python -m ruff format --check .
+          uv run ruff check . --preview
+          uv run ruff format --check .
       - name: Type check (pyright)
         # Pylance(コンテナのエディタ)と同じ型チェッカー。チームの水準
         # 「警告が出ないコードを書く」を CI でも保つ(2026-07-31 にゼロ化)
-        run: python -m pyright scorelib_param ui tests scripts reference_scripts
+        run: uv run pyright scorelib_param ui tests scripts reference_scripts
       - name: Run tests
-        run: python -m pytest -q
+        run: uv run pytest -q
